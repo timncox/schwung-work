@@ -33,7 +33,7 @@
   --fam-mod:#1F6470;
   --fam-space:#3A5A93;
   --fam-tape:#1F5754;
-  --fam-none:#6B6B63;
+  --fam-none:#67675F;
 
   --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
   --sans:"Familjen Grotesk","Helvetica Neue",Helvetica,sans-serif;
@@ -731,14 +731,13 @@ footer a{color:var(--rust)}
         desc = "<b>Palette — " + m.n + "</b>. Tap to load it into the focused slot. " + m.d;
         color = "var(" + FAM[m.f].css + ")";
         b.style.borderColor = color;
-        b.style.color = color;
+        b.style.borderWidth = "2.5px";
       } else if (SPECIAL[n]){
         label = SPECIAL[n].t;
         desc = "<b>" + SPECIAL[n].t + "</b>. " + SPECIAL[n].d;
-        color = "var(--rust)";
-        b.style.borderColor = color;
-        b.style.color = color;
-        b.style.background = "rgba(228,87,46,.08)";
+        b.style.borderColor = "var(--rust)";
+        b.style.borderWidth = "2.5px";
+        b.style.background = "rgba(228,87,46,.10)";
       } else {
         label = "—";
         desc = "Unused.";
