@@ -1295,7 +1295,7 @@
             },
             {
               "key": "fx1_p2",
-              "name": "X",
+              "name": "PPONG",
               "type": "int",
               "min": 0,
               "max": 127
@@ -2569,7 +2569,7 @@
             },
             {
               "key": "fx2_p2",
-              "name": "X",
+              "name": "PPONG",
               "type": "int",
               "min": 0,
               "max": 127

@@ -306,7 +306,7 @@ static const char *PARAM_NAME[WORK_FX_COUNT][WORK_PARAMS] = {
 /* Chorus    */ {"DEP","SPD","HPF","WDTH","MIX","","",""},
 /* Phase98   */ {"SPD","DEP","SHP","LAG","FREQ","FDBK","STG","MIX"},
 /* Rumsklang */ {"PRE","EARLY","DAMP","SIZE","LOWC","HIGHC","",""},
-/* SatDelay  */ {"TIME","X","WID","FDBK","HPF","LPF","MIX",""},
+/* SatDelay  */ {"TIME","PPONG","WID","FDBK","HPF","LPF","MIX",""},
 /* SteelBox  */ {"SIZE","FDBK","BRIT","PRE","WDTH","DIFF","LOWC","MIX"},
 /* Supervoid */ {"PRE","DEC","FREQ","GAIN","HPF","LPF","MIX",""},
 /* Warble    */ {"SPEED","DEPTH","BASE","WIDTH","N.LEV","N.HPF","STEREO","MIX"}
