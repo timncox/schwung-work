@@ -7,7 +7,7 @@
         "Two insert FX slots",
         "in series, each",
         "loaded with one of",
-        "20 FX machines.",
+        "21 FX machines.",
         "Two FX LFOs can",
         "modulate any slot",
         "parameter."
@@ -65,7 +65,8 @@
         "Saturator Delay",
         "Steel Box Reverb",
         "Supervoid Reverb",
-        "Warble"
+        "Warble",
+        "Grainer"
       ]
     },
     {
@@ -91,6 +92,16 @@
         "clears that slot,",
         "so no reverb tail",
         "leaks across."
+      ]
+    },
+    {
+      "title": "Grainer",
+      "lines": [
+        "Granulates the last",
+        "2 s of input audio.",
+        "TUNE, DENS, SIZE,",
+        "POS, SCAN, SPRD,",
+        "AMNT, MIX."
       ]
     }
   ]

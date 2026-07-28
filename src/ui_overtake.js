@@ -16,13 +16,15 @@
  *                                          selects (condition / micro / retrig)
  *                     hold + pad 83        clear that step's locks
  *
- *   Pads row 1-3    machine palette, 20 machines. Tap loads one into the
- *   (92-99,84-91,      focused slot. Pads 80-83 are the step-attribute modes
- *    76-79)            and the lock-clear.
+ *   Pads row 1-3    machine palette, 21 machines. Tap loads one into the
+ *   (76-99)           focused slot.
  *
  *   Pad row 4       68 play/stop   69 fill     70 slot focus  71 pattern page
  *   (68-75)         72 edit page   73 copy     74 paste       75 clear
+ *                   SHIFT + 72/73/74/75 = condition / micro / retrig mode,
+ *                   and clear-locks-on-the-held-step
  *
+ *   Shift+jog click open and close the preset browser
  *   Knobs 1-8       the current edit page's eight parameters
  *   Jog             pattern length, or the held step's attribute
  *
@@ -35,7 +37,7 @@
 import {
     MoveKnob1, MoveShift, MoveMainButton, MoveMainKnob,
     Black, White, LightGrey, DarkGrey, Red, BrightRed, Blue, Green, BrightGreen,
-    Cyan, Purple, SkyBlue, Lime, OrangeRed, BurntOrange, YellowGreen, TealGreen
+    Cyan, Purple, SkyBlue, Lime, OrangeRed, BurntOrange, YellowGreen, TealGreen, Rose
 } from '/data/UserData/schwung/shared/constants.mjs';
 
 import { decodeDelta, setLED } from '/data/UserData/schwung/shared/input_filter.mjs';
@@ -44,26 +46,34 @@ import {
     announce, announceParameter, announceView
 } from '/data/UserData/schwung/shared/screen_reader.mjs';
 
+import * as os from 'os';
+
+/* Presets live OUTSIDE the module directory, so they survive a reinstall.
+ * That also means "I reinstalled and my patterns are still there" is expected,
+ * not evidence the reinstall failed. */
+const PRESET_DIR = '/data/UserData/schwung/presets/overwork';
+
 /* ------------------------------------------------------------- constants */
 
 const STEP_FIRST = 16;          /* step buttons are CC 16-31 */
 const STEP_COUNT = 16;
 const PAGE_STEPS = 16;
 const MAX_STEPS  = 64;
-const N_MACHINES = 20;
+const N_MACHINES = 21;
 
 /* Machine palette occupies pad rows 1-3 in reading order: 92-99, 84-91, 76-79 */
 const PALETTE_PADS = [
     92, 93, 94, 95, 96, 97, 98, 99,
     84, 85, 86, 87, 88, 89, 90, 91,
-    76, 77, 78, 79
+    76, 77, 78, 79, 80, 81, 82, 83
 ];
 
-/* Step-attribute modes and lock clear share the rest of row 3 */
-const PAD_MODE_COND   = 80;
-const PAD_MODE_MICRO  = 81;
-const PAD_MODE_RETRIG = 82;
-const PAD_LOCK_CLEAR  = 83;
+/* The step-attribute modes moved to SHIFT + row 4 in v0.2.0, when a 21st
+ * machine (Grainer) needed the whole of row 3 for the palette. */
+const PAD_MODE_COND   = 72;   /* shift + edit-page  */
+const PAD_MODE_MICRO  = 73;   /* shift + copy       */
+const PAD_MODE_RETRIG = 74;   /* shift + paste      */
+const PAD_LOCK_CLEAR  = 75;   /* shift + clear      */
 
 /* Row 4: transport and navigation */
 const PAD_PLAY  = 68;
@@ -114,7 +124,8 @@ const MACHINE_COLOR = [
     BurntOrange,   /* 16 Saturator Delay   delay */
     SkyBlue,       /* 17 Steel Box Reverb  space */
     SkyBlue,       /* 18 Supervoid Reverb  space */
-    TealGreen      /* 19 Warble            tape */
+    TealGreen,     /* 19 Warble            tape */
+    Rose           /* 20 Grainer           granular */
 ];
 
 /* ----------------------------------------------------------------- state */
@@ -127,6 +138,10 @@ let shiftHeld  = false;
 let needsRedraw = true;
 let tickCount  = 0;
 let resumeRepaints = 0;
+
+let presetMode  = false;
+let presetIndex = 0;         /* 0 = "Save new", 1..n = a stored preset      */
+let presets     = [];
 
 let heldStep   = -1;         /* absolute step index held down, or -1        */
 let heldUsed   = false;      /* a lock or attribute edit happened this hold */
@@ -399,6 +414,148 @@ function clearPage() {
     needsRedraw = true;
 }
 
+/* --------------------------------------------------------------- presets */
+
+/* QuickJS `os.readdir` answers with a [names, errno] TUPLE, and the raw
+ * listing includes "." and "..". Treating it as a flat filename array is
+ * silently wrong: /\.json$/.test(namesArray) tests the *stringified* array, so
+ * the whole listing is kept or dropped as one blob depending on which entry
+ * the filesystem happened to return last — and when it is kept, the later
+ * .replace runs against an Array and throws. That is precisely how Mono
+ * shipped a preset browser that never listed a file. Unwrap the tuple. */
+function readPresetDir() {
+    let result;
+    try { result = os.readdir(PRESET_DIR); } catch (e) { return []; }
+    if (!Array.isArray(result) || !Array.isArray(result[0])) return [];
+    return result[0].filter((e) =>
+        typeof e === 'string' && e !== '.' && e !== '..');
+}
+
+function loadPresetList() {
+    const found = [];
+    for (const file of readPresetDir()) {
+        if (!/\.json$/i.test(file)) continue;
+        let name = file.replace(/\.json$/i, '');
+        try {
+            const parsed = JSON.parse(host_read_file(`${PRESET_DIR}/${file}`) || '{}');
+            if (parsed.name) name = String(parsed.name);
+        } catch (e) { /* a corrupt preset still lists under its filename */ }
+        found.push({ name, file });
+    }
+    found.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+    presets = found;
+}
+
+function safeStem(raw) {
+    const s = String(raw).replace(/[^A-Za-z0-9 _-]/g, '').trim();
+    return (s || 'pattern').slice(0, 48);
+}
+
+function nextPresetName() {
+    let n = 1;
+    const used = new Set(presets.map((p) => p.name.toLowerCase()));
+    while (used.has(`pattern ${n}`)) n++;
+    return `Pattern ${n}`;
+}
+
+/* `os.rename` reports failure with a NEGATIVE RETURN CODE rather than
+ * throwing, so try/catch around it calls every failure a success and strands
+ * the payload in the .tmp file. Check the code, and fall back to writing the
+ * destination directly so a rename refusal still saves. */
+function writePresetAtomically(file, payload) {
+    if (typeof host_write_file !== 'function') return false;
+    const path = `${PRESET_DIR}/${file}`;
+    const temp = `${path}.tmp`;
+    if (!host_write_file(temp, payload)) return false;
+    let renamed = -1;
+    try { renamed = os.rename(temp, path); } catch (e) { renamed = -1; }
+    if (renamed === 0) return true;
+    const direct = host_write_file(path, payload);
+    try { os.remove(temp); } catch (e) {}
+    return !!direct;
+}
+
+function savePreset() {
+    if (typeof host_ensure_dir === 'function') host_ensure_dir(PRESET_DIR);
+    else { try { os.mkdir(PRESET_DIR); } catch (e) {} }
+
+    const name = nextPresetName();
+    const file = `${safeStem(name)}.json`;
+    const payload = JSON.stringify({
+        v: 1,
+        name: name,
+        module: 'overwork',
+        state: getParam('state')
+    });
+
+    if (!writePresetAtomically(file, payload)) {
+        announce('Save failed');
+        return;
+    }
+    loadPresetList();
+    presetIndex = Math.max(1, presets.findIndex((p) => p.file === file) + 1);
+    announce(`Saved ${name}`);
+    needsRedraw = true;
+}
+
+function loadPreset(entry) {
+    if (!entry || typeof host_read_file !== 'function') return;
+    let payload;
+    try { payload = JSON.parse(host_read_file(`${PRESET_DIR}/${entry.file}`) || '{}'); }
+    catch (e) { announce('Preset unreadable'); return; }
+    if (!payload.state) { announce('Preset is empty'); return; }
+
+    host_module_set_param('state', payload.state);
+    fetchAll();
+    announce(`Loaded ${entry.name}`);
+    needsRedraw = true;
+}
+
+function deletePreset(entry) {
+    if (!entry) return;
+    /* os.remove returns 0 or -errno and never throws — a bare try/catch here
+     * would report every failure as a success. */
+    let rc = -1;
+    try { rc = os.remove(`${PRESET_DIR}/${entry.file}`); } catch (e) { rc = -1; }
+    if (rc !== 0) { announce('Delete failed'); return; }
+    loadPresetList();
+    presetIndex = Math.min(presetIndex, presets.length);
+    announce(`Deleted ${entry.name}`);
+    needsRedraw = true;
+}
+
+function enterPresetMode() {
+    loadPresetList();
+    presetMode = true;
+    presetIndex = presets.length ? 1 : 0;
+    announceView(`Presets, ${presets.length} saved`);
+    needsRedraw = true;
+}
+
+function drawPresets() {
+    clear_screen();
+    print(0, 1, 'PRESETS', 1);
+    const count = `${presets.length}`;
+    print(128 - text_width(count), 1, count, 1);
+    fill_rect(0, 9, 128, 1, 1);
+
+    /* a four-row window around the selection */
+    const rows = 4;
+    let top = Math.max(0, Math.min(presetIndex - 1, presets.length + 1 - rows));
+    for (let r = 0; r < rows; r++) {
+        const idx = top + r;
+        if (idx > presets.length) break;
+        const y = 13 + r * 10;
+        const label = idx === 0 ? '+ Save new' : presets[idx - 1].name;
+        if (idx === presetIndex) fill_rect(0, y - 1, 128, 9, 1);
+        print(2, y, label.length > 24 ? label.slice(0, 24) : label,
+              idx === presetIndex ? 0 : 1);
+    }
+
+    fill_rect(0, 55, 128, 1, 1);
+    print(0, 57, 'Click:load  Shift+click:exit', 1);
+}
+
 /* --------------------------------------------------------------- display */
 
 function knobText(i) {
@@ -499,10 +656,6 @@ function paintPalette(force) {
         }
         setLED(PALETTE_PADS[i], color, force);
     }
-    setLED(PAD_MODE_COND,   attrMode === MODE_COND   ? Cyan   : 0x0A, force);
-    setLED(PAD_MODE_MICRO,  attrMode === MODE_MICRO  ? Purple : 0x0A, force);
-    setLED(PAD_MODE_RETRIG, attrMode === MODE_RETRIG ? Blue   : 0x0A, force);
-    setLED(PAD_LOCK_CLEAR,  heldStep >= 0 ? OrangeRed : 0x08, force);
 }
 
 function paintTransport(force) {
@@ -510,10 +663,18 @@ function paintTransport(force) {
     setLED(PAD_FILL,  fillLatched ? BrightRed : 0x0C, force);
     setLED(PAD_SLOT,  focusSlot === 0 ? SkyBlue : YellowGreen, force);
     setLED(PAD_PPAGE, [Blue, Cyan, Purple, OrangeRed][patPage % 4], force);
-    setLED(PAD_EPAGE, [White, Cyan, Cyan, LightGrey][editPage], force);
-    setLED(PAD_COPY,  copyBuf ? TealGreen : 0x0A, force);
-    setLED(PAD_PASTE, copyBuf ? Lime : 0x06, force);
-    setLED(PAD_CLEAR, Red, force);
+    if (shiftHeld) {
+        /* while shift is held row 4 IS the step-attribute mode row */
+        setLED(PAD_MODE_COND,   attrMode === MODE_COND   ? Cyan   : 0x0A, force);
+        setLED(PAD_MODE_MICRO,  attrMode === MODE_MICRO  ? Purple : 0x0A, force);
+        setLED(PAD_MODE_RETRIG, attrMode === MODE_RETRIG ? Blue   : 0x0A, force);
+        setLED(PAD_LOCK_CLEAR,  heldStep >= 0 ? OrangeRed : 0x08, force);
+    } else {
+        setLED(PAD_EPAGE, [White, Cyan, Cyan, LightGrey][editPage], force);
+        setLED(PAD_COPY,  copyBuf ? TealGreen : 0x0A, force);
+        setLED(PAD_PASTE, copyBuf ? Lime : 0x06, force);
+        setLED(PAD_CLEAR, Red, force);
+    }
 }
 
 function paintAll(force) {
@@ -525,6 +686,13 @@ function paintAll(force) {
 /* ----------------------------------------------------------------- input */
 
 function handlePadPress(note) {
+    /* While the preset browser is open only CLEAR (delete) is live; the rest
+     * of the surface would otherwise edit a pattern you cannot see. */
+    if (presetMode && note !== PAD_CLEAR) {
+        announce('Preset browser open');
+        return;
+    }
+
     /* Machine palette */
     const pi = PALETTE_PADS.indexOf(note);
     if (pi >= 0) {
@@ -532,26 +700,34 @@ function handlePadPress(note) {
         return;
     }
 
+    /* SHIFT + row 4 selects the step-attribute mode the jog edits. */
+    if (shiftHeld) {
+        switch (note) {
+            case PAD_MODE_COND:
+                attrMode = attrMode === MODE_COND ? MODE_NONE : MODE_COND;
+                announce(attrMode === MODE_COND ? 'Condition mode' : 'Mode off');
+                needsRedraw = true;
+                return;
+            case PAD_MODE_MICRO:
+                attrMode = attrMode === MODE_MICRO ? MODE_NONE : MODE_MICRO;
+                announce(attrMode === MODE_MICRO ? 'Micro timing mode' : 'Mode off');
+                needsRedraw = true;
+                return;
+            case PAD_MODE_RETRIG:
+                attrMode = attrMode === MODE_RETRIG ? MODE_NONE : MODE_RETRIG;
+                announce(attrMode === MODE_RETRIG ? 'Retrig mode' : 'Mode off');
+                needsRedraw = true;
+                return;
+            case PAD_LOCK_CLEAR:
+                if (heldStep >= 0) clearStepLocks(heldStep);
+                else announce('Hold a step first');
+                return;
+            default:
+                break;
+        }
+    }
+
     switch (note) {
-        case PAD_MODE_COND:
-            attrMode = attrMode === MODE_COND ? MODE_NONE : MODE_COND;
-            announce(attrMode === MODE_COND ? 'Condition mode' : 'Mode off');
-            needsRedraw = true;
-            return;
-        case PAD_MODE_MICRO:
-            attrMode = attrMode === MODE_MICRO ? MODE_NONE : MODE_MICRO;
-            announce(attrMode === MODE_MICRO ? 'Micro timing mode' : 'Mode off');
-            needsRedraw = true;
-            return;
-        case PAD_MODE_RETRIG:
-            attrMode = attrMode === MODE_RETRIG ? MODE_NONE : MODE_RETRIG;
-            announce(attrMode === MODE_RETRIG ? 'Retrig mode' : 'Mode off');
-            needsRedraw = true;
-            return;
-        case PAD_LOCK_CLEAR:
-            if (heldStep >= 0) clearStepLocks(heldStep);
-            else announce('Hold a step first');
-            return;
         case PAD_PLAY:
             seqOn = seqOn ? 0 : 1;
             host_module_set_param('seq_on', `${seqOn}`);
@@ -589,6 +765,11 @@ function handlePadPress(note) {
             pastePage();
             return;
         case PAD_CLEAR:
+            if (presetMode) {
+                if (presetIndex > 0) deletePreset(presets[presetIndex - 1]);
+                else announce('Nothing selected');
+                return;
+            }
             clearAt = Date.now();
             return;
         default:
@@ -627,6 +808,7 @@ function onMidiMessageInternal(data) {
     if (status === 0xB0) {
         if (d1 === MoveShift) {
             shiftHeld = d2 >= 64;
+            paintTransport(false);      /* row 4 swaps to the mode layer */
             return;
         }
 
@@ -652,6 +834,18 @@ function onMidiMessageInternal(data) {
         if (d1 === MoveMainKnob) {
             const delta = decodeDelta(d2);
             if (delta === 0) return;
+            if (presetMode) {
+                let v = presetIndex + (delta > 0 ? 1 : -1);
+                if (v < 0) v = 0;
+                if (v > presets.length) v = presets.length;
+                if (v !== presetIndex) {
+                    presetIndex = v;
+                    announce(presetIndex === 0 ? 'Save new'
+                                               : presets[presetIndex - 1].name);
+                    needsRedraw = true;
+                }
+                return;
+            }
             if (heldStep >= 0) {
                 adjustHeldAttr(delta);
             } else {
@@ -670,6 +864,23 @@ function onMidiMessageInternal(data) {
         }
 
         if (d1 === MoveMainButton && d2 > 0) {
+            /* Shift + jog click toggles the preset browser — the same gesture
+             * the sibling modules use, so it is where a user will look. */
+            if (shiftHeld) {
+                if (presetMode) {
+                    presetMode = false;
+                    announceView(EDIT_NAME[editPage]);
+                } else {
+                    enterPresetMode();
+                }
+                needsRedraw = true;
+                return;
+            }
+            if (presetMode) {
+                if (presetIndex === 0) savePreset();
+                else loadPreset(presets[presetIndex - 1]);
+                return;
+            }
             editPage = (editPage + 1) % EDIT_COUNT;
             fetchAll();
             announceView(EDIT_NAME[editPage]);
@@ -756,7 +967,8 @@ globalThis.tick = function () {
     }
 
     if (needsRedraw) {
-        drawUI();
+        if (presetMode) drawPresets();
+        else drawUI();
         needsRedraw = false;
     }
 };

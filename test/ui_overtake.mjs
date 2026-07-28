@@ -47,6 +47,48 @@ function familyServed(key) {
     return Object.keys(contract.get).some((k) => k.replace(/\d+/g, '#') === shape);
 }
 
+/* A virtual filesystem implementing QuickJS's REAL contracts, copied from
+ * schwung's own preset browser and the C source — never from the code under
+ * test. The two that bite:
+ *   os.readdir  -> [names, errno] TUPLE, and names includes "." and ".."
+ *   os.rename / os.remove -> return 0 or -errno, and NEVER throw
+ * Host file bindings are separate and DO return booleans. */
+function makeVFS() {
+    const files = new Map();
+    const dirs = new Set();
+    let renameFails = false;
+
+    return {
+        files, dirs,
+        failRenames(v) { renameFails = v; },
+
+        readdir(path) {
+            if (!dirs.has(path)) return [[], 2];            /* ENOENT */
+            const names = ['.', '..'];                       /* real listings carry these */
+            for (const f of files.keys()) {
+                if (f.startsWith(path + '/')) {
+                    const rest = f.slice(path.length + 1);
+                    if (!rest.includes('/')) names.push(rest);
+                }
+            }
+            return [names, 0];
+        },
+        rename(a, b) {
+            if (renameFails) return -1;
+            if (!files.has(a)) return -2;
+            files.set(b, files.get(a));
+            files.delete(a);
+            return 0;
+        },
+        remove(p) {
+            if (!files.has(p)) return -2;
+            files.delete(p);
+            return 0;
+        },
+        mkdir(p) { dirs.add(p); return 0; }
+    };
+}
+
 function makeHost() {
     const store = Object.assign({}, contract.get);
     const writes = [];
@@ -56,7 +98,23 @@ function makeHost() {
     const leds = new Map();
     const screen = [];
 
+    const vfs = makeVFS();
+
     const host = {
+        __vfs: vfs,
+        /* Host file bindings return booleans / string-or-null — a DIFFERENT
+         * contract from the os.* calls above. */
+        host_write_file(path, data) {
+            const dir = path.slice(0, path.lastIndexOf('/'));
+            if (!vfs.dirs.has(dir)) return false;
+            vfs.files.set(path, String(data));
+            return true;
+        },
+        host_read_file(path) {
+            return vfs.files.has(path) ? vfs.files.get(path) : null;
+        },
+        host_ensure_dir(path) { vfs.dirs.add(path); return true; },
+
         host_module_get_param(key) {
             reads.push(key);
             if (key in store) return store[key];
@@ -99,7 +157,7 @@ function makeHost() {
         console
     };
     host.globalThis = host;
-    return { host, writes, reads, unknownReads, unknownWrites, leds, screen, store };
+    return { host, vfs, writes, reads, unknownReads, unknownWrites, leds, screen, store };
 }
 
 /* Stub the three schwung shared modules the UI imports. */
@@ -108,7 +166,7 @@ const STUBS = {
         export const MoveKnob1 = 71, MoveShift = 49, MoveMainButton = 3, MoveMainKnob = 14;
         export const Black=0, White=120, LightGrey=118, DarkGrey=124, Red=127, BrightRed=1;
         export const Blue=125, Green=126, BrightGreen=8, Cyan=14, Purple=22, SkyBlue=47;
-        export const Lime=31, OrangeRed=2, BurntOrange=28, YellowGreen=30, TealGreen=12;
+        export const Lime=31, OrangeRed=2, BurntOrange=28, YellowGreen=30, TealGreen=12, Rose=24;
     `,
     '/data/UserData/schwung/shared/input_filter.mjs': `
         export function decodeDelta(v){ if(v===0) return 0; if(v>=1&&v<=63) return v; if(v>=65&&v<=127) return -(128-v); return 0; }
@@ -119,6 +177,12 @@ const STUBS = {
         export function announce(){}
         export function announceParameter(){}
         export function announceView(){}
+    `,
+    'os': `
+        export function readdir(p){ return globalThis.__vfs.readdir(p); }
+        export function rename(a,b){ return globalThis.__vfs.rename(a,b); }
+        export function remove(p){ return globalThis.__vfs.remove(p); }
+        export function mkdir(p){ return globalThis.__vfs.mkdir(p); }
     `
 };
 
@@ -294,8 +358,10 @@ async function testJogSetsLengthAndStepAttrs() {
 
     /* condition mode, then hold a step and jog */
     ctx.writes.length = 0;
-    ctx.host.onMidiMessageInternal(noteOn(80));           /* PAD_MODE_COND */
-    ctx.host.onMidiMessageInternal(noteOff(80));
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));      /* shift + pad 72 = COND */
+    ctx.host.onMidiMessageInternal(noteOn(72));
+    ctx.host.onMidiMessageInternal(noteOff(72));
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
     ctx.host.onMidiMessageInternal(cc(STEP1 + 1, 127));
     ctx.host.onMidiMessageInternal(cc(JOG, 1));
 
@@ -333,7 +399,7 @@ async function testNoUnknownWritesAnywhere() {
     ctx.host.init();
 
     /* exercise a broad slice of the surface */
-    for (const pad of [68, 69, 70, 71, 72, 73, 74, 80, 81, 82, 92, 95, 99]) {
+    for (const pad of [68, 69, 70, 71, 72, 73, 74, 80, 81, 82, 83, 92, 95, 99]) {
         ctx.host.onMidiMessageInternal(noteOn(pad));
         ctx.host.onMidiMessageInternal(noteOff(pad));
     }
@@ -372,6 +438,153 @@ async function testResumeForcesRepaints() {
     check(repaints >= 3, `expected at least 3 forced repaints after resume, saw ${repaints}`);
 }
 
+/* ---------------------------------------------------------------- presets */
+
+const PDIR = '/data/UserData/schwung/presets/overwork';
+
+/* Open the preset browser: Shift + jog click. */
+function openPresets(ctx) {
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    ctx.host.onMidiMessageInternal(cc(3, 127));      /* MoveMainButton */
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    ctx.host.tick();                                 /* the device redraws on tick */
+}
+
+/* THE guard on the whole approach. If the mock's os.readdir were written from
+ * the UI's assumptions — a flat array of filenames — this test would pass
+ * against a broken implementation. So assert the mock reproduces the REAL
+ * contract, and that the naive reading of it fails the way Mono did. */
+async function testReaddirContractIsFaithful() {
+    console.log('the os.readdir mock reproduces the real tuple contract');
+    const ctx = await loadUI();
+    ctx.host.host_ensure_dir(PDIR);
+    ctx.host.host_write_file(`${PDIR}/one.json`, '{"name":"One","state":"{}"}');
+
+    const raw = ctx.vfs.readdir(PDIR);
+    check(Array.isArray(raw) && Array.isArray(raw[0]),
+          'readdir must answer a [names, errno] tuple, got ' + JSON.stringify(raw));
+    check(raw[0].includes('.') && raw[0].includes('..'),
+          'a real listing includes "." and ".."; mock gave ' + JSON.stringify(raw[0]));
+    check(raw[1] === 0, 'errno slot should be 0 on success, got ' + raw[1]);
+
+    /* the naive implementation Mono shipped, run against this same mock */
+    const naive = (() => {
+        const names = ctx.vfs.readdir(PDIR);      /* treated as a flat array */
+        try { return /\.json$/i.test(names) ? [String(names).replace(/\.json$/i, '')] : []; }
+        catch (e) { return ['THREW']; }
+    })();
+    check(naive.length === 0 || naive[0] === 'THREW',
+          'the naive flat-array reading should find nothing (or throw) against the ' +
+          'real contract — it "found" ' + JSON.stringify(naive) +
+          ', so the mock is too forgiving to catch the Mono bug');
+
+    /* os.rename and os.remove must report failure by return code, not throw */
+    ctx.vfs.failRenames(true);
+    let threw = false;
+    let rc = 0;
+    try { rc = ctx.vfs.rename(`${PDIR}/one.json`, `${PDIR}/two.json`); }
+    catch (e) { threw = true; }
+    check(!threw && rc < 0, 'a failing rename must return -errno, not throw');
+    ctx.vfs.failRenames(false);
+    check(ctx.vfs.remove(`${PDIR}/nope.json`) < 0, 'removing a missing file must return -errno');
+}
+
+async function testPresetSaveThenList() {
+    console.log('saving a preset writes a file the browser can then list');
+    const ctx = await loadUI();
+    ctx.host.init();
+
+    openPresets(ctx);
+    ctx.host.onMidiMessageInternal(cc(3, 127));       /* click on "Save new" */
+
+    const written = [...ctx.vfs.files.keys()].filter((f) => f.endsWith('.json'));
+    check(written.length === 1, `expected one preset file, got ${JSON.stringify(written)}`);
+    check(!written.some((f) => f.endsWith('.tmp')), 'a .tmp file was left behind');
+
+    const payload = JSON.parse(ctx.vfs.files.get(written[0]));
+    check(!!payload.state, 'preset carries no state blob');
+    check(payload.module === 'overwork', `preset module tag is ${payload.module}`);
+
+    /* the saved preset must now appear in the list — the exact step that
+     * silently did nothing in Mono */
+    ctx.host.tick();
+    const shown = ctx.screen.map((l) => l.text).join(' ');
+    check(/Pattern 1/.test(shown),
+          `saved preset does not appear in the browser; screen shows: ${shown}`);
+}
+
+async function testPresetLoadRestoresState() {
+    console.log('loading a preset pushes its state back to the engine');
+    const ctx = await loadUI();
+    ctx.host.init();
+    ctx.host.host_ensure_dir(PDIR);
+    ctx.host.host_write_file(`${PDIR}/saved.json`,
+        JSON.stringify({ v: 1, name: 'Saved', module: 'overwork',
+                         state: '{"v":1,"mix":42,"m1":5,"p1":[1,2,3,4,5,6,7,8]}' }));
+
+    openPresets(ctx);
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(3, 127));       /* click loads index 1 */
+
+    const w = ctx.writes.find((x) => x.key === 'state');
+    check(!!w, `no state write on load; writes were ${JSON.stringify(ctx.writes.slice(0,4))}`);
+    if (w) check(/"mix":42/.test(`${w.val}`), `state pushed was ${w.val}`);
+}
+
+async function testPresetDelete() {
+    console.log('the clear pad deletes the selected preset');
+    const ctx = await loadUI();
+    ctx.host.init();
+    ctx.host.host_ensure_dir(PDIR);
+    ctx.host.host_write_file(`${PDIR}/gone.json`, '{"name":"Gone","state":"{}"}');
+
+    openPresets(ctx);
+    ctx.host.onMidiMessageInternal(noteOn(75));       /* PAD_CLEAR */
+    ctx.host.onMidiMessageInternal(noteOff(75));
+    check(!ctx.vfs.files.has(`${PDIR}/gone.json`), 'preset file survived delete');
+}
+
+/* If the rename step fails, the payload must still reach its destination
+ * rather than being stranded in the .tmp file. */
+async function testPresetSurvivesRenameFailure() {
+    console.log('a refused rename still saves the preset');
+    const ctx = await loadUI();
+    ctx.host.init();
+    ctx.vfs.failRenames(true);
+
+    openPresets(ctx);
+    ctx.host.onMidiMessageInternal(cc(3, 127));       /* Save new */
+
+    const finals = [...ctx.vfs.files.keys()].filter((f) => f.endsWith('.json'));
+    const temps = [...ctx.vfs.files.keys()].filter((f) => f.endsWith('.tmp'));
+    check(finals.length === 1, `preset not saved when rename failed: ${JSON.stringify([...ctx.vfs.files.keys()])}`);
+    check(temps.length === 0, 'a .tmp file was stranded after the rename failure');
+}
+
+/* An empty or missing directory must give an empty list, never an exception —
+ * a throw here is fatal to the whole overtake session. */
+async function testPresetEmptyDirIsSafe() {
+    console.log('an empty or missing preset directory does not throw');
+    const ctx = await loadUI();
+    ctx.host.init();
+    let threw = false;
+    try {
+        openPresets(ctx);                             /* dir does not exist yet */
+        for (let i = 0; i < 5; i++) ctx.host.tick();
+        ctx.host.host_ensure_dir(PDIR);               /* now exists but is empty */
+        openPresets(ctx);
+        for (let i = 0; i < 5; i++) ctx.host.tick();
+    } catch (e) { threw = true; }
+    check(!threw, 'the preset browser threw on an empty directory');
+
+    /* a corrupt preset must not take the browser down either */
+    ctx.host.host_write_file(`${PDIR}/bad.json`, 'not json at all');
+    threw = false;
+    try { openPresets(ctx); for (let i = 0; i < 5; i++) ctx.host.tick(); }
+    catch (e) { threw = true; }
+    check(!threw, 'a corrupt preset file threw');
+}
+
 /* ------------------------------------------------------------------ run */
 
 const tests = [
@@ -385,7 +598,13 @@ const tests = [
     testJogSetsLengthAndStepAttrs,
     testCopyPasteClear,
     testNoUnknownWritesAnywhere,
-    testResumeForcesRepaints
+    testResumeForcesRepaints,
+    testReaddirContractIsFaithful,
+    testPresetSaveThenList,
+    testPresetLoadRestoresState,
+    testPresetDelete,
+    testPresetSurvivesRenameFailure,
+    testPresetEmptyDirIsSafe
 ];
 
 console.log('Overwork UI harness (mocked against the real engine contract)\n');

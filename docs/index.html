@@ -34,6 +34,7 @@
   --fam-space:#3A5A93;
   --fam-tape:#1F5754;
   --fam-none:#67675F;
+  --fam-gran:#9A3A6B;
 
   --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
   --sans:"Familjen Grotesk","Helvetica Neue",Helvetica,sans-serif;
@@ -246,7 +247,7 @@ footer a{color:var(--rust)}
     <div class="tb-side">
       <div class="tb-cell">Module<b>Schwung / Move</b></div>
       <div class="tb-cell">Builds<b>audio_fx · overtake</b></div>
-      <div class="tb-cell">Revision<b>v0.1.0</b></div>
+      <div class="tb-cell">Revision<b>v0.2.0</b></div>
       <div class="tb-cell">Source<b><a href="https://github.com/timncox/schwung-work">timncox/schwung-work</a></b></div>
     </div>
   </div>
@@ -400,7 +401,7 @@ footer a{color:var(--rust)}
   <div class="panel" id="panel-ow" role="tabpanel" aria-labelledby="tab-ow" tabindex="0">
     <p class="rowlabel">Step buttons 1&ndash;16 &mdash; the pattern page&rsquo;s trigs</p>
     <div class="steprow" id="mapSteps" aria-hidden="true"></div>
-    <p class="rowlabel">Pads &mdash; rows 1&ndash;3 are the machine palette, row 4 is transport</p>
+    <p class="rowlabel">Pads &mdash; rows 1&ndash;3 are the 21-machine palette; row 4 is transport, and Shift turns its last four into the step-attribute modes</p>
     <div class="padgrid" id="mapPads"></div>
     <p class="padinfo" id="padInfo" role="status" aria-live="polite">Select a pad to read what it does.</p>
     <h3>Step LED colours</h3>
@@ -479,6 +480,8 @@ footer a{color:var(--rust)}
       </div>
     </div>
   </div>
+  <h3>Presets</h3>
+  <p><strong>Shift + jog click</strong> opens the preset browser. The jog scrolls, a click loads, and the top entry saves a new one; the clear pad deletes the selected preset. Presets are stored outside the module directory, so reinstalling Overwork does not remove them.</p>
   <p>Pattern length runs to 64 steps across four pages. The sequencer also exists in the chain build, where it defaults to off &mdash; a sequenced FX in a Signal Chain slot is a real use, not an accident.</p>
 </section>
 
@@ -502,7 +505,7 @@ footer a{color:var(--rust)}
 </main>
 
 <footer>
-  <p><strong>Work &amp; Overwork</strong> v0.1.0 &mdash; a module for <a href="https://github.com/charlesvestal/schwung">Schwung</a> on the Ableton Move. MIT licensed.<br>
+  <p><strong>Work &amp; Overwork</strong> v0.2.0 &mdash; a module for <a href="https://github.com/charlesvestal/schwung">Schwung</a> on the Ableton Move. MIT licensed.<br>
   Source and tests: <a href="https://github.com/timncox/schwung-work">timncox/schwung-work</a> &middot; distribution: <a href="https://github.com/timncox/schwung-overwork">timncox/schwung-overwork</a> &middot; <a href="https://timncox.github.io/schwung/">all modules</a></p>
   <p>Inspired by the Elektron Tonverk and written from its published user manual. Not affiliated with or endorsed by Elektron. Tonverk is Elektron&rsquo;s trademark.</p>
 </footer>
@@ -523,7 +526,8 @@ footer a{color:var(--rust)}
     dest:  {name:"destruction",css:"--fam-dest"},
     mod:   {name:"modulation", css:"--fam-mod"},
     space: {name:"space",      css:"--fam-space"},
-    tape:  {name:"tape",       css:"--fam-tape"}
+    tape:  {name:"tape",       css:"--fam-tape"},
+    gran:  {name:"granular",   css:"--fam-gran"}
   };
 
   var MACHINES = [
@@ -546,7 +550,8 @@ footer a{color:var(--rust)}
     {n:"Saturator Delay", f:"delay", d:"Delay on a 128th-note grid with ping-pong, and saturation in the feedback path so repeats degrade as they decay.", p:["TIME","PPONG","WID","FDBK","HPF","LPF","MIX"]},
     {n:"Steel Box Reverb", f:"space", d:"Plate character: heavy input diffusion, a bright tank, deliberately wide parameter ranges.", p:["SIZE","FDBK","BRIT","PRE","WDTH","DIFF","LOWC","MIX"]},
     {n:"Supervoid Reverb", f:"space", d:"Room to huge. FREQ and GAIN form a feedback shelving filter — at full GAIN the treble stays in the tail, lowering it damps progressively.", p:["PRE","DEC","FREQ","GAIN","HPF","LPF","MIX"]},
-    {n:"Warble", f:"tape", d:"Tape wobble with a band-shaped signal and added noise. SPEED at zero makes the modulator a random walk. The noise deliberately sits outside the mix law.", p:["SPEED","DEPTH","BASE","WIDTH","N.LEV","N.HPF","STEREO","MIX"]}
+    {n:"Warble", f:"tape", d:"Tape wobble with a band-shaped signal and added noise. SPEED at zero makes the modulator a random walk. The noise deliberately sits outside the mix law.", p:["SPEED","DEPTH","BASE","WIDTH","N.LEV","N.HPF","STEREO","MIX"]},
+    {n:"Grainer", f:"gran", d:"Granulates the last two seconds of live input. POS is where in that buffer grains start, SCAN moves that point and wraps, SPRD scatters it, SIZE is grain length and AMNT how many sound at once. Tonverk\u2019s Grainer plays a sample across 24 parameters; this one has no sample slot and a fixed Hann window.", p:["TUNE","DENS","SIZE","POS","SCAN","SPRD","AMNT","MIX"]}
   ];
 
   /* ---------------- machine reference ---------------- */
@@ -708,10 +713,10 @@ footer a{color:var(--rust)}
     69:{t:"FILL",  d:"Fill. Tap to latch, hold for momentary. Gates the FILL and !FIL conditions."},
     70:{t:"SLOT",  d:"Focus FX slot 1 or 2 — the palette and the knobs follow it."},
     71:{t:"PAGE",  d:"Cycle the pattern page, sixteen steps at a time, up to 64."},
-    72:{t:"EDIT",  d:"Cycle the knob page: FX, LFO 1, LFO 2, Global."},
-    73:{t:"COPY",  d:"Copy the visible pattern page."},
-    74:{t:"PASTE", d:"Paste onto the visible pattern page."},
-    75:{t:"CLEAR", d:"Tap clears the visible page; hold clears the whole pattern."}
+    72:{t:"EDIT",  d:"Cycle the knob page: FX, LFO 1, LFO 2, Global. <b>Shift</b> makes it Condition mode \u2014 the jog then sets a held step\u2019s trig condition."},
+    73:{t:"COPY",  d:"Copy the visible pattern page. <b>Shift</b> makes it Micro-timing mode."},
+    74:{t:"PASTE", d:"Paste onto the visible pattern page. <b>Shift</b> makes it Retrig mode."},
+    75:{t:"CLEAR", d:"Tap clears the visible page; hold clears the whole pattern. <b>Shift</b> clears every lock on the step you are holding."}
   };
 
   var padsEl = document.getElementById("mapPads");

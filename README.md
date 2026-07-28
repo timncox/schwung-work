@@ -1,6 +1,6 @@
 # Work
 
-**Twenty FX machines for the Ableton Move**, as a [Schwung](https://github.com/charlesvestal/schwung)
+**Twenty-one FX machines for the Ableton Move**, as a [Schwung](https://github.com/charlesvestal/schwung)
 module. Two insert slots in series, each loaded with one machine, plus two FX
 LFOs that can modulate any slot parameter.
 
@@ -21,6 +21,7 @@ Inspired by the FX section of the Elektron Tonverk. *Tonverk* is Swedish for
 | Comb ± Filter | Filter Folder | Multimode Filter | Steel Box Reverb |
 | Compressor | Filterbank | Panoramic Chorus | Supervoid Reverb |
 | Daisy Delay | Frequency Warper | Phase 98 | Warble |
+| | | | Grainer |
 
 A few of the less obvious ones:
 
@@ -36,6 +37,11 @@ A few of the less obvious ones:
   appears to rise or fall forever without turning around.
 - **Filter Folder** — high-pass, then a wavefolder, then a morphing multimode
   filter, then distortion. Adds overtones rather than removing them.
+- **Grainer** — granulates the last two seconds of live input. Tonverk's is an
+  SRC machine that granulates a *sample* across 24 parameters; this one has no
+  sample slot and a fixed window, and works on what you play into it.
+- **The three reverbs are three algorithms** — a Schroeder comb bank with early
+  reflections, a Dattorro plate, and a Householder feedback delay network.
 
 ## Two builds
 
@@ -44,7 +50,7 @@ Master FX slot and processes whatever is upstream.
 
 **Overwork** is the `overtake` build. It takes over Move's whole surface and
 runs the same FX on the live input (mic / line / USB-C), with an Elektron-style
-step sequencer driving parameter locks.
+step sequencer driving parameter locks, and a preset browser.
 
 ## Why the surface maps so cleanly
 
@@ -62,8 +68,9 @@ an approximation — it's the same instrument shape:
 That last row is the whole point. The gesture survives intact.
 
 In Overwork the 32 pads are free for what Tonverk uses menus for: rows 1–3 are
-a 20-machine palette (tap to load one into the focused slot), and row 4 is
-transport, pattern pages, copy/paste and clear.
+a 21-machine palette (tap to load one into the focused slot), and row 4 is
+transport, pattern pages, copy/paste and clear — with Shift turning its last
+four into the step-attribute modes.
 
 Steps carry trig conditions (`FILL`, `PRE`, `1ST`, `A:B` ratios, probabilities),
 micro-timing (±23/24 of a step), and retrig. Each firing trig is a complete
@@ -72,14 +79,17 @@ revert to base.
 
 ## Install
 
-Not released yet — see the roadmap below. When it is, it installs like any
-Schwung module: **Install Custom Module** in schwung-manager, pointed at the
-repo or the release tarball.
+schwung-manager → **Install Custom Module**, pointed at
+[`timncox/schwung-work`](https://github.com/timncox/schwung-work) for Work,
+[`timncox/schwung-work-in`](https://github.com/timncox/schwung-work-in) for Work In,
+or [`timncox/schwung-overwork`](https://github.com/timncox/schwung-overwork) for Overwork.
+
+Full manual: **https://timncox.github.io/schwung-work/**
 
 ## Build and test
 
 ```bash
-make test        # engine simulator (360 checks) + UI harness (29 checks)
+make test        # engine (414) + UI harness (47) + site-vs-engine (44)
 make sanitize    # the engine suite under ASan + UBSan
 make bench       # per-machine cost ranking
 make arm         # Docker cross-compile for the Move + both tarballs
@@ -89,14 +99,17 @@ The UI harness mocks the host against a contract generated *from the engine*
 (`test/dump_contract.c`), so a UI that reads a key the DSP doesn't serve fails
 in CI rather than on hardware.
 
-Nothing has been verified on hardware yet.
+Deployed to hardware, but **nothing has been verified by ear yet**.
 
 ## Roadmap
 
 1. ~~**The FX machines** — `audio_fx` build: Signal Chain and Master FX slots.~~ done
 2. ~~**Overwork** — the `overtake` build: step buttons as trig keys, machine
    palette, hold-step-and-turn parameter locks, trig conditions, micro-timing.~~ done
-3. **SRC machines** — Single/Multi Player, Subtracks, Grainer, Wavefinder, Shape.
+3. ~~**Presets**, three distinct reverb algorithms, and **Grainer**.~~ done (v0.2.0)
+4. **The remaining SRC machines** — Single/Multi Player, Subtracks, Wavefinder,
+   Shape. Gated on sample loading: the DSP has no filesystem access, so samples
+   must arrive through the UI in chunks under the 16 KB `set_param` ceiling.
 
 ## Siblings
 

@@ -2,8 +2,8 @@
   "id": "work-in",
   "name": "Work In",
   "abbrev": "WKIN",
-  "version": "0.1.0",
-  "description": "Twenty Tonverk-inspired FX machines on the live input, as a chain slot source",
+  "version": "0.2.0",
+  "description": "Twenty-one Tonverk-inspired FX machines on the live input, as a chain slot source",
   "dsp": "dsp.so",
   "ui_chain": "ui_chain.js",
   "api_version": 2,
@@ -44,7 +44,8 @@
                 "Saturator Delay",
                 "Steel Box Reverb",
                 "Supervoid Reverb",
-                "Warble"
+                "Warble",
+                "Grainer"
               ],
               "default": 0
             },
@@ -72,7 +73,8 @@
                 "Saturator Delay",
                 "Steel Box Reverb",
                 "Supervoid Reverb",
-                "Warble"
+                "Warble",
+                "Grainer"
               ],
               "default": 0
             },
@@ -189,6 +191,10 @@
             {
               "level": "fx1_warble",
               "label": "Warble"
+            },
+            {
+              "level": "fx1_grainer",
+              "label": "Grainer"
             }
           ]
         },
@@ -274,6 +280,10 @@
             {
               "level": "fx2_warble",
               "label": "Warble"
+            },
+            {
+              "level": "fx2_grainer",
+              "label": "Grainer"
             }
           ]
         },
@@ -1551,6 +1561,77 @@
             "fx1_p8"
           ]
         },
+        "fx1_grainer": {
+          "name": "Grainer",
+          "params": [
+            {
+              "key": "fx1_p1",
+              "name": "TUNE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p2",
+              "name": "DENS",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p3",
+              "name": "SIZE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p4",
+              "name": "POS",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p5",
+              "name": "SCAN",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p6",
+              "name": "SPRD",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p7",
+              "name": "AMNT",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p8",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx1_p1",
+            "fx1_p2",
+            "fx1_p3",
+            "fx1_p4",
+            "fx1_p5",
+            "fx1_p6",
+            "fx1_p7",
+            "fx1_p8"
+          ]
+        },
         "fx2_bypass": {
           "name": "Bypass",
           "params": [
@@ -2802,6 +2883,77 @@
             {
               "key": "fx2_p7",
               "name": "STEREO",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p8",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx2_p1",
+            "fx2_p2",
+            "fx2_p3",
+            "fx2_p4",
+            "fx2_p5",
+            "fx2_p6",
+            "fx2_p7",
+            "fx2_p8"
+          ]
+        },
+        "fx2_grainer": {
+          "name": "Grainer",
+          "params": [
+            {
+              "key": "fx2_p1",
+              "name": "TUNE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p2",
+              "name": "DENS",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p3",
+              "name": "SIZE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p4",
+              "name": "POS",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p5",
+              "name": "SCAN",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p6",
+              "name": "SPRD",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p7",
+              "name": "AMNT",
               "type": "int",
               "min": 0,
               "max": 127

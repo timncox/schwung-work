@@ -34,10 +34,35 @@
  * and a whole note at 120 BPM. Saturator Delay clamps its division to this. */
 #define WORK_DLY_LEN     (WORK_SR * 2)
 
-/* Reverb tank sizing. Predelay is separate and capped at 500 ms. */
+/* The three reverbs are three DIFFERENT algorithms, not one tank with three
+ * parameter sets — which is what they were until v0.2.0, and the single
+ * biggest sonic simplification in the project:
+ *
+ *   Rumsklang  early reflections + a Schroeder comb/allpass tank  (large room)
+ *   Steel Box  Dattorro figure-of-eight plate, modulated          (plate)
+ *   Supervoid  Householder feedback delay network, shelved loop   (room->huge)
+ *
+ * Predelay is shared and capped at 500 ms.
+ */
 #define WORK_PRE_LEN     (WORK_SR / 2)
 #define WORK_TANK_COMBS  8
 #define WORK_TANK_APS    4
+
+/* Dattorro plate: 4 input diffusers, then two branches of allpass + delay */
+#define WORK_PLATE_DIFF  4
+#define WORK_PLATE_DLEN  1024      /* input diffuser lines            */
+#define WORK_PLATE_APS   4         /* two per branch                  */
+#define WORK_PLATE_APLEN 4096
+#define WORK_PLATE_DELS  4         /* two per branch                  */
+#define WORK_PLATE_DELEN 8192
+
+/* Feedback delay network: 8 mutually-prime lines, Householder mixing */
+#define WORK_FDN_LINES   8
+#define WORK_FDN_LEN     8192
+
+/* Grainer: concurrent grains in flight. Tonverk allows 8 per voice across 8
+ * voices; Work is monotimbral, so 8 is the whole budget. */
+#define WORK_GRAINS      8
 /* Longest comb line: the Freeverb-derived tuning table tops out at 1617
  * frames, doubled by SIZE at max, so 4096 leaves headroom without paying
  * 500 kB per slot for space we can never address. */
@@ -66,6 +91,13 @@ typedef enum {
     WORK_FX_STEELBOX,    /* Steel Box Reverb  90s plate character              */
     WORK_FX_SUPERVOID,   /* Supervoid Reverb  shelved-feedback room-to-huge    */
     WORK_FX_WARBLE,      /* Warble            tape pitch warble + noise        */
+    /* v0.2.0. Tonverk's Grainer is an SRC machine that granulates a SAMPLE,
+     * across 24 parameters on three pages. Work has no sample loading and one
+     * 8-knob page per machine, so this granulates the ROLLING INPUT BUFFER
+     * instead, with the eight parameters that most change the sound. What that
+     * costs, stated plainly: no sample slot, no AMNT/DIR/MODE/PAN pages, and a
+     * fixed Hann window in place of FADE + SHAPE. */
+    WORK_FX_GRAINER,     /* Grainer           live granular                   */
     WORK_FX_COUNT
 } work_fx_t;
 

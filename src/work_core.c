@@ -203,12 +203,40 @@ typedef struct {
     float *pre;
     int    pw;
 
-    /* reverb tank */
+    /* Rumsklang: Schroeder comb + allpass tank */
     float *comb;                 /* [WORK_TANK_COMBS][2][WORK_TANK_LEN] */
     float *ap;                   /* [WORK_TANK_APS][2][WORK_AP_LEN]     */
     int    comb_w[WORK_TANK_COMBS][2];
     int    ap_w[WORK_TANK_APS][2];
     op_t   comb_damp[WORK_TANK_COMBS][2];
+
+    /* Steel Box: Dattorro plate */
+    float *pl_diff;              /* [WORK_PLATE_DIFF][WORK_PLATE_DLEN]  */
+    float *pl_ap;                /* [WORK_PLATE_APS][WORK_PLATE_APLEN]  */
+    float *pl_del;               /* [WORK_PLATE_DELS][WORK_PLATE_DELEN] */
+    int    pl_diff_w[WORK_PLATE_DIFF];
+    int    pl_ap_w[WORK_PLATE_APS];
+    int    pl_del_w[WORK_PLATE_DELS];
+    float  pl_a, pl_b;           /* the two branch feedback nodes       */
+    float  pl_lfo;
+    op_t   pl_damp[2], pl_bw;
+
+    /* Grainer: grains in flight over the rolling input buffer */
+    struct {
+        int   on;
+        float pos;      /* read offset behind the write head, in frames */
+        float step;     /* per-sample advance = pitch ratio             */
+        float age;      /* samples elapsed                              */
+        float len;      /* grain length in samples                      */
+        float gl, gr;   /* per-grain pan gains                          */
+    } grain[WORK_GRAINS];
+    float gr_next;      /* samples until the next grain is launched     */
+    float gr_scan;      /* base playhead, driven by SCAN                */
+
+    /* Supervoid: feedback delay network */
+    float *fdn;                  /* [WORK_FDN_LINES][WORK_FDN_LEN]      */
+    int    fdn_w[WORK_FDN_LINES];
+    op_t   fdn_shelf[WORK_FDN_LINES];
 
     /* filters, one set per channel where the machine is stereo */
     svf_t  f1[2], f2[2], f3[2], f4[2];
@@ -282,7 +310,7 @@ static const char *MACHINE_NAME[WORK_FX_COUNT] = {
     "Degrader", "Dirtshaper", "Filter Folder", "Filterbank", "Frequency Warper",
     "Infinite Flanger", "Low-Pass Filter", "Multimode Filter", "Panoramic Chorus",
     "Phase 98", "Rumsklang Reverb", "Saturator Delay", "Steel Box Reverb",
-    "Supervoid Reverb", "Warble"
+    "Supervoid Reverb", "Warble", "Grainer"
 };
 
 /* Knob labels A-H per machine, matching the Tonverk manual's abbreviations.
@@ -309,7 +337,8 @@ static const char *PARAM_NAME[WORK_FX_COUNT][WORK_PARAMS] = {
 /* SatDelay  */ {"TIME","PPONG","WID","FDBK","HPF","LPF","MIX",""},
 /* SteelBox  */ {"SIZE","FDBK","BRIT","PRE","WDTH","DIFF","LOWC","MIX"},
 /* Supervoid */ {"PRE","DEC","FREQ","GAIN","HPF","LPF","MIX",""},
-/* Warble    */ {"SPEED","DEPTH","BASE","WIDTH","N.LEV","N.HPF","STEREO","MIX"}
+/* Warble    */ {"SPEED","DEPTH","BASE","WIDTH","N.LEV","N.HPF","STEREO","MIX"},
+/* Grainer   */ {"TUNE","DENS","SIZE","POS","SCAN","SPRD","AMNT","MIX"}
 };
 
 const char *work_machine_name(int code) {
@@ -382,7 +411,8 @@ static const uint8_t PARAM_DEFAULT[WORK_FX_COUNT][WORK_PARAMS] = {
 /* SatDelay  */ {32,0,64,56,16,96,48,0},
 /* SteelBox  */ {64,72,72,16,80,64,24,48},
 /* Supervoid */ {16,72,72,64,16,110,48,0},
-/* Warble    */ {40,40,48,72,16,64,64,64}
+/* Warble    */ {40,40,48,72,16,64,64,64},
+/* Grainer   */ {64,72,40,24,68,24,80,80}
 };
 
 /* ------------------------------------------------- transport / tempo helpers */
@@ -1167,6 +1197,148 @@ static void m_rumsklang(mctx_t *m, float *l, float *r) {
     *r = tr;
 }
 
+/* --- A.3.18 Steel Box Reverb ----------------------------------------------
+ * A Dattorro figure-of-eight plate, which is a genuinely different animal from
+ * Rumsklang's comb tank: input diffusion into a single loop that crosses over
+ * between two branches, with a modulated allpass in each to break up the
+ * metallic ringing a static plate develops. Output is tapped from several
+ * points inside the loop rather than from the loop output, which is what gives
+ * a plate its dense, early-arriving stereo.
+ *
+ * Tunings are the classic ones, scaled by SIZE.
+ */
+static const int PL_DIFF_LEN[WORK_PLATE_DIFF] = {142, 107, 379, 277};
+static const int PL_AP_LEN[WORK_PLATE_APS]    = {672, 1800, 908, 2656};
+static const int PL_DEL_LEN[WORK_PLATE_DELS]  = {4453, 3720, 4217, 3163};
+
+/* Allpass through a dedicated line. `mod` shifts the read point for the two
+ * modulated tank allpasses. */
+static float plate_ap(float *line, int cap, int *w, int len, float g,
+                      float in, float mod) {
+    len = iclamp(len, 8, cap - 2);
+    float rp = (float)*w - (float)len + mod;
+    while (rp < 0.0f) rp += (float)cap;
+    while (rp >= (float)cap) rp -= (float)cap;
+    int   i0 = (int)rp;
+    float fr = rp - (float)i0;
+    int   i1 = (i0 + 1) % cap;
+    float dly = line[i0] * (1.0f - fr) + line[i1] * fr;
+
+    float v = in + dly * g;
+    line[*w] = v;
+    *w = (*w + 1) % cap;
+    return dly - v * g;
+}
+
+static float plate_tap(const float *line, int cap, int w, int len) {
+    len = iclamp(len, 1, cap - 1);
+    int i = w - len;
+    while (i < 0) i += cap;
+    return line[i];
+}
+
+static void m_steelbox(mctx_t *m, float *l, float *r) {
+    work_slot_t *s = m->s;
+    const uint8_t *p = m->p;
+
+    float pl, pr;
+    predelay(s, *l, *r, 1.0f + p01(p[3]) * (float)(WORK_PRE_LEN - 8), &pl, &pr);
+    float in = (pl + pr) * 0.5f;
+
+    /* BRIT is the loop's brightness: input bandwidth and in-loop damping */
+    float brit = p01(p[2]);
+    in = op_lp(&s->pl_bw, in, op_a(300.0f + brit * 15000.0f));
+
+    /* DIFF sets how hard the input diffusers smear the transient */
+    float size = 0.4f + p01(p[0]) * 1.6f;
+    float dg   = 0.45f + p01(p[5]) * 0.3f;
+    for (int i = 0; i < WORK_PLATE_DIFF; ++i) {
+        int len = (int)((float)PL_DIFF_LEN[i] * size);
+        in = plate_ap(s->pl_diff + i * WORK_PLATE_DLEN, WORK_PLATE_DLEN,
+                      &s->pl_diff_w[i], len, i < 2 ? dg : dg * 0.85f, in, 0.0f);
+    }
+
+    /* a slow LFO detunes the two tank allpasses so the plate never settles */
+    s->pl_lfo += 0.7f / (float)WORK_SR;
+    if (s->pl_lfo >= 1.0f) s->pl_lfo -= 1.0f;
+    float mod = sinf(s->pl_lfo * 2.0f * (float)M_PI) * 8.0f;
+
+    float decay = 0.30f + p01(p[1]) * 0.68f;
+    float damp  = op_a(500.0f + brit * 14000.0f);
+
+    /* branch A takes the input plus branch B's output, and vice versa —
+     * the figure of eight */
+    float a = in + s->pl_b * decay;
+    a = plate_ap(s->pl_ap + 0 * WORK_PLATE_APLEN, WORK_PLATE_APLEN,
+                 &s->pl_ap_w[0], (int)(PL_AP_LEN[0] * size), -0.7f, a, mod);
+    s->pl_del[0 * WORK_PLATE_DELEN + s->pl_del_w[0]] = a;
+    a = plate_tap(s->pl_del + 0 * WORK_PLATE_DELEN, WORK_PLATE_DELEN,
+                  s->pl_del_w[0], (int)(PL_DEL_LEN[0] * size));
+    s->pl_del_w[0] = (s->pl_del_w[0] + 1) % WORK_PLATE_DELEN;
+    a = op_lp(&s->pl_damp[0], a, damp) * decay;
+    a = plate_ap(s->pl_ap + 1 * WORK_PLATE_APLEN, WORK_PLATE_APLEN,
+                 &s->pl_ap_w[1], (int)(PL_AP_LEN[1] * size), 0.5f, a, 0.0f);
+    s->pl_del[1 * WORK_PLATE_DELEN + s->pl_del_w[1]] = a;
+    float a_out = plate_tap(s->pl_del + 1 * WORK_PLATE_DELEN, WORK_PLATE_DELEN,
+                            s->pl_del_w[1], (int)(PL_DEL_LEN[1] * size));
+    s->pl_del_w[1] = (s->pl_del_w[1] + 1) % WORK_PLATE_DELEN;
+
+    float b = in + s->pl_a * decay;
+    b = plate_ap(s->pl_ap + 2 * WORK_PLATE_APLEN, WORK_PLATE_APLEN,
+                 &s->pl_ap_w[2], (int)(PL_AP_LEN[2] * size), -0.7f, b, -mod);
+    s->pl_del[2 * WORK_PLATE_DELEN + s->pl_del_w[2]] = b;
+    b = plate_tap(s->pl_del + 2 * WORK_PLATE_DELEN, WORK_PLATE_DELEN,
+                  s->pl_del_w[2], (int)(PL_DEL_LEN[2] * size));
+    s->pl_del_w[2] = (s->pl_del_w[2] + 1) % WORK_PLATE_DELEN;
+    b = op_lp(&s->pl_damp[1], b, damp) * decay;
+    b = plate_ap(s->pl_ap + 3 * WORK_PLATE_APLEN, WORK_PLATE_APLEN,
+                 &s->pl_ap_w[3], (int)(PL_AP_LEN[3] * size), 0.5f, b, 0.0f);
+    s->pl_del[3 * WORK_PLATE_DELEN + s->pl_del_w[3]] = b;
+    float b_out = plate_tap(s->pl_del + 3 * WORK_PLATE_DELEN, WORK_PLATE_DELEN,
+                            s->pl_del_w[3], (int)(PL_DEL_LEN[3] * size));
+    s->pl_del_w[3] = (s->pl_del_w[3] + 1) % WORK_PLATE_DELEN;
+
+    s->pl_a = sane(a_out);
+    s->pl_b = sane(b_out);
+
+    /* Tap each output from points INSIDE the opposite branch — this is what
+     * makes a plate arrive early and wide instead of swelling. */
+    float wl = plate_tap(s->pl_del + 2 * WORK_PLATE_DELEN, WORK_PLATE_DELEN,
+                         s->pl_del_w[2], (int)(266 * size))
+             + plate_tap(s->pl_del + 2 * WORK_PLATE_DELEN, WORK_PLATE_DELEN,
+                         s->pl_del_w[2], (int)(2974 * size))
+             - plate_tap(s->pl_ap + 3 * WORK_PLATE_APLEN, WORK_PLATE_APLEN,
+                         s->pl_ap_w[3], (int)(1913 * size))
+             + plate_tap(s->pl_del + 3 * WORK_PLATE_DELEN, WORK_PLATE_DELEN,
+                         s->pl_del_w[3], (int)(1996 * size));
+    float wr = plate_tap(s->pl_del + 0 * WORK_PLATE_DELEN, WORK_PLATE_DELEN,
+                         s->pl_del_w[0], (int)(353 * size))
+             + plate_tap(s->pl_del + 0 * WORK_PLATE_DELEN, WORK_PLATE_DELEN,
+                         s->pl_del_w[0], (int)(3627 * size))
+             - plate_tap(s->pl_ap + 1 * WORK_PLATE_APLEN, WORK_PLATE_APLEN,
+                         s->pl_ap_w[1], (int)(1228 * size))
+             + plate_tap(s->pl_del + 1 * WORK_PLATE_DELEN, WORK_PLATE_DELEN,
+                         s->pl_del_w[1], (int)(2673 * size));
+    wl *= 0.75f;
+    wr *= 0.75f;
+
+    /* LOWC trims the rumble the loop accumulates */
+    svf_co_t hc;
+    svf_coeffs(&hc, pexp(p[6], 20.0f, 1500.0f), 0.707f);
+    wl = svf_hp(&s->f1[0], &hc, wl);
+    wr = svf_hp(&s->f1[1], &hc, wr);
+
+    float wdt  = p01(p[4]);
+    float mid  = (wl + wr) * 0.5f;
+    float side = (wl - wr) * 0.5f * (0.2f + wdt * 1.8f);
+    wl = mid + side;
+    wr = mid - side;
+
+    float mix = p01(p[7]);
+    *l = *l * (1.0f - mix) + wl * mix;
+    *r = *r * (1.0f - mix) + wr * mix;
+}
+
 /* --- A.3.17 Saturator Delay -----------------------------------------------
  * TIME is measured in 128th notes, using the documented divide table. The
  * saturation lives in the feedback path, so repeats degrade as they decay. */
@@ -1219,50 +1391,20 @@ static void m_satdelay(mctx_t *m, float *l, float *r) {
     *r = *r * (1.0f - mix) + tr * gr * mix;
 }
 
-/* --- A.3.18 Steel Box Reverb ----------------------------------------------
- * Plate character: heavy input diffusion, a bright tank, and deliberately
- * wide parameter ranges as the manual advertises. */
-static void m_steelbox(mctx_t *m, float *l, float *r) {
-    work_slot_t *s = m->s;
-    const uint8_t *p = m->p;
-
-    float pl, pr;
-    predelay(s, *l, *r, 1.0f + p01(p[3]) * (float)(WORK_PRE_LEN - 8), &pl, &pr);
-
-    /* Input diffusion: two allpasses per channel, depth set by DIFF */
-    float diff = p01(p[5]) * 0.7f;
-    for (int ch = 0; ch < 2; ++ch) {
-        float *v = ch ? &pr : &pl;
-        *v = ap1_run(&s->phase[0][ch], *v, diff);
-        *v = ap1_run(&s->phase[1][ch], *v, diff * 0.8f);
-    }
-
-    float size = 0.35f + p01(p[0]) * 1.25f;
-    float fb   = 0.55f + p01(p[1]) * 0.44f;
-    float damp = op_a(pexp(p[2], 600.0f, 18000.0f));
-
-    float tl, tr;
-    tank_run(s, pl, pr, size, fb, damp, &tl, &tr);
-
-    svf_co_t hc;
-    svf_coeffs(&hc, pexp(p[6], 20.0f, 1500.0f), 0.707f);
-    tl = svf_hp(&s->f1[0], &hc, tl);
-    tr = svf_hp(&s->f1[1], &hc, tr);
-
-    float wdt  = p01(p[4]);
-    float mid  = (tl + tr) * 0.5f;
-    float side = (tl - tr) * 0.5f * (0.2f + wdt * 1.8f);
-    tl = mid + side;
-    tr = mid - side;
-
-    float mix = p01(p[7]);
-    *l = *l * (1.0f - mix) + tl * mix;
-    *r = *r * (1.0f - mix) + tr * mix;
-}
-
 /* --- A.3.19 Supervoid Reverb ----------------------------------------------
- * Room to huge. FREQ/GAIN form the feedback shelving filter: at max GAIN the
- * treble stays in the tail, lowering it damps progressively. */
+ * A Householder feedback delay network. Eight mutually-prime delay lines are
+ * mixed by an orthogonal matrix every sample, which builds echo density far
+ * faster than a comb bank and is why this one goes from small room to huge
+ * without the fluttering a Schroeder tank gets at long decays.
+ *
+ * FREQ and GAIN form the shelving filter inside the loop, exactly as the
+ * manual describes: at full GAIN the treble stays in the tail, lowering it
+ * damps progressively above FREQ.
+ */
+static const int FDN_LEN[WORK_FDN_LINES] = {
+    1063, 1291, 1583, 1867, 2153, 2411, 2719, 3011   /* mutually prime */
+};
+
 static void m_supervoid(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
     const uint8_t *p = m->p;
@@ -1277,18 +1419,46 @@ static void m_supervoid(mctx_t *m, float *l, float *r) {
     float pl, pr;
     predelay(s, il, ir, 1.0f + p01(p[0]) * (float)(WORK_PRE_LEN - 8), &pl, &pr);
 
-    float size  = 0.5f + p01(p[1]) * 1.5f;
-    float fb    = 0.70f + p01(p[1]) * 0.29f;
-    /* Shelving: FREQ sets where damping starts, GAIN how much survives it */
-    float shelf = pexp(p[2], 500.0f, 16000.0f);
-    float damp  = op_a(shelf) * (0.15f + (1.0f - p01(p[3])) * 0.85f);
+    float size  = 0.35f + p01(p[1]) * 1.65f;
+    float decay = 0.72f + p01(p[1]) * 0.27f;
+    float shelf = op_a(pexp(p[2], 400.0f, 16000.0f));
+    float keep  = p01(p[3]);          /* GAIN: how much treble survives */
 
-    float tl, tr;
-    tank_run(s, pl, pr, size, fb, fclampf(damp, 0.0f, 1.0f), &tl, &tr);
+    float y[WORK_FDN_LINES];
+    float sum = 0.0f;
+    for (int i = 0; i < WORK_FDN_LINES; ++i) {
+        int len = iclamp((int)((float)FDN_LEN[i] * size), 16, WORK_FDN_LEN - 1);
+        int rp  = s->fdn_w[i] - len;
+        if (rp < 0) rp += WORK_FDN_LEN;
+        y[i] = s->fdn[i * WORK_FDN_LEN + rp];
+        sum += y[i];
+    }
+
+    /* Householder: out_i = y_i - (2/N) * sum. Orthogonal, so it mixes without
+     * gain, and it is one multiply per line rather than N. */
+    float hh = sum * (2.0f / (float)WORK_FDN_LINES);
+
+    for (int i = 0; i < WORK_FDN_LINES; ++i) {
+        float v = y[i] - hh;
+        /* shelving damper in the loop: blend the full-band signal with its
+         * low-passed copy, GAIN deciding how much treble comes back */
+        float lp = op_lp(&s->fdn_shelf[i], v, shelf);
+        v = lp + (v - lp) * keep;
+
+        float inj = (i & 1) ? pr : pl;
+        s->fdn[i * WORK_FDN_LEN + s->fdn_w[i]] = sane(inj * 0.5f + v * decay);
+        s->fdn_w[i] = (s->fdn_w[i] + 1) % WORK_FDN_LEN;
+    }
+
+    /* alternate lines to each side keeps the tail wide */
+    /* Output gain sits OUTSIDE the loop, so this is a level match against the
+     * other two reverbs, not a stability change. */
+    float wl = (y[0] + y[2] + y[4] + y[6]) * 0.9f;
+    float wr = (y[1] + y[3] + y[5] + y[7]) * 0.9f;
 
     float mix = p01(p[6]);
-    *l = *l * (1.0f - mix) + tl * mix;
-    *r = *r * (1.0f - mix) + tr * mix;
+    *l = *l * (1.0f - mix) + wl * mix;
+    *r = *r * (1.0f - mix) + wr * mix;
 }
 
 /* --- A.3.20 Warble --------------------------------------------------------
@@ -1346,20 +1516,129 @@ static void m_warble(mctx_t *m, float *l, float *r) {
     *r = or_;
 }
 
+/* --- Grainer (A.2.4, adapted) ---------------------------------------------
+ * Tonverk's Grainer is an SRC machine: it granulates a loaded sample. Work has
+ * no sample loading, so this granulates the rolling buffer of whatever is
+ * coming in — the last two seconds of live audio stand in for the sample.
+ *
+ * Everything else follows the manual's semantics: POS is where in the buffer
+ * grains start, SCAN moves that point forward or backward (and wraps), SPRD
+ * randomises each grain's start, SIZE is the grain length from 10 ms up, DENS
+ * governs how often grains launch, AMNT how many may sound at once, and TUNE
+ * is bipolar over +/- 2 octaves.
+ *
+ * Not carried across, and worth knowing: the sample slot, the AMNT/DIR/MODE
+ * and PAN controls of SRC page 2, and the FADE/SHAPE window pair — grains use
+ * a fixed Hann window here, which is the smooth end of what SHAPE offers.
+ */
+static void m_grainer(mctx_t *m, float *l, float *r) {
+    work_slot_t *s = m->s;
+    const uint8_t *p = m->p;
+
+    /* the buffer under the grains is the live input */
+    s->dl[s->dw * 2]     = *l;
+    s->dl[s->dw * 2 + 1] = *r;
+
+    float rate  = powf(2.0f, pbi(p[0]) * 2.0f);                  /* TUNE +/-2 oct */
+    float size  = fclampf(0.01f + p01(p[2]) * 1.2f, 0.01f, 1.4f) * (float)WORK_SR;
+    float dens  = p01(p[1]);
+    float posf  = p01(p[3]);
+    float scan  = pbi(p[4]);
+    float sprd  = p01(p[5]);
+    int   amnt  = iclamp(1 + (int)(p01(p[6]) * (WORK_GRAINS - 1) + 0.5f), 1, WORK_GRAINS);
+
+    /* SCAN walks the base read point through the buffer and wraps, so a small
+     * positive value drifts forward through recent history. */
+    s->gr_scan += scan * 4.0f;
+    float span = (float)WORK_DLY_LEN - size - 4.0f;
+    if (span < 16.0f) span = 16.0f;
+    while (s->gr_scan >= span)   s->gr_scan -= span;
+    while (s->gr_scan < 0.0f)    s->gr_scan += span;
+
+    float base = 2.0f + posf * (span * 0.85f) + s->gr_scan;
+
+    /* Launch interval: dense settings overlap grains heavily, sparse ones
+     * leave gaps. Referenced to grain length so SIZE and DENS interact the
+     * way the manual describes for OSC mode. */
+    float interval = fmaxf(size * (1.05f - dens), 32.0f);
+    s->gr_next -= 1.0f;
+    if (s->gr_next <= 0.0f) {
+        s->gr_next = interval;
+        int live = 0;
+        for (int g = 0; g < WORK_GRAINS; ++g) if (s->grain[g].on) live++;
+        if (live < amnt) {
+            for (int g = 0; g < WORK_GRAINS; ++g) {
+                if (s->grain[g].on) continue;
+                float jitter = sprd * rnd_01(&s->rng) * span * 0.5f;
+                s->grain[g].on   = 1;
+                s->grain[g].pos  = fclampf(base + jitter, 2.0f, (float)(WORK_DLY_LEN - 4));
+                s->grain[g].step = rate;
+                s->grain[g].age  = 0.0f;
+                s->grain[g].len  = size;
+                /* a little pan scatter keeps a grain cloud from collapsing */
+                float pan = 0.5f + (rnd_bi(&s->rng) * sprd * 0.5f);
+                pan = fclampf(pan, 0.0f, 1.0f);
+                s->grain[g].gl = sqrtf(1.0f - pan);
+                s->grain[g].gr = sqrtf(pan);
+                break;
+            }
+        }
+    }
+
+    float wl = 0.0f, wr = 0.0f;
+    for (int g = 0; g < WORK_GRAINS; ++g) {
+        if (!s->grain[g].on) continue;
+
+        float t = s->grain[g].age / s->grain[g].len;
+        if (t >= 1.0f) { s->grain[g].on = 0; continue; }
+
+        /* Hann window — the smooth end of Tonverk's FADE/SHAPE pair */
+        float win = 0.5f - 0.5f * cosf(t * 2.0f * (float)M_PI);
+
+        /* Read behind the write head. The grain's own advance is (step - 1)
+         * relative to the head, so a rate of 1 holds a fixed offset. */
+        float back = s->grain[g].pos - s->grain[g].age * (s->grain[g].step - 1.0f);
+        back = fclampf(back, 2.0f, (float)(WORK_DLY_LEN - 4));
+
+        wl += dl_read(s->dl, WORK_DLY_LEN, s->dw, back, 0) * win * s->grain[g].gl;
+        wr += dl_read(s->dl, WORK_DLY_LEN, s->dw, back, 1) * win * s->grain[g].gr;
+
+        s->grain[g].age += 1.0f;
+    }
+
+    /* Overlapping Hann grains sum to roughly unity; normalise by the count
+     * allowed rather than the count sounding, so density changes do not jump. */
+    float norm = 1.4f / sqrtf((float)amnt);
+    wl *= norm;
+    wr *= norm;
+
+    s->dw = (s->dw + 1) % WORK_DLY_LEN;
+
+    float mix = p01(p[7]);
+    *l = *l * (1.0f - mix) + wl * mix;
+    *r = *r * (1.0f - mix) + wr * mix;
+}
+
 /* ------------------------------------------------- 5. dispatch and plumbing */
 
 static void slot_reset(work_slot_t *s) {
     /* Clear everything except the allocated buffers themselves. */
     float *dl = s->dl, *pre = s->pre, *comb = s->comb, *ap = s->ap;
+    float *pld = s->pl_diff, *pla = s->pl_ap, *plx = s->pl_del, *fdn = s->fdn;
     uint32_t rng = s->rng;
     memset(s, 0, sizeof(*s));
     s->dl = dl; s->pre = pre; s->comb = comb; s->ap = ap;
+    s->pl_diff = pld; s->pl_ap = pla; s->pl_del = plx; s->fdn = fdn;
     s->rng = rng ? rng : 0x9E3779B9u;
 
     if (dl)   memset(dl,   0, sizeof(float) * WORK_DLY_LEN * 2);
     if (pre)  memset(pre,  0, sizeof(float) * WORK_PRE_LEN * 2);
     if (comb) memset(comb, 0, sizeof(float) * WORK_TANK_COMBS * 2 * WORK_TANK_LEN);
     if (ap)   memset(ap,   0, sizeof(float) * WORK_TANK_APS * 2 * WORK_AP_LEN);
+    if (pld)  memset(pld,  0, sizeof(float) * WORK_PLATE_DIFF * WORK_PLATE_DLEN);
+    if (pla)  memset(pla,  0, sizeof(float) * WORK_PLATE_APS * WORK_PLATE_APLEN);
+    if (plx)  memset(plx,  0, sizeof(float) * WORK_PLATE_DELS * WORK_PLATE_DELEN);
+    if (fdn)  memset(fdn,  0, sizeof(float) * WORK_FDN_LINES * WORK_FDN_LEN);
 }
 
 static void run_machine(mctx_t *m, int machine, float *l, float *r) {
@@ -1383,6 +1662,7 @@ static void run_machine(mctx_t *m, int machine, float *l, float *r) {
         case WORK_FX_STEELBOX:  m_steelbox(m, l, r);  break;
         case WORK_FX_SUPERVOID: m_supervoid(m, l, r); break;
         case WORK_FX_WARBLE:    m_warble(m, l, r);    break;
+        case WORK_FX_GRAINER:   m_grainer(m, l, r);   break;
         case WORK_FX_BYPASS:
         default:                                      break;
     }
@@ -1569,7 +1849,14 @@ work_t *work_create(const host_api_v1_t *host) {
         s->pre  = (float *)calloc((size_t)WORK_PRE_LEN * 2, sizeof(float));
         s->comb = (float *)calloc((size_t)WORK_TANK_COMBS * 2 * WORK_TANK_LEN, sizeof(float));
         s->ap   = (float *)calloc((size_t)WORK_TANK_APS * 2 * WORK_AP_LEN, sizeof(float));
-        if (!s->dl || !s->pre || !s->comb || !s->ap) { work_destroy(w); return NULL; }
+        s->pl_diff = (float *)calloc((size_t)WORK_PLATE_DIFF * WORK_PLATE_DLEN, sizeof(float));
+        s->pl_ap   = (float *)calloc((size_t)WORK_PLATE_APS * WORK_PLATE_APLEN, sizeof(float));
+        s->pl_del  = (float *)calloc((size_t)WORK_PLATE_DELS * WORK_PLATE_DELEN, sizeof(float));
+        s->fdn     = (float *)calloc((size_t)WORK_FDN_LINES * WORK_FDN_LEN, sizeof(float));
+        if (!s->dl || !s->pre || !s->comb || !s->ap ||
+            !s->pl_diff || !s->pl_ap || !s->pl_del || !s->fdn) {
+            work_destroy(w); return NULL;
+        }
 
         s->rng = 0x9E3779B9u ^ (uint32_t)(i * 0x85EBCA6Bu);
         s->last_machine = WORK_FX_BYPASS;
@@ -1589,6 +1876,10 @@ void work_destroy(work_t *w) {
         free(w->slot[i].pre);
         free(w->slot[i].comb);
         free(w->slot[i].ap);
+        free(w->slot[i].pl_diff);
+        free(w->slot[i].pl_ap);
+        free(w->slot[i].pl_del);
+        free(w->slot[i].fdn);
     }
     free(w);
 }

@@ -889,6 +889,135 @@ static void test_ui_hierarchy_labels(void) {
     work_destroy(w);
 }
 
+/* The three reverbs were one shared Schroeder tank until v0.2.0. They are now
+ * three algorithms — Schroeder comb bank, Dattorro plate, Householder FDN —
+ * so their impulse responses must not resemble each other. */
+static void capture_ir(int machine, float *out, int n) {
+    work_t *w = work_create(&host);
+    assert(w);
+    set_slot(w, 0, machine);
+    /* fully wet, so the dry impulse does not dominate the comparison */
+    for (int i = 0; i < WORK_PARAMS; ++i) {
+        const char *nm = work_param_name(machine, i);
+        if (strcmp(nm, "MIX") == 0) {
+            char key[16];
+            snprintf(key, sizeof(key), "fx1_p%d", i + 1);
+            work_set_param(w, key, "127");
+        }
+    }
+
+    int16_t buf[BLOCK * 2];
+    int written = 0;
+    for (int b = 0; b < n / BLOCK + 2 && written < n; ++b) {
+        memset(buf, 0, sizeof(buf));
+        if (b == 0) { buf[0] = 24000; buf[1] = 24000; }   /* one impulse */
+        work_process(w, buf, buf, BLOCK);
+        for (int i = 0; i < BLOCK && written < n; ++i)
+            out[written++] = (float)buf[i * 2] / 32768.0f;
+    }
+    work_destroy(w);
+}
+
+/* Normalised correlation between two impulse responses. Two voicings of the
+ * same topology correlate strongly; different algorithms do not. */
+static double ir_correlation(const float *a, const float *b, int n) {
+    double sa = 0, sb = 0, sab = 0;
+    for (int i = 0; i < n; ++i) { sa += a[i]*a[i]; sb += b[i]*b[i]; sab += a[i]*b[i]; }
+    if (sa < 1e-12 || sb < 1e-12) return 0.0;
+    return fabs(sab) / sqrt(sa * sb);
+}
+
+static void test_reverbs_are_distinct(void) {
+    printf("the three reverbs are genuinely different algorithms\n");
+    enum { N = 22050 };                       /* half a second */
+    static float rum[N], steel[N], svoid[N];
+
+    capture_ir(WORK_FX_RUMSKLANG, rum, N);
+    capture_ir(WORK_FX_STEELBOX, steel, N);
+    capture_ir(WORK_FX_SUPERVOID, svoid, N);
+
+    /* each must actually produce a tail */
+    double e_rum = 0, e_steel = 0, e_void = 0;
+    for (int i = 2000; i < N; ++i) {
+        e_rum += fabs(rum[i]); e_steel += fabs(steel[i]); e_void += fabs(svoid[i]);
+    }
+    CHECK(e_rum   > 0.5, "Rumsklang produced no tail (energy %.3f)", e_rum);
+    CHECK(e_steel > 0.5, "Steel Box produced no tail (energy %.3f)", e_steel);
+    CHECK(e_void  > 0.5, "Supervoid produced no tail (energy %.3f)", e_void);
+
+    double c_rs = ir_correlation(rum, steel, N);
+    double c_rv = ir_correlation(rum, svoid, N);
+    double c_sv = ir_correlation(steel, svoid, N);
+
+    CHECK(c_rs < 0.35, "Rumsklang and Steel Box correlate at %.2f — too alike", c_rs);
+    CHECK(c_rv < 0.35, "Rumsklang and Supervoid correlate at %.2f — too alike", c_rv);
+    CHECK(c_sv < 0.35, "Steel Box and Supervoid correlate at %.2f — too alike", c_sv);
+
+    /* Echo density: a plate and an FDN build density much faster than a comb
+     * bank, so count zero crossings in the first 100 ms as a proxy. */
+    int zc[3] = {0, 0, 0};
+    const float *irs[3] = {rum, steel, svoid};
+    for (int k = 0; k < 3; ++k)
+        for (int i = 1; i < 4410; ++i)
+            if ((irs[k][i - 1] < 0.0f) != (irs[k][i] < 0.0f)) zc[k]++;
+    CHECK(zc[0] > 0 && zc[1] > 0 && zc[2] > 0,
+          "an impulse response was static (zc %d/%d/%d)", zc[0], zc[1], zc[2]);
+    printf("      correlations  rum/steel %.2f  rum/void %.2f  steel/void %.2f\n",
+           c_rs, c_rv, c_sv);
+    printf("      early density %d / %d / %d crossings\n", zc[0], zc[1], zc[2]);
+}
+
+/* Grainer must actually granulate: rearrange the input rather than pass it,
+ * and follow TUNE. */
+static void test_grainer(void) {
+    printf("Grainer granulates the input buffer and tracks TUNE\n");
+
+    /* fully wet, pitch centred */
+    work_t *w = work_create(&host);
+    assert(w);
+    set_slot(w, 0, WORK_FX_GRAINER);
+    work_set_param(w, "fx1_p8", "127");        /* MIX wet */
+    int railed = 0;
+    int64_t e = run_blocks(w, 300, &railed);
+    CHECK(e > 0, "Grainer produced silence");
+    CHECK(railed == 0, "Grainer railed %d samples", railed);
+
+    /* it must not simply reproduce the input */
+    int16_t in[BLOCK * 2], out[BLOCK * 2];
+    double ph = 0.0;
+    fill_signal(in, BLOCK, &ph);
+    memcpy(out, in, sizeof(in));
+    work_process(w, out, out, BLOCK);
+    int same = 0;
+    for (int i = 0; i < BLOCK * 2; ++i) if (out[i] == in[i]) same++;
+    CHECK(same < BLOCK * 2 - 8, "Grainer output is identical to its input");
+    work_destroy(w);
+
+    /* TUNE up an octave must shift energy relative to TUNE down an octave */
+    int64_t hi = 0, lo = 0;
+    for (int k = 0; k < 2; ++k) {
+        work_t *g = work_create(&host);
+        set_slot(g, 0, WORK_FX_GRAINER);
+        work_set_param(g, "fx1_p8", "127");
+        work_set_param(g, "fx1_p1", k ? "96" : "32");   /* TUNE up / down */
+        int dummy;
+        int64_t en = run_blocks(g, 200, &dummy);
+        if (k) hi = en; else lo = en;
+        work_destroy(g);
+    }
+    CHECK(hi != lo, "TUNE made no difference to the output (%lld vs %lld)",
+          (long long)hi, (long long)lo);
+
+    /* a Grainer with no grains allowed still must not blow up */
+    work_t *q = work_create(&host);
+    set_slot(q, 0, WORK_FX_GRAINER);
+    set_all_params(q, 0, 0);
+    int r2 = 0;
+    run_blocks(q, 120, &r2);
+    CHECK(r2 == 0, "Grainer at all-min railed %d samples", r2);
+    work_destroy(q);
+}
+
 int main(void) {
     printf("Work engine — host simulator\n\n");
 
@@ -906,6 +1035,8 @@ int main(void) {
     test_midi_clock();
     test_param_name_table();
     test_ui_hierarchy_labels();
+    test_reverbs_are_distinct();
+    test_grainer();
 
     printf("\n-- sequencer --\n");
     test_seq_locks_apply_and_revert();

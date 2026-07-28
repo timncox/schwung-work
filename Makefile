@@ -2,7 +2,7 @@ CC ?= cc
 CFLAGS ?= -O2 -g -Wall -Wextra -Wpedantic -Iinclude -Isrc
 LDLIBS = -lm
 
-.PHONY: test test-ui contract module-json bench sanitize arm clean
+.PHONY: test test-ui test-site contract module-json bench sanitize arm clean
 
 # module.json's ui_hierarchy is GENERATED from PARAM_NAME[][] in work_core.c,
 # so adding or renaming a machine parameter cannot leave the Shadow UI showing
@@ -19,7 +19,7 @@ build/gen_hierarchy: src/work_core.c src/work_core.h test/gen_hierarchy.c
 	@mkdir -p build
 	$(CC) $(CFLAGS) src/work_core.c test/gen_hierarchy.c -o $@ $(LDLIBS)
 
-test: build/host_sim test-ui
+test: build/host_sim test-ui test-site
 	./build/host_sim
 
 build/host_sim: src/work_core.c src/work_core.h test/host_sim.c include/plugin_api_v1.h
@@ -40,6 +40,14 @@ build/dump_contract: src/work_core.c src/work_core.h test/dump_contract.c
 
 test-ui: build/contract.json
 	node --no-warnings --experimental-vm-modules test/ui_overtake.mjs
+
+# The manual site keeps its own copy of the machine table; this proves it still
+# matches the engine's. A swapped label already slipped through once.
+test-site: build/contract.json build/hierarchy.json
+	node --no-warnings test/site_matches_engine.mjs
+
+build/hierarchy.json: build/gen_hierarchy
+	./build/gen_hierarchy > $@
 
 bench: build/benchmark
 	./build/benchmark

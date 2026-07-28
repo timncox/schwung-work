@@ -5,7 +5,7 @@ last_touched: 2026-07-28
 
 # Work
 
-Schwung module for the Ableton Move: **twenty FX machines in two insert slots**,
+Schwung module for the Ableton Move: **twenty-one FX machines in two insert slots**,
 inspired by the Elektron Tonverk's FX section. Two FX LFOs modulate any slot
 parameter. Named Work because Tonverk is Swedish for "tone works" — the same
 naming move as Mono for the Monomachine.
@@ -38,7 +38,7 @@ pages map 1:1. A track's FX section is two insert slots in series, each holding
 one machine with up to 8 parameters — that is exactly what this engine models.
 
 ```
-src/work_core.{c,h}   the engine: 20 machines, 2 slots, 2 FX LFOs, sequencer
+src/work_core.{c,h}   the engine: 21 machines, 2 slots, 2 FX LFOs, sequencer
 src/work_fx.c         audio_fx_api_v2 wrapper  -> work.so
 src/work_overtake.c   plugin_api_v2 wrapper    -> dsp.so (reads audio-in)
 src/ui_chain.js       Signal Chain slot editor UI
@@ -50,7 +50,7 @@ test/dump_contract.c  emits the real param contract as JSON
 test/ui_overtake.mjs  UI harness, mocked against that contract
 ```
 
-Builds — **both compile from the same `work_core.c`; tag them together**:
+Builds — **all three compile from the same `work_core.c`; tag them together**:
 
 - **`work`** — `audio_fx`, loads in Signal Chain slots **and** Master FX slots.
   The `.so` **must** be named `work.so`: the chain host loads a slot's audio FX
@@ -101,6 +101,7 @@ renumbers every saved preset.
 | 7 | Filter Folder | 17 | Steel Box Reverb |
 | 8 | Filterbank | 18 | Supervoid Reverb |
 | 9 | Frequency Warper | 19 | Warble |
+| | | 20 | Grainer |
 
 Knob labels live in `PARAM_NAME[][]` in `work_core.c` and are served to the UI
 via `get_param("labels1"/"labels2")`. **The UI must never keep its own copy** —
@@ -122,8 +123,9 @@ These are all lessons other Schwung modules paid for. Do not relearn them.
   throws on the first knob release and the host treats handler exceptions as
   fatal. Run the regex audit before shipping (Smack v0.8.6).
 - **`os.readdir` returns `[names, errno]`** including `.` and `..`, and
-  `os.rename`/`os.remove` return `-errno` rather than throwing. Not used here
-  yet; it will matter when presets land. See the memory note.
+  `os.rename`/`os.remove` return `-errno` rather than throwing. The preset
+  browser in `ui_overtake.js` depends on both; the harness asserts the naive
+  reading FAILS against its mock, so the mock cannot go soft.
 - **Realtime path never allocates.** Every buffer comes from `work_create()`.
 - **Never mock a host API from the code under test.** `test/ui_overtake.mjs`
   mocks `host_module_get_param` against `build/contract.json`, which
@@ -143,7 +145,7 @@ make bench       # per-machine cost ranking (host machine, not the Move)
 make arm         # Docker cross-compile + both tarballs (no hardware touched)
 ```
 
-`make test` runs two suites. The engine simulator covers bypass transparency,
+`make test` runs three suites. The engine simulator covers bypass transparency,
 every machine bounded at min/default/max parameters, the global mix law, state
 round-trip, short-buffer `get_param` canaries, compressor gain reduction,
 machine-change state reset, FX LFO modulation, two-slot series routing, MIDI
@@ -151,8 +153,18 @@ clock/note handling, and the whole sequencer — lock apply/revert, every trig
 condition, machine locks, micro-timing, a full 64-step round trip, and transport
 restart. The UI harness covers the parameter-lock gesture, lock nudging, trig
 toggling, the Shift escape, the machine palette, transport pads, jog behaviour,
-copy/paste/clear, resume repaints, and that the UI never reads or writes a key
-the engine does not handle.
+copy/paste/clear, resume repaints, presets end to end, and that the UI never
+reads or writes a key the engine does not handle. The third checks the manual
+site's copy of the machine table against the engine's — it exists because a
+careless edit silently swapped Warble's N.LEV and N.HPF, and the page would
+have shipped teaching the wrong knob.
+
+**Never mock `os.*` from the code under test.** `test/ui_overtake.mjs` carries
+a virtual filesystem written from QuickJS's real contracts — `os.readdir`
+returns a `[names, errno]` tuple including `.` and `..`, and `os.rename` /
+`os.remove` return `-errno` rather than throwing. One test deliberately runs
+the naive flat-array reading against that mock and asserts it FAILS, so the
+mock cannot quietly become too forgiving to catch the bug that broke Mono.
 
 **Nothing is hardware-verified.** `make bench` on a Mac puts the heaviest
 machine (Rumsklang Reverb) at ~164x realtime and two of them at ~93x. Belt
