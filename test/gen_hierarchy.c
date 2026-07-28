@@ -44,7 +44,9 @@ int main(void) {
     printf("        {\"level\": \"fx1sel\", \"label\": \"FX 1 Parameters\"},\n");
     printf("        {\"level\": \"fx2sel\", \"label\": \"FX 2 Parameters\"},\n");
     printf("        {\"level\": \"lfo1\", \"label\": \"FX LFO 1\"},\n");
-    printf("        {\"level\": \"lfo2\", \"label\": \"FX LFO 2\"}\n");
+    printf("        {\"level\": \"lfo2\", \"label\": \"FX LFO 2\"},\n");
+    printf("        {\"level\": \"lfo3\", \"label\": \"FX LFO 3\"},\n");
+    printf("        {\"level\": \"menv\", \"label\": \"Modulation Envelope\"}\n");
     printf("      ],\n      \"knobs\": [\"fx1\", \"fx2\", \"mix\"]\n    },\n");
 
     /* one selector level per slot, listing every machine */
@@ -89,7 +91,7 @@ int main(void) {
     }
 
     /* the two FX LFOs */
-    for (int l = 1; l <= 2; ++l) {
+    for (int l = 1; l <= WORK_LFOS; ++l) {
         printf("    \"lfo%d\": {\n      \"name\": \"FX LFO %d\",\n      \"params\": [\n", l, l);
         printf("        {\"key\": \"lfo%d_dest\", \"name\": \"Destination\", \"type\": \"int\", \"min\": -1, \"max\": 15, \"default\": -1},\n", l);
         printf("        {\"key\": \"lfo%d_spd\", \"name\": \"Speed\", \"type\": \"int\", \"min\": 0, \"max\": 127, \"default\": 32},\n", l);
@@ -99,8 +101,17 @@ int main(void) {
         printf("        {\"key\": \"lfo%d_phase\", \"name\": \"Start Phase\", \"type\": \"int\", \"min\": 0, \"max\": 127, \"default\": 0},\n", l);
         printf("        {\"key\": \"lfo%d_trig\", \"name\": \"Trig Mode\", \"type\": \"enum\", \"options\": [\"Free\", \"Retrig\"], \"default\": 0}\n", l);
         printf("      ],\n      \"knobs\": [\"lfo%d_dest\", \"lfo%d_spd\", \"lfo%d_mult\", \"lfo%d_wave\", \"lfo%d_depth\", \"lfo%d_phase\", \"lfo%d_trig\"]\n    }%s\n",
-               l, l, l, l, l, l, l, l == 2 ? "" : ",");
+               l, l, l, l, l, l, l, ",");
     }
+
+    /* modulation envelope */
+    printf("    \"menv\": {\n      \"name\": \"Modulation Envelope\",\n      \"params\": [\n");
+    printf("        {\"key\": \"menv_dest\", \"name\": \"Destination\", \"type\": \"int\", \"min\": -1, \"max\": 15, \"default\": -1},\n");
+    printf("        {\"key\": \"menv_atk\", \"name\": \"Attack\", \"type\": \"int\", \"min\": 0, \"max\": 127, \"default\": 0},\n");
+    printf("        {\"key\": \"menv_hold\", \"name\": \"Hold\", \"type\": \"int\", \"min\": 0, \"max\": 127, \"default\": 8},\n");
+    printf("        {\"key\": \"menv_dec\", \"name\": \"Decay\", \"type\": \"int\", \"min\": 0, \"max\": 127, \"default\": 48},\n");
+    printf("        {\"key\": \"menv_depth\", \"name\": \"Depth\", \"type\": \"int\", \"min\": 0, \"max\": 127, \"default\": 64}\n");
+    printf("      ],\n      \"knobs\": [\"menv_dest\", \"menv_atk\", \"menv_hold\", \"menv_dec\", \"menv_depth\"]\n    }\n");
 
     printf("  }\n}\n");
     return 0;

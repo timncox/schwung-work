@@ -76,7 +76,8 @@ int main(void) {
     const char *simple[] = {
         "machines", "conds", "fx1", "fx2", "labels1", "labels2",
         "eff1", "eff2", "effm", "mix", "seq_on", "seq_len", "fill",
-        "seq_pos", "meter", "state"
+        "seq_pos", "meter", "state", "live_rec",
+        "menv_dest", "menv_atk", "menv_hold", "menv_dec", "menv_depth"
     };
     for (size_t i = 0; i < sizeof(simple) / sizeof(simple[0]); ++i) emit(w, simple[i]);
 
@@ -93,7 +94,10 @@ int main(void) {
     for (int i = 0; i < WORK_LOCKABLE; ++i) {
         snprintf(key, sizeof(key), "locklabel%d", i); emit(w, key);
     }
-    for (int n = 1; n <= 2; ++n) {
+    for (int i = 0; i < WORK_STEPS; ++i) {
+        snprintf(key, sizeof(key), "prob%d", i); emit(w, key);
+    }
+    for (int n = 1; n <= WORK_LFOS; ++n) {
         const char *f[] = {"dest", "spd", "mult", "wave", "depth", "phase", "trig"};
         for (size_t i = 0; i < sizeof(f) / sizeof(f[0]); ++i) {
             snprintf(key, sizeof(key), "lfo%d_%s", n, f[i]);
@@ -115,7 +119,9 @@ int main(void) {
         {"seq_on", "0"}, {"seq_len", "9"}, {"fill", "1"}, {"seq_clear", "1"},
         {"fx1_p1", "42"}, {"fx2_p8", "13"},
         {"lfo1_dest", "4"}, {"lfo1_spd", "99"}, {"lfo1_wave", "3"},
-        {"lfo2_depth", "20"}, {"lfo1_trig", "1"},
+        {"lfo2_depth", "20"}, {"lfo1_trig", "1"}, {"lfo3_dest", "6"}, {"lfo3_spd", "70"},
+        {"live_rec", "1"}, {"menv_dest", "3"}, {"menv_atk", "20"}, {"menv_hold", "30"},
+        {"menv_dec", "40"}, {"menv_depth", "90"}, {"prob5", "37"},
         {"step5", "1:2:3:1"}, {"locks5", "1=64"}, {"lock5_2", "31"},
         {"state", "{\"v\":1,\"mix\":64}"}
     };

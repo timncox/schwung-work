@@ -279,6 +279,22 @@ struct work {
     uint8_t              eff_mix;
     float                lfo_ph[WORK_LFOS];
 
+    /* modulation envelope, and its per-trig runtime */
+    work_modenv_cfg_t    menv;
+    float                menv_val;
+    float                menv_stage;   /* 0 idle, 1 attack, 2 hold, 3 decay */
+    float                menv_t;
+
+    /* live recording: knob moves land on the playing step */
+    uint8_t              live_rec;
+
+    /* MIDI CC duplicate guard. A channel-matched chain slot can deliver one
+     * external CC twice (channel dispatch + FX broadcast), so identical
+     * messages inside ~2 blocks are dropped — the Mono convention. */
+    uint8_t              cc_last[3];
+    uint64_t             cc_last_frames;
+    uint64_t             cc_frames;
+
     /* sequencer */
     work_step_t          step[WORK_STEPS];
     uint8_t              seq_on;
@@ -1747,6 +1763,12 @@ static void seq_run(work_t *w, int frames) {
         w->pre_result = 0;
         return;
     }
+    /* PROB is a separate gate from the condition, as on Elektron: both must
+     * pass. 100 (the default) always passes. */
+    if (st->prob < 100 && rnd_01(&w->cond_rng) * 100.0f >= (float)st->prob) {
+        w->pre_result = 0;
+        return;
+    }
     w->pre_result = 1;
 
     /* The trig latches its locks. Parameters this trig does NOT lock revert to
@@ -1761,6 +1783,10 @@ static void seq_run(work_t *w, int frames) {
         for (int n = 0; n < WORK_LFOS; ++n) w->lfo_ph[n] = 0.0f;
         for (int s = 0; s < WORK_SLOTS; ++s) w->slot[s].env_stage = 1.0f;
     }
+
+    /* every firing trig restarts the modulation envelope */
+    w->menv_stage = 1.0f;
+    w->menv_t     = 0.0f;
 }
 
 /* Build the effective parameter set for this block: base, then the locks the
@@ -1781,6 +1807,37 @@ static void build_effective(work_t *w, int frames) {
             else if (i < 18)  w->eff_machine[i - 16] =
                                   (uint8_t)iclamp(v, 0, WORK_FX_COUNT - 1);
             else              w->eff_mix = v;
+        }
+    }
+
+    /* Modulation envelope: AHD, advanced once per block. Applied before the
+     * LFOs so an LFO on the same destination rides the envelope's output. */
+    {
+        float dt = (float)frames / (float)WORK_SR;
+        float atk = pexp(w->menv.attack, 0.001f, 4.0f);
+        float hld = pexp(w->menv.hold,   0.001f, 4.0f);
+        float dec = pexp(w->menv.decay,  0.005f, 8.0f);
+
+        if (w->menv_stage == 1.0f) {
+            w->menv_t += dt;
+            w->menv_val = w->menv_t / atk;
+            if (w->menv_val >= 1.0f) { w->menv_val = 1.0f; w->menv_stage = 2.0f; w->menv_t = 0.0f; }
+        } else if (w->menv_stage == 2.0f) {
+            w->menv_t += dt;
+            w->menv_val = 1.0f;
+            if (w->menv_t >= hld) { w->menv_stage = 3.0f; w->menv_t = 0.0f; }
+        } else if (w->menv_stage == 3.0f) {
+            w->menv_t += dt;
+            w->menv_val = 1.0f - w->menv_t / dec;
+            if (w->menv_val <= 0.0f) { w->menv_val = 0.0f; w->menv_stage = 0.0f; }
+        }
+
+        if (w->menv.dest >= 0 && w->menv.dest < WORK_SLOTS * WORK_PARAMS) {
+            int slot = w->menv.dest / WORK_PARAMS;
+            int idx  = w->menv.dest % WORK_PARAMS;
+            int out  = w->eff[slot][idx] +
+                       (int)(w->menv_val * pbi(w->menv.depth) * 127.0f);
+            w->eff[slot][idx] = (uint8_t)iclamp(out, 0, 127);
         }
     }
 
@@ -1835,6 +1892,16 @@ work_t *work_create(const host_api_v1_t *host) {
     w->seq_len   = WORK_PAGE_STEPS;
     w->last_step = -1;
     w->cond_rng  = 0x6C078965u;
+
+    /* PROB defaults to 100 (always) on every step, and an empty pattern must
+     * read back that way rather than as "never". */
+    for (int i = 0; i < WORK_STEPS; ++i) w->step[i].prob = 100;
+
+    w->menv.dest   = -1;
+    w->menv.attack = 0;
+    w->menv.hold   = 8;
+    w->menv.decay  = 48;
+    w->menv.depth  = 64;
 
     for (int i = 0; i < WORK_LFOS; ++i) {
         w->lfo[i].dest  = -1;
@@ -1892,6 +1959,8 @@ void work_process(work_t *w, const int16_t *in, int16_t *out, int frames) {
         if (b > 20.0f && b < 400.0f) w->bpm = b;
     }
 
+    w->cc_frames += (uint64_t)frames;   /* clock for the CC duplicate guard */
+
     seq_run(w, frames);
     build_effective(w, frames);
 
@@ -1940,8 +2009,64 @@ void work_process(work_t *w, const int16_t *in, int16_t *out, int frames) {
     }
 }
 
+/* --- MIDI CC control ------------------------------------------------------
+ * An external controller reaches every parameter the UI can touch. The map is
+ * documented in work_core.h; it follows the sibling modules' layout, which
+ * starts at CC 8 and leaves 0-7 and 120+ alone (mod wheel, bank select,
+ * channel mode).
+ *
+ * Values write through work_set_param, so a CC move records a parameter lock
+ * when live record is armed exactly like a knob move does.
+ */
+static void cc_apply(work_t *w, int cc, int v) {
+    char key[16], val[8];
+    snprintf(val, sizeof(val), "%d", v);
+
+    if (cc >= 8 && cc <= 23) {                    /* FX 1 A-H, then FX 2 A-H */
+        int slot = (cc - 8) / WORK_PARAMS;
+        int idx  = (cc - 8) % WORK_PARAMS;
+        snprintf(key, sizeof(key), "fx%d_p%d", slot + 1, idx + 1);
+        work_set_param(w, key, val);
+        return;
+    }
+    if (cc == 24 || cc == 25) {                   /* machine select, scaled */
+        snprintf(key, sizeof(key), "fx%d", cc - 23);
+        snprintf(val, sizeof(val), "%d", (v * (WORK_FX_COUNT - 1) + 63) / 127);
+        work_set_param(w, key, val);
+        return;
+    }
+    if (cc == 26) { work_set_param(w, "mix", val); return; }
+
+    /* CC 32/40/48 start LFO 1/2/3; the seven fields run in page order */
+    if ((cc >= 32 && cc <= 38) || (cc >= 40 && cc <= 46) || (cc >= 48 && cc <= 54)) {
+        static const char *F[7] = {"dest", "spd", "mult", "wave", "depth", "phase", "trig"};
+        int n   = (cc - 32) / 8;
+        int fld = (cc - 32) % 8;
+        if (fld > 6 || n >= WORK_LFOS) return;
+        snprintf(key, sizeof(key), "lfo%d_%s", n + 1, F[fld]);
+        if (fld == 0) snprintf(val, sizeof(val), "%d",
+                               (v * (WORK_SLOTS * WORK_PARAMS) + 63) / 127 - 1);
+        else if (fld == 3) snprintf(val, sizeof(val), "%d", (v * 6 + 63) / 127);
+        else if (fld == 6) snprintf(val, sizeof(val), "%d", v >= 64 ? 1 : 0);
+        work_set_param(w, key, val);
+        return;
+    }
+
+    if (cc >= 56 && cc <= 60) {                   /* modulation envelope */
+        static const char *F[5] = {"dest", "atk", "hold", "dec", "depth"};
+        snprintf(key, sizeof(key), "menv_%s", F[cc - 56]);
+        if (cc == 56) snprintf(val, sizeof(val), "%d",
+                               (v * (WORK_SLOTS * WORK_PARAMS) + 63) / 127 - 1);
+        work_set_param(w, key, val);
+        return;
+    }
+
+    if (cc == 64) { work_set_param(w, "seq_on",   v >= 64 ? "1" : "0"); return; }
+    if (cc == 65) { work_set_param(w, "fill",     v >= 64 ? "1" : "0"); return; }
+    if (cc == 66) { work_set_param(w, "live_rec", v >= 64 ? "1" : "0"); return; }
+}
+
 void work_on_midi(work_t *w, const uint8_t *msg, int len, int source) {
-    (void)source;
     if (!w || !msg || len < 1) return;
 
     switch (msg[0]) {
@@ -1966,6 +2091,25 @@ void work_on_midi(work_t *w, const uint8_t *msg, int len, int source) {
             w->clock_running = 0;
             break;
         default:
+            /* External CC only: Move's own encoders arrive as INTERNAL CCs and
+             * would fight the UI. A channel-matched chain slot can deliver one
+             * external CC twice (channel dispatch + FX broadcast), so identical
+             * messages inside ~2 blocks are dropped — the Mono convention. */
+            if (len >= 3 && (msg[0] & 0xF0) == 0xB0 &&
+                (source == MOVE_MIDI_SOURCE_EXTERNAL ||
+                 source == MOVE_MIDI_SOURCE_FX_BROADCAST)) {
+                int dup = (msg[0] == w->cc_last[0] && msg[1] == w->cc_last[1] &&
+                           msg[2] == w->cc_last[2] &&
+                           w->cc_frames - w->cc_last_frames <= 256);
+                if (!dup) {
+                    w->cc_last[0] = msg[0];
+                    w->cc_last[1] = msg[1];
+                    w->cc_last[2] = msg[2];
+                    w->cc_last_frames = w->cc_frames;
+                    cc_apply(w, msg[1], msg[2]);
+                }
+                break;
+            }
             if (len >= 3 && (msg[0] & 0xF0) == 0x90 && msg[2] > 0) {
                 w->note_pending = 1;
             } else if (len >= 3 && ((msg[0] & 0xF0) == 0x80 ||
@@ -2107,6 +2251,7 @@ static void apply_state(work_t *w, const char *json) {
      * survive underneath it. */
     if ((q = strstr(json, "\"stp\":\"")) != NULL) {
         memset(w->step, 0, sizeof(w->step));
+        for (int i = 0; i < WORK_STEPS; ++i) w->step[i].prob = 100;
         w->held_mask = 0;
         w->last_step = -1;
 
@@ -2125,6 +2270,7 @@ static void apply_state(work_t *w, const char *json) {
                         else if (field == 2) st->cond = (uint8_t)iclamp(v, 0, WORK_COND_COUNT - 1);
                         else if (field == 3) st->micro = (int8_t)iclamp(v, -23, 23);
                         else if (field == 4) st->retrig = (uint8_t)iclamp(v, 0, WORK_RETRIG_COUNT - 1);
+                        else if (field == 5) st->prob = (uint8_t)iclamp(v, 1, 100);
                     }
                 } else if (*c == '+' && st) {
                     int k = atoi(c + 1);
@@ -2144,7 +2290,16 @@ void work_set_param(work_t *w, const char *key, const char *val) {
 
     int slot, idx;
     if (parse_slot_param(key, &slot, &idx)) {
-        w->cfg[slot].p[idx] = (uint8_t)iclamp(atoi(val), 0, 127);
+        int v = iclamp(atoi(val), 0, 127);
+        w->cfg[slot].p[idx] = (uint8_t)v;
+        /* With live record armed and the sequencer running, a knob move also
+         * lays a lock on the step that is playing — the Elektron gesture,
+         * routed through the same path the UI and MIDI CC both use. */
+        if (w->live_rec && w->seq_on && w->seq_pos >= 0 && w->seq_pos < WORK_STEPS) {
+            work_step_t *st = &w->step[w->seq_pos];
+            st->active = 1;
+            step_set_lock(st, slot * WORK_PARAMS + idx, v);
+        }
         return;
     }
 
@@ -2178,9 +2333,27 @@ void work_set_param(work_t *w, const char *key, const char *val) {
         return;
     }
     if (strcmp(key, "fill") == 0) { w->fill = (uint8_t)(atoi(val) ? 1 : 0); return; }
+    if (strcmp(key, "live_rec") == 0) { w->live_rec = (uint8_t)(atoi(val) ? 1 : 0); return; }
+
+    if (strncmp(key, "menv_", 5) == 0) {
+        const char *f = key + 5;
+        int v = atoi(val);
+        if      (strcmp(f, "dest")  == 0) w->menv.dest   = (int8_t)iclamp(v, -1, WORK_SLOTS * WORK_PARAMS - 1);
+        else if (strcmp(f, "atk")   == 0) w->menv.attack = (uint8_t)iclamp(v, 0, 127);
+        else if (strcmp(f, "hold")  == 0) w->menv.hold   = (uint8_t)iclamp(v, 0, 127);
+        else if (strcmp(f, "dec")   == 0) w->menv.decay  = (uint8_t)iclamp(v, 0, 127);
+        else if (strcmp(f, "depth") == 0) w->menv.depth  = (uint8_t)iclamp(v, 0, 127);
+        return;
+    }
+
+    {
+        int n = key_index(key, "prob");
+        if (n >= 0) { w->step[n].prob = (uint8_t)iclamp(atoi(val), 1, 100); return; }
+    }
 
     if (strcmp(key, "seq_clear") == 0) {
         memset(w->step, 0, sizeof(w->step));
+        for (int i = 0; i < WORK_STEPS; ++i) w->step[i].prob = 100;
         w->held_mask = 0;
         w->last_step = -1;
         return;
@@ -2210,8 +2383,11 @@ void work_set_param(work_t *w, const char *key, const char *val) {
                 st->cond = (uint8_t)iclamp(atoi(++c), 0, WORK_COND_COUNT - 1);
                 if ((c = strchr(c, ':')) != NULL) {
                     st->micro = (int8_t)iclamp(atoi(++c), -23, 23);
-                    if ((c = strchr(c, ':')) != NULL)
+                    if ((c = strchr(c, ':')) != NULL) {
                         st->retrig = (uint8_t)iclamp(atoi(++c), 0, WORK_RETRIG_COUNT - 1);
+                        if ((c = strchr(c, ':')) != NULL)
+                            st->prob = (uint8_t)iclamp(atoi(++c), 1, 100);
+                    }
                 }
             }
             w->last_step = -1;   /* re-evaluate: the edited step may be current */
@@ -2224,7 +2400,8 @@ void work_set_param(work_t *w, const char *key, const char *val) {
         return;
     }
 
-    if (strncmp(key, "lfo", 3) == 0 && (key[3] == '1' || key[3] == '2') && key[4] == '_') {
+    if (strncmp(key, "lfo", 3) == 0 && key[3] >= '1' &&
+        key[3] < '1' + WORK_LFOS && key[4] == '_') {
         work_lfo_cfg_t *L = &w->lfo[key[3] - '1'];
         const char *f = key + 5;
         int v = atoi(val);
@@ -2270,7 +2447,25 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
     if (strcmp(key, "seq_on") == 0)  return nclamp(snprintf(buf, buf_len, "%d", w->seq_on), cap);
     if (strcmp(key, "seq_len") == 0) return nclamp(snprintf(buf, buf_len, "%d", w->seq_len), cap);
     if (strcmp(key, "fill") == 0)    return nclamp(snprintf(buf, buf_len, "%d", w->fill), cap);
-    if (strcmp(key, "seq_pos") == 0) return nclamp(snprintf(buf, buf_len, "%d", w->seq_pos), cap);
+    if (strcmp(key, "seq_pos") == 0)  return nclamp(snprintf(buf, buf_len, "%d", w->seq_pos), cap);
+    if (strcmp(key, "live_rec") == 0) return nclamp(snprintf(buf, buf_len, "%d", w->live_rec), cap);
+
+    if (strncmp(key, "menv_", 5) == 0) {
+        const char *f = key + 5;
+        int v;
+        if      (strcmp(f, "dest")  == 0) v = w->menv.dest;
+        else if (strcmp(f, "atk")   == 0) v = w->menv.attack;
+        else if (strcmp(f, "hold")  == 0) v = w->menv.hold;
+        else if (strcmp(f, "dec")   == 0) v = w->menv.decay;
+        else if (strcmp(f, "depth") == 0) v = w->menv.depth;
+        else return -1;
+        return nclamp(snprintf(buf, buf_len, "%d", v), cap);
+    }
+
+    {
+        int n = key_index(key, "prob");
+        if (n >= 0) return nclamp(snprintf(buf, buf_len, "%d", w->step[n].prob), cap);
+    }
 
     /* "a:c:m:r:nlocks" — one poll per step for the UI's grid */
     {
@@ -2280,8 +2475,9 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
             int nl = 0;
             for (int i = 0; i < WORK_LOCKABLE; ++i)
                 if (st->lock_mask & (1u << i)) nl++;
-            return nclamp(snprintf(buf, buf_len, "%d:%d:%d:%d:%d",
-                                   st->active, st->cond, st->micro, st->retrig, nl), cap);
+            return nclamp(snprintf(buf, buf_len, "%d:%d:%d:%d:%d:%d",
+                                   st->active, st->cond, st->micro, st->retrig, nl,
+                                   st->prob), cap);
         }
     }
 
@@ -2353,7 +2549,8 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
         return n;
     }
 
-    if (strncmp(key, "lfo", 3) == 0 && (key[3] == '1' || key[3] == '2') && key[4] == '_') {
+    if (strncmp(key, "lfo", 3) == 0 && key[3] >= '1' &&
+        key[3] < '1' + WORK_LFOS && key[4] == '_') {
         work_lfo_cfg_t *L = &w->lfo[key[3] - '1'];
         const char *f = key + 5;
         int v = 0;
@@ -2397,7 +2594,8 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
             "{\"level\":\"fx1p\",\"label\":\"FX 1: %s\"},"
             "{\"level\":\"fx2p\",\"label\":\"FX 2: %s\"},"
             "{\"level\":\"lfo1\",\"label\":\"FX LFO 1\"},"
-            "{\"level\":\"lfo2\",\"label\":\"FX LFO 2\"}],"
+            "{\"level\":\"lfo2\",\"label\":\"FX LFO 2\"},"
+            "{\"level\":\"lfo3\",\"label\":\"FX LFO 3\"}],"
             "\"knobs\":[\"fx1\",\"fx2\",\"mix\"]}", MACHINE_NAME[m1], MACHINE_NAME[m2]), cap);
 
         /* One level per slot, named after the machine, carrying its real
@@ -2480,11 +2678,13 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
         int emitted = 0;
         for (int i = 0; i < WORK_STEPS; ++i) {
             const work_step_t *st = &w->step[i];
-            if (!st->active && !st->lock_mask && !st->cond && !st->micro && !st->retrig)
+            if (!st->active && !st->lock_mask && !st->cond && !st->micro &&
+                !st->retrig && st->prob == 100)
                 continue;
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                    "%s%d,%d,%d,%d,%d", emitted ? "|" : "",
-                                    i, st->active, st->cond, st->micro, st->retrig), cap);
+                                    "%s%d,%d,%d,%d,%d,%d", emitted ? "|" : "",
+                                    i, st->active, st->cond, st->micro, st->retrig,
+                                    st->prob), cap);
             emitted = 1;
             for (int k = 0; k < WORK_LOCKABLE; ++k) {
                 if (!(st->lock_mask & (1u << k))) continue;

@@ -739,7 +739,7 @@ static void test_seq_clear(void) {
 
     char s[64];
     work_get_param(w, "step3", s, sizeof(s));
-    CHECK(strcmp(s, "0:0:0:0:0") == 0, "step 3 after clear reads %s", s);
+    CHECK(strcmp(s, "0:0:0:0:0:100") == 0, "step 3 after clear reads %s", s);
     work_get_param(w, "locks3", s, sizeof(s));
     CHECK(s[0] == '\0', "locks remained after clear: %s", s);
     work_destroy(w);
@@ -1018,6 +1018,217 @@ static void test_grainer(void) {
     work_destroy(q);
 }
 
+/* ------------------------------------------------------------ v0.3.0 pack */
+
+static void test_live_record(void) {
+    printf("live record lays knob moves onto the playing step\n");
+    work_t *w = work_create(&host);
+    assert(w);
+    set_slot(w, 0, WORK_FX_LPF);
+    work_set_param(w, "seq_len", "4");
+    work_set_param(w, "seq_on", "1");
+    for (int i = 0; i < 4; ++i) {
+        char k[16]; snprintf(k, sizeof(k), "step%d", i);
+        work_set_param(w, k, "1:0:0:0");
+    }
+
+    /* not armed: a knob move must NOT write a lock */
+    idle(w, 2);
+    work_set_param(w, "fx1_p5", "20");
+    char s[128];
+    work_get_param(w, "locks0", s, sizeof(s));
+    CHECK(s[0] == '\0', "unarmed knob move recorded a lock: %s", s);
+
+    /* armed: the same move lands on whichever step is playing */
+    work_set_param(w, "live_rec", "1");
+    char pos[16];
+    work_get_param(w, "seq_pos", pos, sizeof(pos));
+    int at = atoi(pos);
+    work_set_param(w, "fx1_p5", "33");
+
+    char key[16];
+    snprintf(key, sizeof(key), "locks%d", at);
+    work_get_param(w, key, s, sizeof(s));
+    CHECK(strstr(s, "4=33") != NULL,
+          "armed knob move did not lock param 4 on step %d (locks read \"%s\")", at, s);
+
+    /* and it arms a trig on that step if there was not one */
+    snprintf(key, sizeof(key), "step%d", at);
+    work_get_param(w, key, s, sizeof(s));
+    CHECK(s[0] == '1', "live record left step %d without a trig (%s)", at, s);
+
+    /* disarming stops it again */
+    work_set_param(w, "live_rec", "0");
+    idle(w, blocks_per_step());
+    work_get_param(w, "seq_pos", pos, sizeof(pos));
+    int at2 = atoi(pos);
+    if (at2 != at) {
+        work_set_param(w, "fx1_p5", "77");
+        snprintf(key, sizeof(key), "locks%d", at2);
+        work_get_param(w, key, s, sizeof(s));
+        CHECK(strstr(s, "4=77") == NULL, "disarmed live record still wrote a lock");
+    }
+    work_destroy(w);
+}
+
+static void test_step_probability(void) {
+    printf("per-step probability gates trigs independently of the condition\n");
+    work_t *w = work_create(&host);
+    assert(w);
+
+    /* defaults to 100 = always */
+    char s[32];
+    work_get_param(w, "prob7", s, sizeof(s));
+    CHECK(atoi(s) == 100, "default probability is %s, expected 100", s);
+
+    /* prob 1 should almost never fire; prob 100 always */
+    for (int variant = 0; variant < 2; ++variant) {
+        work_t *g = work_create(&host);
+        set_slot(g, 0, WORK_FX_LPF);
+        work_set_param(g, "fx1_p5", "100");
+        work_set_param(g, "seq_len", "1");
+        work_set_param(g, "step0", "1:0:0:0");
+        work_set_param(g, "lock0_4", "5");
+        work_set_param(g, "prob0", variant ? "100" : "1");
+        work_set_param(g, "seq_on", "1");
+
+        int fired = 0;
+        for (int pass = 0; pass < 30; ++pass) {
+            work_set_param(g, "fx1_p5", "100");   /* reset the observable */
+            idle(g, 2);
+            if (eff_param(g, 0, 4) == 5) fired++;
+            idle(g, blocks_per_step());
+        }
+        if (variant) CHECK(fired > 20, "prob 100 fired only %d/30 times", fired);
+        else         CHECK(fired < 10, "prob 1 fired %d/30 times", fired);
+        work_destroy(g);
+    }
+
+    /* it round-trips through the step string and the state blob */
+    work_set_param(w, "step5", "1:0:0:0:42");
+    work_get_param(w, "prob5", s, sizeof(s));
+    CHECK(atoi(s) == 42, "prob via the step string reads %s", s);
+
+    work_t *b = work_create(&host);
+    char blob[8192];
+    work_get_param(w, "state", blob, sizeof(blob));
+    work_set_param(b, "state", blob);
+    work_get_param(b, "prob5", s, sizeof(s));
+    CHECK(atoi(s) == 42, "prob did not survive the state blob (%s)", s);
+    work_destroy(b);
+    work_destroy(w);
+}
+
+static void test_mod_envelope(void) {
+    printf("the modulation envelope fires on trigs and reaches its destination\n");
+    work_t *w = work_create(&host);
+    assert(w);
+    set_slot(w, 0, WORK_FX_LPF);
+    work_set_param(w, "fx1_p5", "20");         /* low base cutoff */
+    work_set_param(w, "seq_len", "2");
+    work_set_param(w, "step0", "1:0:0:0");
+    work_set_param(w, "menv_dest", "4");       /* slot 1 knob E = FREQ */
+    work_set_param(w, "menv_depth", "127");    /* full positive */
+    work_set_param(w, "menv_atk", "0");
+    work_set_param(w, "menv_hold", "60");
+    work_set_param(w, "seq_on", "1");
+
+    idle(w, 3);
+    int lifted = eff_param(w, 0, 4);
+    CHECK(lifted > 20, "envelope did not lift the cutoff (%d, base 20)", lifted);
+
+    /* with no destination it must do nothing */
+    work_t *n = work_create(&host);
+    set_slot(n, 0, WORK_FX_LPF);
+    work_set_param(n, "fx1_p5", "20");
+    work_set_param(n, "seq_len", "2");
+    work_set_param(n, "step0", "1:0:0:0");
+    work_set_param(n, "menv_depth", "127");    /* depth but dest still -1 */
+    work_set_param(n, "seq_on", "1");
+    idle(n, 3);
+    CHECK(eff_param(n, 0, 4) == 20,
+          "envelope moved a parameter with no destination set (%d)", eff_param(n, 0, 4));
+    work_destroy(n);
+    work_destroy(w);
+}
+
+static void test_third_lfo(void) {
+    printf("LFO 3 exists and modulates\n");
+    work_t *a = work_create(&host);
+    set_slot(a, 0, WORK_FX_LPF);
+    work_set_param(a, "fx1_p5", "40");
+    int dummy;
+    int64_t stat = run_blocks(a, 120, &dummy);
+    work_destroy(a);
+
+    work_t *b = work_create(&host);
+    set_slot(b, 0, WORK_FX_LPF);
+    work_set_param(b, "fx1_p5", "40");
+    work_set_param(b, "lfo3_dest", "4");
+    work_set_param(b, "lfo3_depth", "127");
+    work_set_param(b, "lfo3_spd", "100");
+    int64_t mod = run_blocks(b, 120, &dummy);
+
+    char s[16];
+    work_get_param(b, "lfo3_dest", s, sizeof(s));
+    CHECK(atoi(s) == 4, "lfo3_dest reads %s", s);
+    CHECK(llabs(mod - stat) > stat / 20,
+          "LFO 3 changed output by under 5%% (%lld vs %lld)",
+          (long long)mod, (long long)stat);
+    work_destroy(b);
+}
+
+static void test_midi_cc(void) {
+    printf("external MIDI CC reaches parameters, internal CC does not\n");
+    work_t *w = work_create(&host);
+    assert(w);
+    set_slot(w, 0, WORK_FX_LPF);
+
+    /* an INTERNAL CC is Move's own encoder and must be ignored */
+    uint8_t cc[3] = {0xB0, 10, 99};              /* CC 10 -> fx1_p3 */
+    work_on_midi(w, cc, 3, MOVE_MIDI_SOURCE_INTERNAL);
+    char s[16];
+    work_get_param(w, "fx1_p3", s, sizeof(s));
+    CHECK(atoi(s) != 99, "an internal CC reached a parameter (%s)", s);
+
+    /* external does reach it */
+    work_on_midi(w, cc, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+    work_get_param(w, "fx1_p3", s, sizeof(s));
+    CHECK(atoi(s) == 99, "external CC 10 did not set fx1_p3 (%s)", s);
+
+    /* the duplicate guard drops an immediate repeat of the same message */
+    work_set_param(w, "fx1_p3", "0");
+    work_on_midi(w, cc, 3, MOVE_MIDI_SOURCE_FX_BROADCAST);
+    work_get_param(w, "fx1_p3", s, sizeof(s));
+    CHECK(atoi(s) == 0, "the CC duplicate guard let a repeat through (%s)", s);
+
+    /* slot 2, machine select, mix and transport all land */
+    uint8_t cc2[3] = {0xB0, 23, 64};             /* CC 23 -> fx2_p8 */
+    work_on_midi(w, cc2, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+    work_get_param(w, "fx2_p8", s, sizeof(s));
+    CHECK(atoi(s) == 64, "CC 23 did not set fx2_p8 (%s)", s);
+
+    uint8_t ccm[3] = {0xB0, 24, 127};            /* machine select, scaled */
+    work_on_midi(w, ccm, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+    work_get_param(w, "fx1", s, sizeof(s));
+    CHECK(atoi(s) == WORK_FX_COUNT - 1,
+          "CC 24 at 127 should select the last machine, got %s", s);
+
+    uint8_t ccr[3] = {0xB0, 66, 127};            /* live record on */
+    work_on_midi(w, ccr, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+    work_get_param(w, "live_rec", s, sizeof(s));
+    CHECK(atoi(s) == 1, "CC 66 did not arm live record (%s)", s);
+
+    /* CCs outside the map must be ignored rather than land somewhere */
+    uint8_t cclow[3] = {0xB0, 1, 127};           /* mod wheel */
+    work_on_midi(w, cclow, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+    uint8_t cchigh[3] = {0xB0, 123, 127};        /* all notes off */
+    work_on_midi(w, cchigh, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+    CHECK(1, "unmapped CCs handled");            /* no crash is the assertion */
+
+    work_destroy(w);
+}
+
 int main(void) {
     printf("Work engine — host simulator\n\n");
 
@@ -1050,6 +1261,13 @@ int main(void) {
     test_locks_string_api();
     test_lock_labels();
     test_transport_restarts_pattern();
+
+    printf("\n-- v0.3.0 performance pack --\n");
+    test_live_record();
+    test_step_probability();
+    test_mod_envelope();
+    test_third_lfo();
+    test_midi_cc();
 
     printf("\n%d checks, %d failed\n", tests_run, tests_failed);
     return tests_failed ? 1 : 0;

@@ -37,7 +37,7 @@ function check(cond, msg) {
 /* Keys the engine serves as families — the fixture holds concrete instances,
  * so a request for lock12_3 is legal if lock<N>_<P> is a served family. */
 const FAMILIES = [
-    /^step\d+$/, /^locks\d+$/, /^lock\d+_\d+$/, /^locklabel\d+$/
+    /^step\d+$/, /^locks\d+$/, /^lock\d+_\d+$/, /^locklabel\d+$/, /^prob\d+$/
 ];
 
 function familyServed(key) {
@@ -438,6 +438,62 @@ async function testResumeForcesRepaints() {
     check(repaints >= 3, `expected at least 3 forced repaints after resume, saw ${repaints}`);
 }
 
+/* --------------------------------------------------------- v0.3.0 gestures */
+
+async function testLiveRecordToggle() {
+    console.log('shift + play arms live record');
+    const ctx = await loadUI();
+    ctx.host.init();
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    ctx.host.onMidiMessageInternal(noteOn(68));
+    ctx.host.onMidiMessageInternal(noteOff(68));
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    const w = ctx.writes.find((x) => x.key === 'live_rec');
+    check(!!w && `${w.val}` === '1', `shift+play did not arm live_rec (${w && w.val})`);
+    /* unshifted play must still be play, not record */
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(noteOn(68));
+    ctx.host.onMidiMessageInternal(noteOff(68));
+    check(ctx.writes.some((x) => x.key === 'seq_on'), 'plain play stopped writing seq_on');
+}
+
+async function testProbabilityMode() {
+    console.log('shift + pattern-page selects probability mode, jog sets it');
+    const ctx = await loadUI();
+    ctx.host.init();
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    ctx.host.onMidiMessageInternal(noteOn(71));
+    ctx.host.onMidiMessageInternal(noteOff(71));
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(STEP1 + 4, 127));   /* hold step 5 */
+    ctx.host.onMidiMessageInternal(cc(JOG, 127));          /* jog down    */
+    const w = ctx.writes.find((x) => x.key === 'prob4');
+    check(!!w, `jog in probability mode did not write prob4; got ${JSON.stringify(ctx.writes)}`);
+    if (w) check(parseInt(`${w.val}`, 10) < 100,
+                 `probability should have come down from 100, got ${w.val}`);
+}
+
+async function testLfo3AndEnvelopePages() {
+    console.log('the edit pages reach LFO 3 and the modulation envelope');
+    const ctx = await loadUI();
+    ctx.host.init();
+    const seen = new Set();
+    for (let i = 0; i < 8; i++) {                 /* cycle every edit page */
+        ctx.writes.length = 0;
+        for (let k = 0; k < 8; k++) ctx.host.onMidiMessageInternal(cc(KNOB1 + k, 1));
+        ctx.writes.forEach((x) => seen.add(x.key.replace(/\d+$/, '')));
+        ctx.host.onMidiMessageInternal(noteOn(72));
+        ctx.host.onMidiMessageInternal(noteOff(72));
+    }
+    check([...seen].some((k) => k.startsWith('lfo3_')),
+          `no LFO 3 parameter was reachable; saw ${[...seen].join(', ')}`);
+    check([...seen].some((k) => k.startsWith('menv_')),
+          `no envelope parameter was reachable; saw ${[...seen].join(', ')}`);
+}
+
 /* ---------------------------------------------------------------- presets */
 
 const PDIR = '/data/UserData/schwung/presets/overwork';
@@ -599,6 +655,9 @@ const tests = [
     testCopyPasteClear,
     testNoUnknownWritesAnywhere,
     testResumeForcesRepaints,
+    testLiveRecordToggle,
+    testProbabilityMode,
+    testLfo3AndEnvelopePages,
     testReaddirContractIsFaithful,
     testPresetSaveThenList,
     testPresetLoadRestoresState,

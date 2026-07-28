@@ -21,8 +21,10 @@
  *
  *   Pad row 4       68 play/stop   69 fill     70 slot focus  71 pattern page
  *   (68-75)         72 edit page   73 copy     74 paste       75 clear
- *                   SHIFT + 72/73/74/75 = condition / micro / retrig mode,
- *                   and clear-locks-on-the-held-step
+ *                   SHIFT + 71/72/73/74/75 = probability / condition / micro /
+ *                   retrig mode, and clear-locks-on-the-held-step.
+ *                   SHIFT + 68 arms LIVE RECORD: knob moves then write locks
+ *                   onto whichever step is playing.
  *
  *   Shift+jog click open and close the preset browser
  *   Knobs 1-8       the current edit page's eight parameters
@@ -74,6 +76,8 @@ const PAD_MODE_COND   = 72;   /* shift + edit-page  */
 const PAD_MODE_MICRO  = 73;   /* shift + copy       */
 const PAD_MODE_RETRIG = 74;   /* shift + paste      */
 const PAD_LOCK_CLEAR  = 75;   /* shift + clear      */
+const PAD_MODE_PROB   = 71;   /* shift + pattern page */
+const PAD_LIVE_REC    = 68;   /* shift + play         */
 
 /* Row 4: transport and navigation */
 const PAD_PLAY  = 68;
@@ -89,16 +93,19 @@ const PAD_CLEAR = 75;
 const EDIT_FX     = 0;
 const EDIT_LFO1   = 1;
 const EDIT_LFO2   = 2;
-const EDIT_GLOBAL = 3;
-const EDIT_COUNT  = 4;
-const EDIT_NAME   = ['FX', 'LFO 1', 'LFO 2', 'GLOBAL'];
+const EDIT_LFO3   = 3;
+const EDIT_MENV   = 4;
+const EDIT_GLOBAL = 5;
+const EDIT_COUNT  = 6;
+const EDIT_NAME   = ['FX', 'LFO 1', 'LFO 2', 'LFO 3', 'MOD ENV', 'GLOBAL'];
 
 /* Step-attribute modes the jog edits while a step is held */
 const MODE_NONE   = 0;
 const MODE_COND   = 1;
 const MODE_MICRO  = 2;
 const MODE_RETRIG = 3;
-const MODE_NAME   = ['-', 'COND', 'MICRO', 'RTRG'];
+const MODE_PROB   = 4;
+const MODE_NAME   = ['-', 'COND', 'MICRO', 'RTRG', 'PROB'];
 
 const HOLD_MS = 600;
 
@@ -148,6 +155,7 @@ let heldUsed   = false;      /* a lock or attribute edit happened this hold */
 let clearAt    = 0;          /* PAD_CLEAR press time, for the hold gesture  */
 let fillAt     = 0;
 let fillLatched = false;
+let liveRec     = 0;
 let copyBuf    = null;
 
 /* mirrored DSP state */
@@ -163,7 +171,7 @@ let seqLen      = 16;
 let seqOn       = 1;
 
 for (let i = 0; i < MAX_STEPS; i++) {
-    steps.push({ active: 0, cond: 0, micro: 0, retrig: 0, nlocks: 0 });
+    steps.push({ active: 0, cond: 0, micro: 0, retrig: 0, nlocks: 0, prob: 100 });
 }
 
 /* ------------------------------------------------------------ DSP access */
@@ -199,8 +207,20 @@ function pageKnobs() {
         }
         return out;
     }
-    if (editPage === EDIT_LFO1 || editPage === EDIT_LFO2) {
-        const n = editPage === EDIT_LFO1 ? 1 : 2;
+    if (editPage === EDIT_MENV) {
+        return [
+            { key: 'menv_dest',  label: 'DEST',  lock: -1, min: -1, max: 15 },
+            { key: 'menv_atk',   label: 'ATK',   lock: -1, min: 0, max: 127 },
+            { key: 'menv_hold',  label: 'HOLD',  lock: -1, min: 0, max: 127 },
+            { key: 'menv_dec',   label: 'DEC',   lock: -1, min: 0, max: 127 },
+            { key: 'menv_depth', label: 'DEP',   lock: -1, min: 0, max: 127 },
+            { key: '', label: '', lock: -1, min: 0, max: 0 },
+            { key: '', label: '', lock: -1, min: 0, max: 0 },
+            { key: '', label: '', lock: -1, min: 0, max: 0 }
+        ];
+    }
+    if (editPage === EDIT_LFO1 || editPage === EDIT_LFO2 || editPage === EDIT_LFO3) {
+        const n = editPage - EDIT_LFO1 + 1;
         return [
             { key: `lfo${n}_dest`,  label: 'DEST',  lock: -1, min: -1, max: 15 },
             { key: `lfo${n}_spd`,   label: 'SPD',   lock: -1, min: 0, max: 127 },
@@ -249,6 +269,7 @@ function fetchAll() {
     seqLen = getNum('seq_len') || 16;
     seqOn  = getNum('seq_on');
     fillLatched = getNum('fill') !== 0;
+    liveRec = getNum('live_rec');
 
     fetchSteps();
     needsRedraw = true;
@@ -267,7 +288,8 @@ function fetchSteps() {
             cond:   parseInt(f[1], 10) || 0,
             micro:  parseInt(f[2], 10) || 0,
             retrig: parseInt(f[3], 10) || 0,
-            nlocks: parseInt(f[4], 10) || 0
+            nlocks: parseInt(f[4], 10) || 0,
+            prob:   parseInt(f[5], 10) || 100
         };
     }
 }
@@ -346,8 +368,12 @@ function adjustHeldAttr(delta) {
         st.retrig = Math.max(0, Math.min(4, st.retrig + delta));
         writeStepAttrs(heldStep);
         announceParameter(`Step ${heldStep + 1} retrig`, `${st.retrig}`);
+    } else if (attrMode === MODE_PROB) {
+        st.prob = Math.max(1, Math.min(100, (st.prob || 100) + delta));
+        host_module_set_param(`prob${heldStep}`, `${st.prob}`);
+        announceParameter(`Step ${heldStep + 1} probability`, `${st.prob}%`);
     } else {
-        announce('Pick a mode: cond, micro or retrig');
+        announce('Pick a mode: cond, micro, retrig or prob');
         return;
     }
     heldUsed = true;
@@ -615,9 +641,9 @@ function drawUI() {
     let foot;
     if (heldStep >= 0) {
         const st = steps[heldStep];
-        foot = `S${heldStep + 1} ${condList[st.cond] || ''} u${st.micro} L${st.nlocks}`;
+        foot = `S${heldStep + 1} ${condList[st.cond] || ''} u${st.micro} L${st.nlocks} ${st.prob}%`;
     } else {
-        foot = `Pg${patPage + 1} ${MODE_NAME[attrMode]}${fillLatched ? ' FILL' : ''}`;
+        foot = `Pg${patPage + 1} ${MODE_NAME[attrMode]}${fillLatched ? ' FILL' : ''}${liveRec ? ' REC' : ''}`;
     }
     print(0, 57, foot.length > 24 ? foot.slice(0, 24) : foot, 1);
 }
@@ -659,7 +685,7 @@ function paintPalette(force) {
 }
 
 function paintTransport(force) {
-    setLED(PAD_PLAY,  seqOn ? BrightGreen : DarkGrey, force);
+    setLED(PAD_PLAY,  liveRec ? Red : (seqOn ? BrightGreen : DarkGrey), force);
     setLED(PAD_FILL,  fillLatched ? BrightRed : 0x0C, force);
     setLED(PAD_SLOT,  focusSlot === 0 ? SkyBlue : YellowGreen, force);
     setLED(PAD_PPAGE, [Blue, Cyan, Purple, OrangeRed][patPage % 4], force);
@@ -669,8 +695,10 @@ function paintTransport(force) {
         setLED(PAD_MODE_MICRO,  attrMode === MODE_MICRO  ? Purple : 0x0A, force);
         setLED(PAD_MODE_RETRIG, attrMode === MODE_RETRIG ? Blue   : 0x0A, force);
         setLED(PAD_LOCK_CLEAR,  heldStep >= 0 ? OrangeRed : 0x08, force);
+        setLED(PAD_MODE_PROB,   attrMode === MODE_PROB ? YellowGreen : 0x0A, force);
+        setLED(PAD_LIVE_REC,    liveRec ? Red : 0x0A, force);
     } else {
-        setLED(PAD_EPAGE, [White, Cyan, Cyan, LightGrey][editPage], force);
+        setLED(PAD_EPAGE, [White, Cyan, Cyan, Cyan, Purple, LightGrey][editPage], force);
         setLED(PAD_COPY,  copyBuf ? TealGreen : 0x0A, force);
         setLED(PAD_PASTE, copyBuf ? Lime : 0x06, force);
         setLED(PAD_CLEAR, Red, force);
@@ -721,6 +749,17 @@ function handlePadPress(note) {
             case PAD_LOCK_CLEAR:
                 if (heldStep >= 0) clearStepLocks(heldStep);
                 else announce('Hold a step first');
+                return;
+            case PAD_MODE_PROB:
+                attrMode = attrMode === MODE_PROB ? MODE_NONE : MODE_PROB;
+                announce(attrMode === MODE_PROB ? 'Probability mode' : 'Mode off');
+                needsRedraw = true;
+                return;
+            case PAD_LIVE_REC:
+                liveRec = liveRec ? 0 : 1;
+                host_module_set_param('live_rec', `${liveRec}`);
+                announce(liveRec ? 'Live record armed' : 'Live record off');
+                needsRedraw = true;
                 return;
             default:
                 break;

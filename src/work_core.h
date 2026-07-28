@@ -28,7 +28,7 @@
 #define WORK_SR          44100
 #define WORK_SLOTS       2      /* insert FX 1 and 2, in series */
 #define WORK_PARAMS      8      /* Tonverk encoders A-H */
-#define WORK_LFOS        2      /* FX LFO 1 and 2 */
+#define WORK_LFOS        3      /* FX LFO 1, 2 and 3 (3 added in v0.3.0) */
 
 /* Longest delay line any machine can ask for: 2 s covers a 1/2 note at 60 BPM
  * and a whole note at 120 BPM. Saturator Delay clamps its division to this. */
@@ -154,9 +154,22 @@ typedef struct {
     uint8_t  cond;                    /* work_cond_t                        */
     int8_t   micro;                   /* -23..+23, in 1/24ths of a step     */
     uint8_t  retrig;                  /* work_retrig_t                      */
+    /* Elektron's PROB is a per-step parameter separate from the trig
+     * condition, so it is one here too: 1..100, and 100 means always. Both
+     * gates must pass for the trig to fire. */
+    uint8_t  prob;
     uint32_t lock_mask;               /* bit i set = parameter i is locked  */
     uint8_t  lock[WORK_LOCKABLE];
 } work_step_t;
+
+/* Modulation envelope. Tonverk gives a track two voice LFOs, a mod envelope
+ * and two FX LFOs; Work had only the FX LFOs until v0.3.0. AHD rather than
+ * ADSR because there is no note to sustain against — it fires on each trig. */
+typedef struct {
+    int8_t  dest;                     /* -1 = off, else a slot parameter    */
+    uint8_t attack, hold, decay;
+    uint8_t depth;                    /* bipolar around 64                  */
+} work_modenv_cfg_t;
 
 /* One insert slot: machine code + 8 parameters, each 0..127 like Elektron. */
 typedef struct {
@@ -205,6 +218,17 @@ void    work_process(work_t *w, const int16_t *in, int16_t *out, int frames);
  *   lock<N>_<P>               parameter P locked on step N, or -1 to clear
  *   locks<N>                  "p=v,p=v,..." every lock on step N, read/write
  *   seq_pos                   current step, read-only
+ *   prob<N>                   step N's probability, 1..100
+ *   live_rec                  1 = knob moves record locks onto the playing step
+ *   menv_dest/atk/hold/dec/depth   the modulation envelope
+ *
+ * MIDI CC, external only (Move's own encoders arrive as internal CCs):
+ *   CC 8..15   FX 1 parameters A..H     CC 16..23  FX 2 parameters A..H
+ *   CC 24/25   FX 1 / FX 2 machine      CC 26      global dry/wet
+ *   CC 32..38  FX LFO 1                 CC 40..46  FX LFO 2
+ *   CC 48..54  FX LFO 3                 CC 56..60  modulation envelope
+ *   CC 64      sequencer on/off         CC 65      fill
+ *   CC 66      live record
  */
 void    work_set_param(work_t *w, const char *key, const char *val);
 int     work_get_param(work_t *w, const char *key, char *buf, int buf_len);

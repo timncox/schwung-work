@@ -247,7 +247,7 @@ footer a{color:var(--rust)}
     <div class="tb-side">
       <div class="tb-cell">Module<b>Schwung / Move</b></div>
       <div class="tb-cell">Builds<b>audio_fx · overtake</b></div>
-      <div class="tb-cell">Revision<b>v0.2.0</b></div>
+      <div class="tb-cell">Revision<b>v0.3.0</b></div>
       <div class="tb-cell">Source<b><a href="https://github.com/timncox/schwung-work">timncox/schwung-work</a></b></div>
     </div>
   </div>
@@ -480,6 +480,29 @@ footer a{color:var(--rust)}
       </div>
     </div>
   </div>
+  <h3>Live recording</h3>
+  <p><strong>Shift + Play</strong> arms it. With the sequencer running, turning a knob writes a parameter lock onto whichever step is playing and arms a trig there — the same path a MIDI CC takes, so an external controller records locks too. The play pad turns red while armed.</p>
+
+  <h3>Probability</h3>
+  <p>Every step carries its own probability, 1&ndash;100, <em>separate</em> from its trig condition &mdash; both gates must pass. Shift + the pattern-page pad selects probability mode, then hold a step and turn the jog.</p>
+
+  <h3>Modulation</h3>
+  <p>Three FX LFOs and an AHD modulation envelope that restarts on every firing trig. Resolution order is base &rarr; parameter lock &rarr; envelope &rarr; LFOs, so each stage rides the one before it.</p>
+
+  <h3>MIDI CC</h3>
+  <p>External CC only &mdash; Move&rsquo;s own encoders arrive as internal CCs and are ignored, and a duplicate inside two blocks is dropped.</p>
+  <table>
+    <caption>CC map</caption>
+    <thead><tr><th scope="col">CC</th><th scope="col">Reaches</th></tr></thead>
+    <tbody>
+      <tr><td><code>8&ndash;15</code> / <code>16&ndash;23</code></td><td>FX 1 / FX 2 parameters A&ndash;H</td></tr>
+      <tr><td><code>24</code> / <code>25</code> / <code>26</code></td><td>FX 1 machine, FX 2 machine, dry/wet</td></tr>
+      <tr><td><code>32</code> / <code>40</code> / <code>48</code></td><td>FX LFO 1 / 2 / 3, seven fields each</td></tr>
+      <tr><td><code>56&ndash;60</code></td><td>modulation envelope</td></tr>
+      <tr><td><code>64</code> / <code>65</code> / <code>66</code></td><td>sequencer, fill, live record</td></tr>
+    </tbody>
+  </table>
+
   <h3>Presets</h3>
   <p><strong>Shift + jog click</strong> opens the preset browser. The jog scrolls, a click loads, and the top entry saves a new one; the clear pad deletes the selected preset. Presets are stored outside the module directory, so reinstalling Overwork does not remove them.</p>
   <p>Pattern length runs to 64 steps across four pages. The sequencer also exists in the chain build, where it defaults to off &mdash; a sequenced FX in a Signal Chain slot is a real use, not an accident.</p>
@@ -505,7 +528,7 @@ footer a{color:var(--rust)}
 </main>
 
 <footer>
-  <p><strong>Work &amp; Overwork</strong> v0.2.0 &mdash; a module for <a href="https://github.com/charlesvestal/schwung">Schwung</a> on the Ableton Move. MIT licensed.<br>
+  <p><strong>Work &amp; Overwork</strong> v0.3.0 &mdash; a module for <a href="https://github.com/charlesvestal/schwung">Schwung</a> on the Ableton Move. MIT licensed.<br>
   Source and tests: <a href="https://github.com/timncox/schwung-work">timncox/schwung-work</a> &middot; distribution: <a href="https://github.com/timncox/schwung-overwork">timncox/schwung-overwork</a> &middot; <a href="https://timncox.github.io/schwung/">all modules</a></p>
   <p>Inspired by the Elektron Tonverk and written from its published user manual. Not affiliated with or endorsed by Elektron. Tonverk is Elektron&rsquo;s trademark.</p>
 </footer>

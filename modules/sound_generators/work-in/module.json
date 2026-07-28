@@ -2,7 +2,7 @@
   "id": "work-in",
   "name": "Work In",
   "abbrev": "WKIN",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Twenty-one Tonverk-inspired FX machines on the live input, as a chain slot source",
   "dsp": "dsp.so",
   "ui_chain": "ui_chain.js",
@@ -101,6 +101,14 @@
             {
               "level": "lfo2",
               "label": "FX LFO 2"
+            },
+            {
+              "level": "lfo3",
+              "label": "FX LFO 3"
+            },
+            {
+              "level": "menv",
+              "label": "Modulation Envelope"
             }
           ],
           "knobs": [
@@ -3133,6 +3141,137 @@
             "lfo2_depth",
             "lfo2_phase",
             "lfo2_trig"
+          ]
+        },
+        "lfo3": {
+          "name": "FX LFO 3",
+          "params": [
+            {
+              "key": "lfo3_dest",
+              "name": "Destination",
+              "type": "int",
+              "min": -1,
+              "max": 15,
+              "default": -1
+            },
+            {
+              "key": "lfo3_spd",
+              "name": "Speed",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 32
+            },
+            {
+              "key": "lfo3_mult",
+              "name": "Multiplier",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 64
+            },
+            {
+              "key": "lfo3_wave",
+              "name": "Waveform",
+              "type": "enum",
+              "options": [
+                "Triangle",
+                "Sine",
+                "Square",
+                "Saw",
+                "Ramp",
+                "Exponential",
+                "Random"
+              ],
+              "default": 0
+            },
+            {
+              "key": "lfo3_depth",
+              "name": "Depth",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 64
+            },
+            {
+              "key": "lfo3_phase",
+              "name": "Start Phase",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 0
+            },
+            {
+              "key": "lfo3_trig",
+              "name": "Trig Mode",
+              "type": "enum",
+              "options": [
+                "Free",
+                "Retrig"
+              ],
+              "default": 0
+            }
+          ],
+          "knobs": [
+            "lfo3_dest",
+            "lfo3_spd",
+            "lfo3_mult",
+            "lfo3_wave",
+            "lfo3_depth",
+            "lfo3_phase",
+            "lfo3_trig"
+          ]
+        },
+        "menv": {
+          "name": "Modulation Envelope",
+          "params": [
+            {
+              "key": "menv_dest",
+              "name": "Destination",
+              "type": "int",
+              "min": -1,
+              "max": 15,
+              "default": -1
+            },
+            {
+              "key": "menv_atk",
+              "name": "Attack",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 0
+            },
+            {
+              "key": "menv_hold",
+              "name": "Hold",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 8
+            },
+            {
+              "key": "menv_dec",
+              "name": "Decay",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 48
+            },
+            {
+              "key": "menv_depth",
+              "name": "Depth",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 64
+            }
+          ],
+          "knobs": [
+            "menv_dest",
+            "menv_atk",
+            "menv_hold",
+            "menv_dec",
+            "menv_depth"
           ]
         }
       }
