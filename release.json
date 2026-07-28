@@ -1,4 +1,30 @@
 {
   "version": "0.1.0",
-  "download_url": "https://github.com/timncox/schwung-work/releases/download/v0.1.0/work-module.tar.gz"
+  "download_url": "https://github.com/timncox/schwung-work/releases/download/v0.1.0/work-module.tar.gz",
+  "name": "Work",
+  "description": "Twenty Tonverk-inspired FX machines in two insert slots with two FX LFOs",
+  "repo_url": "https://github.com/timncox/schwung-work",
+  "modules": {
+    "work": {
+      "version": "0.1.0",
+      "download_url": "https://github.com/timncox/schwung-work/releases/download/v0.1.0/work-module.tar.gz",
+      "name": "Work",
+      "description": "Twenty Tonverk-inspired FX machines in two insert slots with two FX LFOs, for Signal Chain and Master FX slots",
+      "repo_url": "https://github.com/timncox/schwung-work"
+    },
+    "work-in": {
+      "version": "0.1.0",
+      "download_url": "https://github.com/timncox/schwung-work/releases/download/v0.1.0/work-in-module.tar.gz",
+      "name": "Work In",
+      "description": "The same twenty FX machines on the live input, loaded into a chain slot as the source",
+      "repo_url": "https://github.com/timncox/schwung-work"
+    },
+    "overwork": {
+      "version": "0.1.0",
+      "download_url": "https://github.com/timncox/schwung-work/releases/download/v0.1.0/overwork-module.tar.gz",
+      "name": "Overwork",
+      "description": "Full-surface Work: twenty FX machines on the live input with an Elektron-style step sequencer and parameter locks",
+      "repo_url": "https://github.com/timncox/schwung-work"
+    }
+  }
 }
