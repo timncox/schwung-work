@@ -1,0 +1,464 @@
+{
+  "id": "work-in",
+  "name": "Work In",
+  "abbrev": "WKIN",
+  "version": "0.1.0",
+  "description": "Twenty Tonverk-inspired FX machines on the live input, as a chain slot source",
+  "dsp": "dsp.so",
+  "ui_chain": "ui_chain.js",
+  "api_version": 2,
+  "component_type": "sound_generator",
+  "capabilities": {
+    "audio_in": true,
+    "audio_out": true,
+    "midi_in": true,
+    "midi_out": false,
+    "chainable": true,
+    "component_type": "sound_generator",
+    "ui_hierarchy": {
+      "levels": {
+        "root": {
+          "name": "Work",
+          "params": [
+            {
+              "key": "fx1",
+              "name": "FX 1 Machine",
+              "type": "enum",
+              "options": [
+                "Bypass",
+                "Chrono Pitch",
+                "Comb +/- Filter",
+                "Compressor",
+                "Daisy Delay",
+                "Degrader",
+                "Dirtshaper",
+                "Filter Folder",
+                "Filterbank",
+                "Frequency Warper",
+                "Infinite Flanger",
+                "Low-Pass Filter",
+                "Multimode Filter",
+                "Panoramic Chorus",
+                "Phase 98",
+                "Rumsklang Reverb",
+                "Saturator Delay",
+                "Steel Box Reverb",
+                "Supervoid Reverb",
+                "Warble"
+              ],
+              "default": 0
+            },
+            {
+              "key": "fx2",
+              "name": "FX 2 Machine",
+              "type": "enum",
+              "options": [
+                "Bypass",
+                "Chrono Pitch",
+                "Comb +/- Filter",
+                "Compressor",
+                "Daisy Delay",
+                "Degrader",
+                "Dirtshaper",
+                "Filter Folder",
+                "Filterbank",
+                "Frequency Warper",
+                "Infinite Flanger",
+                "Low-Pass Filter",
+                "Multimode Filter",
+                "Panoramic Chorus",
+                "Phase 98",
+                "Rumsklang Reverb",
+                "Saturator Delay",
+                "Steel Box Reverb",
+                "Supervoid Reverb",
+                "Warble"
+              ],
+              "default": 0
+            },
+            {
+              "key": "mix",
+              "name": "Dry/Wet",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 127
+            },
+            {
+              "level": "fx1p",
+              "name": "FX 1 Params"
+            },
+            {
+              "level": "fx2p",
+              "name": "FX 2 Params"
+            },
+            {
+              "level": "lfo1",
+              "name": "FX LFO 1"
+            },
+            {
+              "level": "lfo2",
+              "name": "FX LFO 2"
+            }
+          ],
+          "knobs": [
+            "fx1",
+            "fx2",
+            "mix"
+          ]
+        },
+        "fx1p": {
+          "name": "FX 1 Params",
+          "params": [
+            {
+              "key": "fx1_p1",
+              "name": "A",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 64
+            },
+            {
+              "key": "fx1_p2",
+              "name": "B",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 64
+            },
+            {
+              "key": "fx1_p3",
+              "name": "C",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 64
+            },
+            {
+              "key": "fx1_p4",
+              "name": "D",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 64
+            },
+            {
+              "key": "fx1_p5",
+              "name": "E",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 64
+            },
+            {
+              "key": "fx1_p6",
+              "name": "F",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 64
+            },
+            {
+              "key": "fx1_p7",
+              "name": "G",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 64
+            },
+            {
+              "key": "fx1_p8",
+              "name": "H",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 64
+            }
+          ],
+          "knobs": [
+            "fx1_p1",
+            "fx1_p2",
+            "fx1_p3",
+            "fx1_p4",
+            "fx1_p5",
+            "fx1_p6",
+            "fx1_p7",
+            "fx1_p8"
+          ]
+        },
+        "fx2p": {
+          "name": "FX 2 Params",
+          "params": [
+            {
+              "key": "fx2_p1",
+              "name": "A",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 64
+            },
+            {
+              "key": "fx2_p2",
+              "name": "B",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 64
+            },
+            {
+              "key": "fx2_p3",
+              "name": "C",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 64
+            },
+            {
+              "key": "fx2_p4",
+              "name": "D",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 64
+            },
+            {
+              "key": "fx2_p5",
+              "name": "E",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 64
+            },
+            {
+              "key": "fx2_p6",
+              "name": "F",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 64
+            },
+            {
+              "key": "fx2_p7",
+              "name": "G",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 64
+            },
+            {
+              "key": "fx2_p8",
+              "name": "H",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 64
+            }
+          ],
+          "knobs": [
+            "fx2_p1",
+            "fx2_p2",
+            "fx2_p3",
+            "fx2_p4",
+            "fx2_p5",
+            "fx2_p6",
+            "fx2_p7",
+            "fx2_p8"
+          ]
+        },
+        "lfo1": {
+          "name": "FX LFO 1",
+          "params": [
+            {
+              "key": "lfo1_dest",
+              "name": "Destination",
+              "type": "enum",
+              "options": [
+                "Off",
+                "FX1 A",
+                "FX1 B",
+                "FX1 C",
+                "FX1 D",
+                "FX1 E",
+                "FX1 F",
+                "FX1 G",
+                "FX1 H",
+                "FX2 A",
+                "FX2 B",
+                "FX2 C",
+                "FX2 D",
+                "FX2 E",
+                "FX2 F",
+                "FX2 G",
+                "FX2 H"
+              ],
+              "default": 0
+            },
+            {
+              "key": "lfo1_spd",
+              "name": "Speed",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 32
+            },
+            {
+              "key": "lfo1_mult",
+              "name": "Multiplier",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 64
+            },
+            {
+              "key": "lfo1_wave",
+              "name": "Waveform",
+              "type": "enum",
+              "options": [
+                "Triangle",
+                "Sine",
+                "Square",
+                "Saw",
+                "Ramp",
+                "Exponential",
+                "Random"
+              ],
+              "default": 0
+            },
+            {
+              "key": "lfo1_depth",
+              "name": "Depth",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 64
+            },
+            {
+              "key": "lfo1_phase",
+              "name": "Start Phase",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 0
+            },
+            {
+              "key": "lfo1_trig",
+              "name": "Trig Mode",
+              "type": "enum",
+              "options": [
+                "Free",
+                "Retrig"
+              ],
+              "default": 0
+            }
+          ],
+          "knobs": [
+            "lfo1_dest",
+            "lfo1_spd",
+            "lfo1_mult",
+            "lfo1_wave",
+            "lfo1_depth",
+            "lfo1_phase",
+            "lfo1_trig"
+          ]
+        },
+        "lfo2": {
+          "name": "FX LFO 2",
+          "params": [
+            {
+              "key": "lfo2_dest",
+              "name": "Destination",
+              "type": "enum",
+              "options": [
+                "Off",
+                "FX1 A",
+                "FX1 B",
+                "FX1 C",
+                "FX1 D",
+                "FX1 E",
+                "FX1 F",
+                "FX1 G",
+                "FX1 H",
+                "FX2 A",
+                "FX2 B",
+                "FX2 C",
+                "FX2 D",
+                "FX2 E",
+                "FX2 F",
+                "FX2 G",
+                "FX2 H"
+              ],
+              "default": 0
+            },
+            {
+              "key": "lfo2_spd",
+              "name": "Speed",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 32
+            },
+            {
+              "key": "lfo2_mult",
+              "name": "Multiplier",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 64
+            },
+            {
+              "key": "lfo2_wave",
+              "name": "Waveform",
+              "type": "enum",
+              "options": [
+                "Triangle",
+                "Sine",
+                "Square",
+                "Saw",
+                "Ramp",
+                "Exponential",
+                "Random"
+              ],
+              "default": 0
+            },
+            {
+              "key": "lfo2_depth",
+              "name": "Depth",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 64
+            },
+            {
+              "key": "lfo2_phase",
+              "name": "Start Phase",
+              "type": "int",
+              "min": 0,
+              "max": 127,
+              "default": 0
+            },
+            {
+              "key": "lfo2_trig",
+              "name": "Trig Mode",
+              "type": "enum",
+              "options": [
+                "Free",
+                "Retrig"
+              ],
+              "default": 0
+            }
+          ],
+          "knobs": [
+            "lfo2_dest",
+            "lfo2_spd",
+            "lfo2_mult",
+            "lfo2_wave",
+            "lfo2_depth",
+            "lfo2_phase",
+            "lfo2_trig"
+          ]
+        }
+      }
+    }
+  },
+  "author": "timncox"
+}

@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Work &amp; Overwork — operation manual</title>
+<meta name="description" content="Operation manual for Work and Overwork: twenty Tonverk-inspired FX machines for the Ableton Move, as a Schwung module.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:ital,wght@0,400..700;1,400..700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  color-scheme: light;
+  --paper:#EDE8DC;
+  --paper-2:#E4DECF;
+  --ink:#191C19;
+  --ink-2:#3E443E;
+  --ink-3:#565C54;
+  --rule:#C3BCA9;
+  --rule-2:#D5CFBF;
+  /* accents. The bright orange is for FILLS AND GRAPHICS ONLY — small text
+     uses --rust, which clears 4.5:1 on the paper. */
+  --signal:#E4572E;
+  --rust:#8E3312;
+  --teal:#1F5754;
+  --teal-fill:#2E8B84;
+
+  --fam-pitch:#6B4E9E;
+  --fam-filter:#2F6B3A;
+  --fam-dyn:#265E86;
+  --fam-delay:#9A5312;
+  --fam-dest:#5E6B18;
+  --fam-mod:#1F6470;
+  --fam-space:#3A5A93;
+  --fam-tape:#1F5754;
+  --fam-none:#6B6B63;
+
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:"Familjen Grotesk","Helvetica Neue",Helvetica,sans-serif;
+}
+
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms !important;animation-iteration-count:1 !important;transition-duration:.001ms !important}
+}
+
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--sans);
+  font-size:17px;
+  line-height:1.6;
+  /* drafting grid: 8mm major, 2mm minor */
+  background-image:
+    linear-gradient(var(--rule-2) 1px, transparent 1px),
+    linear-gradient(90deg, var(--rule-2) 1px, transparent 1px),
+    linear-gradient(rgba(195,188,169,.35) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(195,188,169,.35) 1px, transparent 1px);
+  background-size:96px 96px,96px 96px,24px 24px,24px 24px;
+  background-position:-1px -1px,-1px -1px,-1px -1px,-1px -1px;
+}
+/* paper grain */
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.5;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/><feColorMatrix type='saturate' values='0'/></filter><rect width='120' height='120' filter='url(%23n)' opacity='.16'/></svg>");
+  mix-blend-mode:multiply;
+}
+
+.skip{position:absolute;left:-999px;top:0;z-index:100;background:var(--ink);color:var(--paper);padding:.7rem 1.1rem;font-family:var(--mono);font-size:.8rem}
+.skip:focus{left:8px;top:8px}
+
+a{color:var(--rust);text-underline-offset:3px;text-decoration-thickness:1px}
+a:hover{color:var(--ink)}
+:focus-visible{outline:2.5px solid var(--signal);outline-offset:3px}
+
+.wrap{position:relative;z-index:1;max-width:1080px;margin:0 auto;padding:0 28px}
+
+/* ---------- masthead: a title block, like a real drawing ---------- */
+.sheet{
+  border:2px solid var(--ink);
+  background:rgba(237,232,220,.92);
+  margin:28px 0 0;
+}
+.titleblock{display:grid;grid-template-columns:1fr auto;gap:0;border-bottom:2px solid var(--ink)}
+.tb-main{padding:34px 30px 26px;border-right:2px solid var(--ink)}
+.tb-side{display:grid;grid-template-rows:repeat(4,1fr);min-width:210px}
+.tb-cell{padding:9px 14px;border-bottom:1px solid var(--rule);font-family:var(--mono);font-size:.66rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);display:flex;flex-direction:column;justify-content:center}
+.tb-cell:last-child{border-bottom:0}
+.tb-cell b{display:block;color:var(--ink);font-size:.86rem;font-weight:600;letter-spacing:.02em;margin-top:1px}
+
+h1{
+  font-size:clamp(3.4rem,11vw,7rem);
+  line-height:.84;margin:0;letter-spacing:-.045em;font-weight:700;
+  text-transform:uppercase;
+}
+h1 .amp{font-style:italic;font-weight:400;color:var(--rust);letter-spacing:-.02em}
+h1 .over{display:block;color:var(--signal);-webkit-text-stroke:1.5px var(--ink);paint-order:stroke fill}
+.tagline{font-family:var(--mono);font-size:.82rem;letter-spacing:.02em;color:var(--ink-2);margin:20px 0 0;max-width:52ch;line-height:1.75}
+.stamp{
+  display:inline-block;margin-top:20px;padding:5px 12px;
+  border:1.5px solid var(--rust);color:var(--rust);
+  font-family:var(--mono);font-size:.63rem;letter-spacing:.16em;text-transform:uppercase;
+  transform:rotate(-1.4deg);
+}
+
+/* ---------- sections ---------- */
+section{margin:64px 0;scroll-margin-top:24px}
+.sechead{display:flex;align-items:baseline;gap:16px;border-bottom:2px solid var(--ink);padding-bottom:8px;margin-bottom:26px}
+.secnum{font-family:var(--mono);font-size:.78rem;font-weight:600;color:var(--rust);letter-spacing:.08em}
+h2{font-size:clamp(1.5rem,3.4vw,2.1rem);margin:0;letter-spacing:-.02em;font-weight:700;text-transform:uppercase}
+.sechead .note{margin-left:auto;font-family:var(--mono);font-size:.68rem;color:var(--ink-3);letter-spacing:.04em}
+h3{font-size:1.02rem;letter-spacing:.01em;margin:26px 0 8px;font-weight:700}
+p{margin:0 0 14px;max-width:68ch}
+.lede{font-size:1.14rem;line-height:1.62;max-width:62ch}
+
+.callout{
+  border-left:3px solid var(--signal);background:rgba(228,87,46,.07);
+  padding:14px 18px;margin:20px 0;font-size:.95rem;
+}
+.callout strong{font-family:var(--mono);font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:var(--rust);display:block;margin-bottom:4px}
+
+/* ---------- signal flow ---------- */
+.flow{border:1.5px solid var(--rule);background:rgba(255,253,248,.6);padding:22px;margin:22px 0;overflow-x:auto}
+.flow svg{display:block;min-width:640px;width:100%;height:auto}
+.flow text{font-family:var(--mono);font-size:11px;fill:var(--ink-2)}
+.flow text.lbl{font-size:12px;font-weight:600;fill:var(--ink)}
+.flow rect.box{fill:rgba(237,232,220,.9);stroke:var(--ink);stroke-width:1.5}
+.flow rect.acc{fill:rgba(228,87,46,.14);stroke:var(--rust);stroke-width:1.5}
+.flow path,.flow line{stroke:var(--ink-2);stroke-width:1.4;fill:none}
+.flow path.dash{stroke:var(--teal);stroke-dasharray:4 3}
+
+/* ---------- p-lock demo ---------- */
+.demo{border:2px solid var(--ink);background:rgba(255,253,248,.72);margin:26px 0}
+.demo-head{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:12px 18px;border-bottom:1.5px solid var(--rule);font-family:var(--mono);font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3)}
+.demo-body{padding:22px 18px 24px}
+.steprow{display:grid;grid-template-columns:repeat(16,1fr);gap:5px;margin-bottom:6px}
+@media (max-width:760px){.steprow{grid-template-columns:repeat(8,1fr)}}
+.stepbtn{
+  aspect-ratio:1/1.35;border:1.5px solid var(--ink);background:var(--paper-2);
+  font-family:var(--mono);font-size:.62rem;color:var(--ink-3);cursor:pointer;
+  display:flex;align-items:flex-end;justify-content:center;padding-bottom:3px;
+  transition:background .12s,transform .08s;position:relative;
+}
+.stepbtn:hover{background:#DED6C2}
+.stepbtn[aria-pressed="true"]{background:var(--ink);color:var(--paper)}
+.stepbtn.held{background:var(--signal);border-color:var(--rust);color:#fff;transform:translateY(-2px)}
+.stepbtn.haslock::before{
+  content:"";position:absolute;top:4px;left:50%;transform:translateX(-50%);
+  width:7px;height:7px;border-radius:50%;background:var(--teal-fill);border:1px solid var(--teal);
+}
+.stepbtn[aria-pressed="true"].haslock::before{background:#7FD8CF}
+
+.knobrow{display:grid;grid-template-columns:repeat(8,1fr);gap:12px;margin-top:22px}
+@media (max-width:760px){.knobrow{grid-template-columns:repeat(4,1fr)}}
+.knob{text-align:center;font-family:var(--mono);font-size:.62rem;color:var(--ink-3)}
+.knob button{
+  width:100%;aspect-ratio:1;border-radius:50%;border:2px solid var(--ink);
+  background:radial-gradient(circle at 38% 32%, #FBF8F1, var(--paper-2) 72%);
+  cursor:ns-resize;position:relative;display:block;
+}
+.knob button:hover{border-color:var(--rust)}
+.knob .ind{position:absolute;left:50%;top:8%;width:2.5px;height:36%;background:var(--ink);transform-origin:50% 100%;border-radius:2px}
+.knob.locked button{border-color:var(--teal);box-shadow:0 0 0 3px rgba(46,139,132,.22)}
+.knob .lab{display:block;margin-top:6px;font-weight:600;color:var(--ink);letter-spacing:.04em}
+.knob .val{display:block;color:var(--ink-3)}
+.knob.locked .val{color:var(--teal);font-weight:600}
+
+.readout{
+  margin-top:20px;padding:12px 16px;border:1.5px dashed var(--rule);
+  font-family:var(--mono);font-size:.78rem;color:var(--ink-2);min-height:2.9em;line-height:1.5;
+}
+.readout b{color:var(--rust)}
+
+/* ---------- pad map ---------- */
+.tabs{display:flex;gap:0;margin:22px 0 0;border-bottom:2px solid var(--ink)}
+.tabs button{
+  font-family:var(--mono);font-size:.74rem;letter-spacing:.1em;text-transform:uppercase;
+  padding:9px 18px;border:2px solid var(--ink);border-bottom:0;background:var(--paper-2);
+  color:var(--ink-3);cursor:pointer;margin-right:-2px;
+}
+.tabs button[aria-selected="true"]{background:var(--ink);color:var(--paper)}
+.panel{border:2px solid var(--ink);border-top:0;background:rgba(255,253,248,.72);padding:22px 18px}
+.padgrid{display:grid;grid-template-columns:repeat(8,1fr);gap:6px;max-width:560px}
+.pad{
+  aspect-ratio:1;border:1.5px solid var(--ink);background:var(--paper-2);
+  font-family:var(--mono);font-size:.55rem;line-height:1.15;color:var(--ink);
+  display:flex;align-items:center;justify-content:center;text-align:center;padding:2px;
+  cursor:pointer;transition:transform .08s;
+}
+.pad:hover,.pad:focus-visible{transform:translateY(-2px)}
+.pad[data-fam]{border-width:1.5px}
+.rowlabel{font-family:var(--mono);font-size:.6rem;color:var(--ink-3);letter-spacing:.1em;margin:14px 0 6px;text-transform:uppercase}
+.padinfo{margin-top:16px;padding:12px 16px;border-left:3px solid var(--teal);background:rgba(46,139,132,.08);font-family:var(--mono);font-size:.78rem;min-height:3.2em;color:var(--ink-2)}
+.padinfo b{color:var(--ink)}
+
+/* ---------- machine table ---------- */
+.machines{display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:0;border:1.5px solid var(--ink);border-right:0;border-bottom:0;margin-top:22px}
+.machine{border-right:1.5px solid var(--ink);border-bottom:1.5px solid var(--ink);padding:14px 16px;background:rgba(255,253,248,.55)}
+.machine h3{margin:0 0 2px;font-size:.98rem;font-weight:700;letter-spacing:-.005em;display:flex;align-items:baseline;gap:8px}
+.machine .idx{font-family:var(--mono);font-size:.68rem;color:var(--ink-3);font-weight:500}
+.machine .fam{font-family:var(--mono);font-size:.58rem;letter-spacing:.12em;text-transform:uppercase;font-weight:600}
+.machine p{font-size:.86rem;color:var(--ink-2);margin:6px 0 10px;line-height:1.5}
+.params{display:flex;flex-wrap:wrap;gap:4px;margin:0;padding:0;list-style:none}
+.params li{font-family:var(--mono);font-size:.62rem;padding:2px 6px;border:1px solid var(--rule);color:var(--ink-2);background:rgba(237,232,220,.7)}
+
+/* ---------- conditions + specs ---------- */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:26px}
+@media (max-width:820px){.grid2{grid-template-columns:1fr}}
+table{width:100%;border-collapse:collapse;font-size:.86rem;margin:14px 0}
+caption{text-align:left;font-family:var(--mono);font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);padding-bottom:7px}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--rule-2);vertical-align:top}
+th{font-family:var(--mono);font-size:.66rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);font-weight:600;border-bottom:1.5px solid var(--ink)}
+td code{font-family:var(--mono);font-size:.8rem;color:var(--rust)}
+
+.install{border:2px solid var(--ink);background:rgba(255,253,248,.72);padding:22px;margin:22px 0}
+.install ol{margin:0;padding-left:1.2rem}
+.install li{margin-bottom:9px}
+.install code{font-family:var(--mono);font-size:.84rem;background:var(--paper-2);padding:2px 6px;border:1px solid var(--rule)}
+
+footer{border-top:2px solid var(--ink);margin-top:66px;padding:26px 0 60px;font-family:var(--mono);font-size:.72rem;color:var(--ink-3);line-height:1.8}
+footer a{color:var(--rust)}
+.toc{display:flex;flex-wrap:wrap;gap:6px;margin:20px 0 0;padding:0;list-style:none}
+.toc a{
+  display:inline-block;font-family:var(--mono);font-size:.66rem;letter-spacing:.08em;text-transform:uppercase;
+  padding:5px 10px;border:1px solid var(--rule);color:var(--ink-2);text-decoration:none;background:rgba(255,253,248,.5);
+}
+.toc a:hover{border-color:var(--ink);color:var(--ink)}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<div class="wrap">
+
+<div class="sheet">
+  <div class="titleblock">
+    <div class="tb-main">
+      <h1>Work <span class="amp">&amp;</span><span class="over">Overwork</span></h1>
+      <p class="tagline">Twenty FX machines for the Ableton Move, in two insert slots with two FX LFOs. Overwork adds the whole surface and an Elektron-style step sequencer that parameter-locks them.</p>
+      <span class="stamp">Not yet hardware-tested</span>
+    </div>
+    <div class="tb-side">
+      <div class="tb-cell">Module<b>Schwung / Move</b></div>
+      <div class="tb-cell">Builds<b>audio_fx · overtake</b></div>
+      <div class="tb-cell">Revision<b>v0.1.0</b></div>
+      <div class="tb-cell">Source<b><a href="https://github.com/timncox/schwung-work">timncox/schwung-work</a></b></div>
+    </div>
+  </div>
+  <nav aria-label="Sections" style="padding:14px 18px">
+    <ul class="toc">
+      <li><a href="#overview">Overview</a></li>
+      <li><a href="#flow">Signal flow</a></li>
+      <li><a href="#plock">The p-lock gesture</a></li>
+      <li><a href="#surface">Surface map</a></li>
+      <li><a href="#machines">Machines</a></li>
+      <li><a href="#sequencer">Sequencer</a></li>
+      <li><a href="#install">Install</a></li>
+    </ul>
+  </nav>
+</div>
+
+<main id="main">
+
+<section id="overview">
+  <div class="sechead"><span class="secnum">01</span><h2>Overview</h2><span class="note">two builds, one engine</span></div>
+  <p class="lede"><strong>Work</strong> is the <code>audio_fx</code> build. It drops into a Signal Chain slot or a Master FX slot and processes whatever is upstream.</p>
+  <p class="lede"><strong>Overwork</strong> is the <code>overtake</code> build. It takes over Move&rsquo;s whole surface and runs the same twenty machines on the live input &mdash; mic, line, or USB-C &mdash; with a step sequencer driving parameter locks.</p>
+
+  <h3>Why the surface maps so cleanly</h3>
+  <p>Tonverk is an eight-encoder-per-page instrument with sixteen trig keys. Move has eight knobs and sixteen dedicated step buttons. The mapping isn&rsquo;t an approximation &mdash; it&rsquo;s the same instrument shape, so the gesture that defines Elektron sequencing survives intact.</p>
+
+  <table>
+    <caption>Correspondence</caption>
+    <thead><tr><th scope="col">Tonverk</th><th scope="col">Move</th></tr></thead>
+    <tbody>
+      <tr><td>8 rotary encoders</td><td>the 8 knobs</td></tr>
+      <tr><td>16 <code>[TRIG]</code> keys</td><td>the 16 step buttons</td></tr>
+      <tr><td><code>LEVEL/DATA</code></td><td>the jog wheel</td></tr>
+      <tr><td>hold trig + turn encoder</td><td><strong>hold step + turn knob</strong></td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <strong>Clean room</strong>
+    Every machine is written from Elektron&rsquo;s published Tonverk user manual &mdash; documented parameter names, ranges and descriptions only. No Elektron code and no factory content, and this is not a bit-exact emulation. The DSP, filter topologies, reverb tank and pitch-shifter windowing are all our own.
+  </div>
+</section>
+
+<section id="flow">
+  <div class="sechead"><span class="secnum">02</span><h2>Signal flow</h2><span class="note">two inserts in series</span></div>
+  <p>Both slots run in series. Each holds one machine. The two FX LFOs reach any slot parameter, and in Overwork the sequencer&rsquo;s parameter locks sit between the base value and the LFOs.</p>
+  <div class="flow">
+    <svg viewBox="0 0 900 260" role="img" aria-labelledby="flowtitle flowdesc">
+      <title id="flowtitle">Work signal flow diagram</title>
+      <desc id="flowdesc">Audio enters at IN, passes through FX slot 1 then FX slot 2 in series, then a global dry/wet mix, then OUT. A resolution chain feeds the slots: base parameter values are overridden by the sequencer's parameter locks, which are then modulated by the two FX LFOs.</desc>
+
+      <rect class="box" x="14" y="96" width="78" height="48"/>
+      <text class="lbl" x="53" y="125" text-anchor="middle">IN</text>
+      <text x="53" y="164" text-anchor="middle">mic · line · USB-C</text>
+
+      <line x1="92" y1="120" x2="140" y2="120"/>
+      <path d="M140 120 l-9 -4 v8 z" fill="var(--ink-2)" stroke="none"/>
+
+      <rect class="box" x="146" y="88" width="130" height="64"/>
+      <text class="lbl" x="211" y="114" text-anchor="middle">FX SLOT 1</text>
+      <text x="211" y="132" text-anchor="middle">1 of 20 machines</text>
+
+      <line x1="276" y1="120" x2="324" y2="120"/>
+      <path d="M324 120 l-9 -4 v8 z" fill="var(--ink-2)" stroke="none"/>
+
+      <rect class="box" x="330" y="88" width="130" height="64"/>
+      <text class="lbl" x="395" y="114" text-anchor="middle">FX SLOT 2</text>
+      <text x="395" y="132" text-anchor="middle">1 of 20 machines</text>
+
+      <line x1="460" y1="120" x2="508" y2="120"/>
+      <path d="M508 120 l-9 -4 v8 z" fill="var(--ink-2)" stroke="none"/>
+
+      <rect class="acc" x="514" y="96" width="96" height="48"/>
+      <text class="lbl" x="562" y="118" text-anchor="middle">MIX</text>
+      <text x="562" y="134" text-anchor="middle">dry / wet</text>
+
+      <line x1="610" y1="120" x2="658" y2="120"/>
+      <path d="M658 120 l-9 -4 v8 z" fill="var(--ink-2)" stroke="none"/>
+
+      <rect class="box" x="664" y="96" width="78" height="48"/>
+      <text class="lbl" x="703" y="125" text-anchor="middle">OUT</text>
+
+      <!-- resolution chain -->
+      <rect class="box" x="146" y="206" width="112" height="40"/>
+      <text x="202" y="231" text-anchor="middle">base value</text>
+      <rect class="box" x="286" y="206" width="112" height="40"/>
+      <text x="342" y="231" text-anchor="middle">p-lock</text>
+      <rect class="box" x="426" y="206" width="112" height="40"/>
+      <text x="482" y="231" text-anchor="middle">FX LFO</text>
+
+      <line x1="258" y1="226" x2="280" y2="226"/>
+      <path d="M280 226 l-8 -4 v8 z" fill="var(--ink-2)" stroke="none"/>
+      <line x1="398" y1="226" x2="420" y2="226"/>
+      <path d="M420 226 l-8 -4 v8 z" fill="var(--ink-2)" stroke="none"/>
+
+      <path class="dash" d="M538 226 H 596 V 152"/>
+      <path d="M596 152 l-4 9 h8 z" fill="var(--teal)" stroke="none"/>
+      <path class="dash" d="M300 206 V 176 H 211 V 152"/>
+      <path d="M211 152 l-4 9 h8 z" fill="var(--teal)" stroke="none"/>
+
+      <text x="146" y="192" font-size="10">RESOLUTION ORDER, RECOMPUTED EVERY BLOCK</text>
+      <text x="664" y="176" font-size="10">to both slots</text>
+    </svg>
+  </div>
+  <p>A lock <em>sets</em> the value; the LFO then moves around whatever the lock set. Pointing a lock and an LFO at the same parameter is well defined, not a fight.</p>
+</section>
+
+<section id="plock">
+  <div class="sechead"><span class="secnum">03</span><h2>The p-lock gesture</h2><span class="note">try it below</span></div>
+  <p class="lede">Hold a step button. Turn a knob. That parameter is now locked on that step. Release the step and the knob goes back to editing the base value.</p>
+
+  <div class="demo">
+    <div class="demo-head">
+      <span>Interactive &mdash; FX 1 : Chrono Pitch</span>
+      <span style="margin-left:auto">hold a step, then drag a knob</span>
+    </div>
+    <div class="demo-body">
+      <div class="steprow" id="demoSteps" role="group" aria-label="Sixteen step buttons"></div>
+      <div class="knobrow" id="demoKnobs"></div>
+      <p class="readout" id="demoOut" role="status" aria-live="polite">No step held. Turning a knob edits the base value for the whole pattern.</p>
+    </div>
+  </div>
+
+  <div class="callout">
+    <strong>What a trig does when it fires</strong>
+    Each firing trig is a complete snapshot: parameters it locks take their locked value, and parameters it does <em>not</em> lock revert to base. A trig whose condition fails changes nothing at all. That is a deliberate choice, not an inevitability &mdash; it makes a pattern readable by looking at one step.
+  </div>
+
+  <h3>Also on a held step</h3>
+  <table>
+    <caption>Held-step gestures</caption>
+    <thead><tr><th scope="col">Gesture</th><th scope="col">Result</th></tr></thead>
+    <tbody>
+      <tr><td>hold + turn knob</td><td>parameter-lock that knob</td></tr>
+      <tr><td>hold + <strong>Shift</strong> + turn knob</td><td>escape the gesture, edit the base value instead</td></tr>
+      <tr><td>hold + jog</td><td>set condition, micro-timing or retrig, per the active mode pad</td></tr>
+      <tr><td>hold + lock-clear pad</td><td>drop every lock on that step</td></tr>
+      <tr><td>tap, no edit</td><td>toggle the trig on or off</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="surface">
+  <div class="sechead"><span class="secnum">04</span><h2>Surface map</h2><span class="note">pad rows numbered from the top</span></div>
+
+  <div class="tabs" role="tablist" aria-label="Build">
+    <button role="tab" id="tab-ow" aria-controls="panel-ow" aria-selected="true">Overwork &mdash; full surface</button>
+    <button role="tab" id="tab-wk" aria-controls="panel-wk" aria-selected="false" tabindex="-1">Work &mdash; chain slot</button>
+  </div>
+
+  <div class="panel" id="panel-ow" role="tabpanel" aria-labelledby="tab-ow" tabindex="0">
+    <p class="rowlabel">Step buttons 1&ndash;16 &mdash; the pattern page&rsquo;s trigs</p>
+    <div class="steprow" id="mapSteps" aria-hidden="true"></div>
+    <p class="rowlabel">Pads &mdash; rows 1&ndash;3 are the machine palette, row 4 is transport</p>
+    <div class="padgrid" id="mapPads"></div>
+    <p class="padinfo" id="padInfo" role="status" aria-live="polite">Select a pad to read what it does.</p>
+    <h3>Step LED colours</h3>
+    <table>
+      <caption>What the step buttons are telling you</caption>
+      <thead><tr><th scope="col">Colour</th><th scope="col">Meaning</th></tr></thead>
+      <tbody>
+        <tr><td>Dim</td><td>inside the pattern length, no trig</td></tr>
+        <tr><td>White</td><td>a plain trig</td></tr>
+        <tr><td>Green</td><td>a trig carrying parameter locks</td></tr>
+        <tr><td>Cyan</td><td>a trig with a condition on it</td></tr>
+        <tr><td>Bright green</td><td>the step you are holding</td></tr>
+        <tr><td>Red</td><td>the playhead</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel" id="panel-wk" role="tabpanel" aria-labelledby="tab-wk" tabindex="0" hidden>
+    <p>Inside a Signal Chain slot, Move&rsquo;s firmware keeps the pad grid and the Capture button for itself. A chain UI receives only the screen, the eight knobs, the jog wheel and Back &mdash; so Work is entirely knob- and jog-driven.</p>
+    <table>
+      <caption>Work, in a chain slot</caption>
+      <thead><tr><th scope="col">Control</th><th scope="col">Function</th></tr></thead>
+      <tbody>
+        <tr><td>Jog turn</td><td>move between pages: Machines, FX 1, FX 2, LFO 1, LFO 2</td></tr>
+        <tr><td>Jog click</td><td>jump back to the Machines page</td></tr>
+        <tr><td>Shift + jog click</td><td>swap the module in this slot</td></tr>
+        <tr><td>Knobs 1&ndash;8</td><td>the current page&rsquo;s eight parameters</td></tr>
+      </tbody>
+    </table>
+    <p>The Machines page picks both machines and the global dry/wet. Knob labels follow whichever machine is loaded &mdash; they are read from the DSP, so they always match.</p>
+  </div>
+</section>
+
+<section id="machines">
+  <div class="sechead"><span class="secnum">05</span><h2>The machines</h2><span class="note">20 · knob labels A&ndash;H</span></div>
+  <p>Machine order is the preset format and is append-only. Loading a machine installs its own defaults, and switching machines clears that slot so no reverb tail leaks into whatever loads next.</p>
+  <div class="machines" id="machineList"></div>
+</section>
+
+<section id="sequencer">
+  <div class="sechead"><span class="secnum">06</span><h2>Sequencer</h2><span class="note">Overwork · 64 steps</span></div>
+  <div class="grid2">
+    <div>
+      <h3>Trig conditions</h3>
+      <p>Set with the jog while a step is held, in condition mode.</p>
+      <table>
+        <caption>Conditions</caption>
+        <thead><tr><th scope="col">Label</th><th scope="col">Fires when</th></tr></thead>
+        <tbody>
+          <tr><td><code>OFF</code></td><td>always</td></tr>
+          <tr><td><code>FILL</code> / <code>!FIL</code></td><td>Fill is on / is off</td></tr>
+          <tr><td><code>PRE</code> / <code>!PRE</code></td><td>the previous conditional trig fired / did not</td></tr>
+          <tr><td><code>1ST</code> / <code>!1ST</code></td><td>the first pass / any later pass</td></tr>
+          <tr><td><code>25%</code> <code>50%</code> <code>75%</code></td><td>at that probability</td></tr>
+          <tr><td><code>1:2</code> &hellip; <code>4:4</code></td><td>on pass A of every B</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div>
+      <h3>Per-step attributes</h3>
+      <table>
+        <caption>Attributes</caption>
+        <thead><tr><th scope="col">Attribute</th><th scope="col">Range</th></tr></thead>
+        <tbody>
+          <tr><td>Condition</td><td>19 options, above</td></tr>
+          <tr><td>Micro-timing</td><td>&plusmn;23 twenty-fourths of a step</td></tr>
+          <tr><td>Retrig</td><td>off, 1/4, 1/8, 1/16, 1/32</td></tr>
+          <tr><td>Parameter locks</td><td>19 lockable parameters</td></tr>
+        </tbody>
+      </table>
+      <h3>Lockable parameters</h3>
+      <p>Sixteen slot parameters &mdash; eight per slot &mdash; plus both machine selects and the global dry/wet. Locking a machine select swaps the machine for that step.</p>
+      <div class="callout">
+        <strong>Retrig, precisely</strong>
+        Retrig restarts the FX LFOs and the filter envelope. It does <em>not</em> stutter the audio &mdash; the Degrader&rsquo;s <code>FREZ</code> parameter is the machine for that.
+      </div>
+    </div>
+  </div>
+  <p>Pattern length runs to 64 steps across four pages. The sequencer also exists in the chain build, where it defaults to off &mdash; a sequenced FX in a Signal Chain slot is a real use, not an accident.</p>
+</section>
+
+<section id="install">
+  <div class="sechead"><span class="secnum">07</span><h2>Install</h2><span class="note">schwung-manager</span></div>
+  <div class="install">
+    <ol>
+      <li>Open <strong>schwung-manager</strong> on your Move &mdash; usually <code>move.local:7700</code>.</li>
+      <li>Choose <strong>Install Custom Module</strong>.</li>
+      <li>Point it at <code>timncox/schwung-work</code> for <strong>Work</strong>, or <code>timncox/schwung-overwork</code> for <strong>Overwork</strong>. Either repo URL, or upload a release tarball directly.</li>
+      <li>Rescan. Work appears as an audio effect in the Signal Chain and Master FX; Overwork appears in the overtake menu.</li>
+    </ol>
+  </div>
+  <div class="callout">
+    <strong>If you are on schwung v0.11.4 or older</strong>
+    Overwork declares <code>audio_in</code>, which on those versions can raise a launch-gate confirmation the tool cannot answer once it owns the surface (schwung issue #158). Remove that flag from its <code>module.json</code>, or keep line-in or headphones plugged in, which clears the condition entirely.
+  </div>
+  <p>After updating a module already on the device, fully exit it &mdash; <strong>Shift + Volume + jog click</strong> from inside &mdash; and relaunch. Pressing Back only suspends the session, which resumes the old code.</p>
+</section>
+
+</main>
+
+<footer>
+  <p><strong>Work &amp; Overwork</strong> v0.1.0 &mdash; a module for <a href="https://github.com/charlesvestal/schwung">Schwung</a> on the Ableton Move. MIT licensed.<br>
+  Source and tests: <a href="https://github.com/timncox/schwung-work">timncox/schwung-work</a> &middot; distribution: <a href="https://github.com/timncox/schwung-overwork">timncox/schwung-overwork</a> &middot; <a href="https://timncox.github.io/schwung/">all modules</a></p>
+  <p>Inspired by the Elektron Tonverk and written from its published user manual. Not affiliated with or endorsed by Elektron. Tonverk is Elektron&rsquo;s trademark.</p>
+</footer>
+
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ---------------- data: mirrors PARAM_NAME[][] in work_core.c ---------- */
+  var FAM = {
+    none:  {name:"utility",    css:"--fam-none"},
+    pitch: {name:"pitch",      css:"--fam-pitch"},
+    filt:  {name:"filter",     css:"--fam-filter"},
+    dyn:   {name:"dynamics",   css:"--fam-dyn"},
+    delay: {name:"delay",      css:"--fam-delay"},
+    dest:  {name:"destruction",css:"--fam-dest"},
+    mod:   {name:"modulation", css:"--fam-mod"},
+    space: {name:"space",      css:"--fam-space"},
+    tape:  {name:"tape",       css:"--fam-tape"}
+  };
+
+  var MACHINES = [
+    {n:"Bypass", f:"none", d:"Passes the slot through untouched.", p:[]},
+    {n:"Chrono Pitch", f:"pitch", d:"Granular pitch shifter with feedback, so held notes climb or fall in steps rather than sitting at one interval.", p:["TUNE","WIN","FDBK","DEP","HPF","LPF","SPD","MIX"]},
+    {n:"Comb ± Filter", f:"filt", d:"Tuned stereo comb. FREQ is bipolar and its sign flips the comb’s polarity — positive feedback plucks like a string, negative sounds hollow and tube-like.", p:["SPD","DEP","SPH","DTUN","FREQ","FDBK","LPF","MIX"]},
+    {n:"Compressor", f:"dyn", d:"Feed-forward peak compressor, eight ratios from 1.5 to 20. SCF is bipolar: low-pass left for pumping, high-pass right to avoid it.", p:["THR","ATK","REL","MUP","RAT","SCS","SCF","MIX"]},
+    {n:"Daisy Delay", f:"delay", d:"Delay with saturated input, stereo width on input and feedback, SKEW pulling the channels into a rhythmic relationship, and a tilt filter.", p:["DRV","TIME","FDBK","WIDH","MOD","SKEW","FILT","MIX"]},
+    {n:"Degrader", f:"dest", d:"The lo-fi collection: bit reduction, overdrive, sample-rate redux, random drop-outs, ring modulation and random freezes.", p:["BR","OVER","SRR","DROP","RATE","DEP","FREZ","F.TIM"]},
+    {n:"Dirtshaper", f:"dest", d:"Drive into a rectifier, with noise ring-modulated against the distorted signal. HPF is bipolar and chooses where the filter sits — before the drive, or after the rectifier.", p:["DRV","RECT","HPF","LPF","NOIS","N.FRQ","N.RES","MIX"]},
+    {n:"Filter Folder", f:"filt", d:"High-pass, then a wavefolder, then a morphing multimode filter, then distortion. Adds overtones rather than removing them.", p:["ILEV","HP","FOLD","OLEV","FREQ","RESO","TYPE","DIST"]},
+    {n:"Filterbank", f:"filt", d:"Eight fixed bands — a low-pass at 90 Hz, six band-passes, a high-pass at 4 kHz — each with its own gain.", p:["A","B","C","D","E","F","G","H"]},
+    {n:"Frequency Warper", f:"pitch", d:"A true single-sideband frequency shifter, not a pitch shifter, so intervals go inharmonic. SBND blends the two sidebands.", p:["SPD","DEP","SPH","LAG","SHFT","SPRD","SBND","MIX"]},
+    {n:"Infinite Flanger", f:"mod", d:"Barber-pole motion: three crossfaded taps, so the sweep appears to rise or fall forever without ever turning around. SPD at centre holds still.", p:["SPD","DEP","TUNE","FDBK","LPF"]},
+    {n:"Low-Pass Filter", f:"filt", d:"Four poles, 24 dB per octave, with a tempo-synced LFO and stereo spread offsetting cutoff between the channels.", p:["SPD","DEP","SPH","LAG","FREQ","RESO","SPRD"]},
+    {n:"Multimode Filter", f:"filt", d:"Morphs low-pass to band-pass to high-pass, with an ADSR envelope modulating cutoff by a bipolar depth.", p:["ATK","DEC","SUS","REL","FREQ","RESO","TYPE","ENV"]},
+    {n:"Panoramic Chorus", f:"mod", d:"Three-voice chorus for widening, with a high-pass on the input and a stereo width control.", p:["DEP","SPD","HPF","WDTH","MIX"]},
+    {n:"Phase 98", f:"mod", d:"Six allpass stages; STG blends the tap after four with the tap after six. SHP morphs the LFO from a falling ramp through triangle to a rising one.", p:["SPD","DEP","SHP","LAG","FREQ","FDBK","STG","MIX"]},
+    {n:"Rumsklang Reverb", f:"space", d:"Large-space voicing with an explicit early-reflection bank in front of the tank.", p:["PRE","EARLY","DAMP","SIZE","LOWC","HIGHC"]},
+    {n:"Saturator Delay", f:"delay", d:"Delay on a 128th-note grid with ping-pong, and saturation in the feedback path so repeats degrade as they decay.", p:["TIME","X","WID","FDBK","HPF","LPF","MIX"]},
+    {n:"Steel Box Reverb", f:"space", d:"Plate character: heavy input diffusion, a bright tank, deliberately wide parameter ranges.", p:["SIZE","FDBK","BRIT","PRE","WDTH","DIFF","LOWC","MIX"]},
+    {n:"Supervoid Reverb", f:"space", d:"Room to huge. FREQ and GAIN form a feedback shelving filter — at full GAIN the treble stays in the tail, lowering it damps progressively.", p:["PRE","DEC","FREQ","GAIN","HPF","LPF","MIX"]},
+    {n:"Warble", f:"tape", d:"Tape wobble with a band-shaped signal and added noise. SPEED at zero makes the modulator a random walk. The noise deliberately sits outside the mix law.", p:["SPEED","DEPTH","BASE","WIDTH","N.LEV","N.HPF","STEREO","MIX"]}
+  ];
+
+  /* ---------------- machine reference ---------------- */
+  var list = document.getElementById("machineList");
+  MACHINES.forEach(function(m, i){
+    var fam = FAM[m.f];
+    var el = document.createElement("article");
+    el.className = "machine";
+    var params = m.p.length
+      ? '<ul class="params">' + m.p.map(function(p){ return "<li>"+p+"</li>"; }).join("") + "</ul>"
+      : '<ul class="params"><li>no parameters</li></ul>';
+    el.innerHTML =
+      '<h3><span class="idx">'+String(i).padStart(2,"0")+'</span>'+m.n+'</h3>' +
+      '<span class="fam" style="color:var('+fam.css+')">'+fam.name+'</span>' +
+      "<p>"+m.d+"</p>" + params;
+    list.appendChild(el);
+  });
+
+  /* ---------------- p-lock demo ---------------- */
+  var DEMO_KNOBS = ["TUNE","WIN","FDBK","DEP","HPF","LPF","SPD","MIX"];
+  var base = [76,48,32,0,0,127,32,64];
+  var locks = {};              /* "step:knob" -> value */
+  var trigs = {0:true,4:true,8:true,12:true};
+  var held = -1;
+
+  var stepsEl = document.getElementById("demoSteps");
+  var knobsEl = document.getElementById("demoKnobs");
+  var out = document.getElementById("demoOut");
+
+  function stepHasLock(s){
+    for (var k in locks) { if (locks.hasOwnProperty(k) && k.indexOf(s+":")===0) return true; }
+    return false;
+  }
+
+  function paint(){
+    for (var s=0; s<16; s++){
+      var b = stepsEl.children[s];
+      b.setAttribute("aria-pressed", trigs[s] ? "true" : "false");
+      b.classList.toggle("held", held===s);
+      b.classList.toggle("haslock", stepHasLock(s));
+    }
+    for (var k=0; k<8; k++){
+      var wrap = knobsEl.children[k];
+      var lockedVal = held>=0 ? locks[held+":"+k] : undefined;
+      var v = lockedVal !== undefined ? lockedVal : base[k];
+      wrap.classList.toggle("locked", lockedVal !== undefined);
+      wrap.querySelector(".val").textContent = (lockedVal!==undefined? "✱ ":"") + v;
+      wrap.querySelector(".ind").style.transform = "translateX(-50%) rotate(" + (-140 + (v/127)*280) + "deg)";
+      wrap.querySelector("button").setAttribute("aria-valuenow", v);
+    }
+  }
+
+  function say(msg){ out.innerHTML = msg; }
+
+  for (var s=0; s<16; s++){
+    (function(i){
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "stepbtn";
+      b.textContent = i+1;
+      b.setAttribute("aria-pressed", "false");
+      b.setAttribute("aria-label", "Step " + (i+1) + ". Press and hold, then turn a knob to lock it.");
+      function grab(){
+        held = i;
+        paint();
+        say("Holding <b>step "+(i+1)+"</b>. Turn a knob now and it locks on this step only." +
+            (stepHasLock(i) ? " This step already carries locks — shown with ✱." : ""));
+      }
+      function release(){
+        if (held !== i) return;
+        held = -1;
+        paint();
+        say("Released. Knobs are back to editing the base value for the whole pattern.");
+      }
+      b.addEventListener("pointerdown", function(e){ e.preventDefault(); grab(); });
+      b.addEventListener("pointerup", release);
+      b.addEventListener("pointerleave", release);
+      /* keyboard: toggle a sticky hold, so the gesture is reachable without a pointer */
+      b.addEventListener("keydown", function(e){
+        if (e.key === " " || e.key === "Enter"){
+          e.preventDefault();
+          if (held === i){ held = -1; paint(); say("Step "+(i+1)+" released."); }
+          else { grab(); say("Holding <b>step "+(i+1)+"</b> — use the knob buttons with arrow keys to lock a parameter. Press again to release."); }
+        }
+      });
+      stepsEl.appendChild(b);
+    })(s);
+  }
+
+  DEMO_KNOBS.forEach(function(label, k){
+    var wrap = document.createElement("div");
+    wrap.className = "knob";
+    wrap.innerHTML =
+      '<button type="button" role="slider" aria-valuemin="0" aria-valuemax="127" aria-valuenow="'+base[k]+'" ' +
+      'aria-label="'+label+'"><span class="ind"></span></button>' +
+      '<span class="lab">'+label+'</span><span class="val">'+base[k]+'</span>';
+
+    var btn = wrap.querySelector("button");
+
+    function nudge(delta){
+      if (held >= 0){
+        var key = held+":"+k;
+        var cur = locks[key] !== undefined ? locks[key] : base[k];
+        var nv = Math.max(0, Math.min(127, cur + delta));
+        locks[key] = nv;
+        trigs[held] = true;
+        paint();
+        say("<b>"+label+"</b> locked to <b>"+nv+"</b> on step "+(held+1)+". Every other parameter on that step still uses its base value.");
+      } else {
+        base[k] = Math.max(0, Math.min(127, base[k] + delta));
+        paint();
+        say("<b>"+label+"</b> base value is now <b>"+base[k]+"</b>, used by every step that does not lock it.");
+      }
+    }
+
+    var dragging = false, lastY = 0;
+    btn.addEventListener("pointerdown", function(e){ dragging = true; lastY = e.clientY; btn.setPointerCapture(e.pointerId); });
+    btn.addEventListener("pointermove", function(e){
+      if (!dragging) return;
+      var dy = lastY - e.clientY;
+      if (Math.abs(dy) < 3) return;
+      lastY = e.clientY;
+      nudge(dy > 0 ? 3 : -3);
+    });
+    btn.addEventListener("pointerup", function(){ dragging = false; });
+    btn.addEventListener("pointercancel", function(){ dragging = false; });
+    btn.addEventListener("keydown", function(e){
+      var d = 0;
+      if (e.key === "ArrowUp" || e.key === "ArrowRight") d = 1;
+      else if (e.key === "ArrowDown" || e.key === "ArrowLeft") d = -1;
+      else if (e.key === "PageUp") d = 10;
+      else if (e.key === "PageDown") d = -10;
+      if (d){ e.preventDefault(); nudge(d); }
+    });
+
+    knobsEl.appendChild(wrap);
+  });
+
+  paint();
+
+  /* ---------------- surface map ---------------- */
+  var mapSteps = document.getElementById("mapSteps");
+  for (var i=0; i<16; i++){
+    var d = document.createElement("div");
+    d.className = "stepbtn";
+    d.style.cursor = "default";
+    d.textContent = i+1;
+    mapSteps.appendChild(d);
+  }
+
+  /* pads 68-99, drawn rows 1-4 from the TOP: 92-99, 84-91, 76-83, 68-75 */
+  var PALETTE_ORDER = [92,93,94,95,96,97,98,99, 84,85,86,87,88,89,90,91, 76,77,78,79];
+  var SPECIAL = {
+    80:{t:"COND",  d:"Condition mode. With this lit, the jog sets a held step’s trig condition."},
+    81:{t:"MICRO", d:"Micro-timing mode. The jog nudges a held step by up to ±23 twenty-fourths of a step."},
+    82:{t:"RTRG",  d:"Retrig mode. The jog sets a held step’s retrig rate."},
+    83:{t:"LOCKS", d:"Clear every parameter lock on the step you are holding."},
+    68:{t:"PLAY",  d:"Start and stop the sequencer."},
+    69:{t:"FILL",  d:"Fill. Tap to latch, hold for momentary. Gates the FILL and !FIL conditions."},
+    70:{t:"SLOT",  d:"Focus FX slot 1 or 2 — the palette and the knobs follow it."},
+    71:{t:"PAGE",  d:"Cycle the pattern page, sixteen steps at a time, up to 64."},
+    72:{t:"EDIT",  d:"Cycle the knob page: FX, LFO 1, LFO 2, Global."},
+    73:{t:"COPY",  d:"Copy the visible pattern page."},
+    74:{t:"PASTE", d:"Paste onto the visible pattern page."},
+    75:{t:"CLEAR", d:"Tap clears the visible page; hold clears the whole pattern."}
+  };
+
+  var padsEl = document.getElementById("mapPads");
+  var padInfo = document.getElementById("padInfo");
+  var ROWS = [[92,99],[84,91],[76,83],[68,75]];
+
+  ROWS.forEach(function(r){
+    for (var n=r[0]; n<=r[1]; n++){
+      var pi = PALETTE_ORDER.indexOf(n);
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "pad";
+      var label, desc, color;
+      if (pi >= 0 && pi < MACHINES.length){
+        var m = MACHINES[pi];
+        label = m.n.replace(" ± Filter"," ±").replace(" Reverb","").replace(" Filter"," Flt").replace("Frequency ","Freq ").replace("Infinite ","Inf ").replace("Panoramic ","Pan ").replace("Multimode","Multi").replace("Low-Pass Filter","LPF").replace("Saturator ","Sat ");
+        desc = "<b>Palette — " + m.n + "</b>. Tap to load it into the focused slot. " + m.d;
+        color = "var(" + FAM[m.f].css + ")";
+        b.style.borderColor = color;
+        b.style.color = color;
+      } else if (SPECIAL[n]){
+        label = SPECIAL[n].t;
+        desc = "<b>" + SPECIAL[n].t + "</b>. " + SPECIAL[n].d;
+        color = "var(--rust)";
+        b.style.borderColor = color;
+        b.style.color = color;
+        b.style.background = "rgba(228,87,46,.08)";
+      } else {
+        label = "—";
+        desc = "Unused.";
+      }
+      b.innerHTML = "<span>" + label + "</span>";
+      b.setAttribute("aria-label", "Pad " + n + ": " + label);
+      (function(text){
+        b.addEventListener("click", function(){ padInfo.innerHTML = text; });
+      })(desc + " <span style='color:var(--ink-3)'>(pad " + n + ")</span>");
+      padsEl.appendChild(b);
+    }
+  });
+
+  /* ---------------- tabs ---------------- */
+  var tabs = [document.getElementById("tab-ow"), document.getElementById("tab-wk")];
+  var panels = [document.getElementById("panel-ow"), document.getElementById("panel-wk")];
+  function selectTab(idx){
+    tabs.forEach(function(t,i){
+      t.setAttribute("aria-selected", i===idx ? "true":"false");
+      t.tabIndex = i===idx ? 0 : -1;
+      panels[i].hidden = i!==idx;
+    });
+  }
+  tabs.forEach(function(t,i){
+    t.addEventListener("click", function(){ selectTab(i); });
+    t.addEventListener("keydown", function(e){
+      if (e.key === "ArrowRight" || e.key === "ArrowLeft"){
+        e.preventDefault();
+        var next = (i + (e.key==="ArrowRight"?1:tabs.length-1)) % tabs.length;
+        selectTab(next); tabs[next].focus();
+      }
+    });
+  });
+})();
+</script>
+</body>
+</html>
