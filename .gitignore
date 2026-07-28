@@ -1,0 +1,11 @@
+build/
+
+# Elektron's user manual is the reference this project is written from, but it
+# is their copyrighted document — keep a local working copy, never redistribute
+# it. Fetch your own from elektron.se; the URL is in docs/REFERENCE.md.
+docs/*.local.txt
+docs/*.pdf
+
+.DS_Store
+.claude/
+.playwright-mcp/

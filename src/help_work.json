@@ -1,0 +1,97 @@
+{
+  "title": "Work",
+  "children": [
+    {
+      "title": "What it is",
+      "lines": [
+        "Two insert FX slots",
+        "in series, each",
+        "loaded with one of",
+        "20 FX machines.",
+        "Two FX LFOs can",
+        "modulate any slot",
+        "parameter."
+      ]
+    },
+    {
+      "title": "Controls",
+      "lines": [
+        "Jog turn: page",
+        "Jog click: home",
+        "Shift+click: swap",
+        "Knobs 1-8: the",
+        "current page's",
+        "parameters.",
+        "Pads stay with Move",
+        "in a slot editor."
+      ]
+    },
+    {
+      "title": "Pages",
+      "lines": [
+        "MACHINES picks the",
+        "two machines and",
+        "the global dry/wet.",
+        "FX 1 and FX 2 edit",
+        "8 params each.",
+        "LFO 1 and LFO 2",
+        "modulate them."
+      ]
+    },
+    {
+      "title": "Machines 1",
+      "lines": [
+        "Bypass",
+        "Chrono Pitch",
+        "Comb +/- Filter",
+        "Compressor",
+        "Daisy Delay",
+        "Degrader",
+        "Dirtshaper",
+        "Filter Folder",
+        "Filterbank",
+        "Frequency Warper"
+      ]
+    },
+    {
+      "title": "Machines 2",
+      "lines": [
+        "Infinite Flanger",
+        "Low-Pass Filter",
+        "Multimode Filter",
+        "Panoramic Chorus",
+        "Phase 98",
+        "Rumsklang Reverb",
+        "Saturator Delay",
+        "Steel Box Reverb",
+        "Supervoid Reverb",
+        "Warble"
+      ]
+    },
+    {
+      "title": "FX LFOs",
+      "lines": [
+        "DEST picks a slot",
+        "parameter, Off to",
+        "disable. DEP is",
+        "bipolar at 64.",
+        "SPD and MULT are",
+        "on the tempo grid.",
+        "TRIG Retrig resets",
+        "on each note."
+      ]
+    },
+    {
+      "title": "Notes",
+      "lines": [
+        "Loading a machine",
+        "installs its own",
+        "defaults.",
+        "Changing machine",
+        "clears that slot,",
+        "so no reverb tail",
+        "leaks across."
+      ]
+    }
+  ]
+}

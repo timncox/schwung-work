@@ -1,0 +1,133 @@
+{
+  "title": "Overwork",
+  "children": [
+    {
+      "title": "What it is",
+      "lines": [
+        "20 FX machines on",
+        "the live input, with",
+        "a step sequencer",
+        "that parameter-locks",
+        "them.",
+        "Two insert slots in",
+        "series, two FX LFOs."
+      ]
+    },
+    {
+      "title": "The main gesture",
+      "lines": [
+        "HOLD a step button",
+        "and TURN a knob.",
+        "That parameter is",
+        "now locked on that",
+        "step.",
+        "Hold+Shift+knob",
+        "edits the base",
+        "value instead."
+      ]
+    },
+    {
+      "title": "Step buttons",
+      "lines": [
+        "Tap: trig on/off",
+        "Hold+knob: lock",
+        "Hold+jog: set the",
+        "attribute the mode",
+        "pad selected",
+        "Hold+pad row3 r:",
+        "clear that step's",
+        "locks"
+      ]
+    },
+    {
+      "title": "Step LEDs",
+      "lines": [
+        "Dim: in length,",
+        "no trig",
+        "White: plain trig",
+        "Green: has locks",
+        "Cyan: conditional",
+        "Red: playhead",
+        "Bright green: held"
+      ]
+    },
+    {
+      "title": "Pads rows 1-3",
+      "lines": [
+        "Machine palette.",
+        "Tap to load one",
+        "into the focused",
+        "slot. The loaded",
+        "machine is white.",
+        "Last four of row 3:",
+        "COND, MICRO, RTRG,",
+        "and lock clear."
+      ]
+    },
+    {
+      "title": "Pad row 4",
+      "lines": [
+        "Play/Stop, Fill,",
+        "Slot focus,",
+        "Pattern page,",
+        "Edit page,",
+        "Copy, Paste,",
+        "Clear.",
+        "Clear: tap = page,",
+        "hold = whole thing."
+      ]
+    },
+    {
+      "title": "Knobs and jog",
+      "lines": [
+        "Knobs 1-8 are the",
+        "edit page's eight",
+        "parameters.",
+        "Jog sets pattern",
+        "length, or the held",
+        "step's attribute.",
+        "Jog click cycles",
+        "the edit page."
+      ]
+    },
+    {
+      "title": "Trig conditions",
+      "lines": [
+        "FILL and !FIL react",
+        "to the Fill pad.",
+        "PRE and !PRE follow",
+        "the last condition.",
+        "1ST fires only on",
+        "the first pass.",
+        "A:B fires on pass A",
+        "of every B."
+      ]
+    },
+    {
+      "title": "Lock behaviour",
+      "lines": [
+        "Each firing trig is",
+        "a full snapshot:",
+        "locked params take",
+        "their value, others",
+        "go back to base.",
+        "A trig that does",
+        "not fire changes",
+        "nothing."
+      ]
+    },
+    {
+      "title": "Notes",
+      "lines": [
+        "Retrig restarts the",
+        "LFOs and the filter",
+        "envelope, it does",
+        "not stutter audio.",
+        "Use Degrader FREZ",
+        "for that.",
+        "Start/continue",
+        "restarts the pattern."
+      ]
+    }
+  ]
+}
