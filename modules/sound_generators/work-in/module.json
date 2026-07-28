@@ -85,20 +85,20 @@
               "default": 127
             },
             {
-              "level": "fx1p",
-              "name": "FX 1 Params"
+              "level": "fx1sel",
+              "label": "FX 1 Parameters"
             },
             {
-              "level": "fx2p",
-              "name": "FX 2 Params"
+              "level": "fx2sel",
+              "label": "FX 2 Parameters"
             },
             {
               "level": "lfo1",
-              "name": "FX LFO 1"
+              "label": "FX LFO 1"
             },
             {
               "level": "lfo2",
-              "name": "FX LFO 2"
+              "label": "FX LFO 2"
             }
           ],
           "knobs": [
@@ -107,72 +107,247 @@
             "mix"
           ]
         },
-        "fx1p": {
-          "name": "FX 1 Params",
+        "fx1sel": {
+          "name": "FX 1 Parameters",
+          "params": [
+            {
+              "level": "fx1_bypass",
+              "label": "Bypass"
+            },
+            {
+              "level": "fx1_chrono_pitch",
+              "label": "Chrono Pitch"
+            },
+            {
+              "level": "fx1_comb_filter",
+              "label": "Comb +/- Filter"
+            },
+            {
+              "level": "fx1_compressor",
+              "label": "Compressor"
+            },
+            {
+              "level": "fx1_daisy_delay",
+              "label": "Daisy Delay"
+            },
+            {
+              "level": "fx1_degrader",
+              "label": "Degrader"
+            },
+            {
+              "level": "fx1_dirtshaper",
+              "label": "Dirtshaper"
+            },
+            {
+              "level": "fx1_filter_folder",
+              "label": "Filter Folder"
+            },
+            {
+              "level": "fx1_filterbank",
+              "label": "Filterbank"
+            },
+            {
+              "level": "fx1_frequency_warper",
+              "label": "Frequency Warper"
+            },
+            {
+              "level": "fx1_infinite_flanger",
+              "label": "Infinite Flanger"
+            },
+            {
+              "level": "fx1_low_pass_filter",
+              "label": "Low-Pass Filter"
+            },
+            {
+              "level": "fx1_multimode_filter",
+              "label": "Multimode Filter"
+            },
+            {
+              "level": "fx1_panoramic_chorus",
+              "label": "Panoramic Chorus"
+            },
+            {
+              "level": "fx1_phase_98",
+              "label": "Phase 98"
+            },
+            {
+              "level": "fx1_rumsklang_reverb",
+              "label": "Rumsklang Reverb"
+            },
+            {
+              "level": "fx1_saturator_delay",
+              "label": "Saturator Delay"
+            },
+            {
+              "level": "fx1_steel_box_reverb",
+              "label": "Steel Box Reverb"
+            },
+            {
+              "level": "fx1_supervoid_reverb",
+              "label": "Supervoid Reverb"
+            },
+            {
+              "level": "fx1_warble",
+              "label": "Warble"
+            }
+          ]
+        },
+        "fx2sel": {
+          "name": "FX 2 Parameters",
+          "params": [
+            {
+              "level": "fx2_bypass",
+              "label": "Bypass"
+            },
+            {
+              "level": "fx2_chrono_pitch",
+              "label": "Chrono Pitch"
+            },
+            {
+              "level": "fx2_comb_filter",
+              "label": "Comb +/- Filter"
+            },
+            {
+              "level": "fx2_compressor",
+              "label": "Compressor"
+            },
+            {
+              "level": "fx2_daisy_delay",
+              "label": "Daisy Delay"
+            },
+            {
+              "level": "fx2_degrader",
+              "label": "Degrader"
+            },
+            {
+              "level": "fx2_dirtshaper",
+              "label": "Dirtshaper"
+            },
+            {
+              "level": "fx2_filter_folder",
+              "label": "Filter Folder"
+            },
+            {
+              "level": "fx2_filterbank",
+              "label": "Filterbank"
+            },
+            {
+              "level": "fx2_frequency_warper",
+              "label": "Frequency Warper"
+            },
+            {
+              "level": "fx2_infinite_flanger",
+              "label": "Infinite Flanger"
+            },
+            {
+              "level": "fx2_low_pass_filter",
+              "label": "Low-Pass Filter"
+            },
+            {
+              "level": "fx2_multimode_filter",
+              "label": "Multimode Filter"
+            },
+            {
+              "level": "fx2_panoramic_chorus",
+              "label": "Panoramic Chorus"
+            },
+            {
+              "level": "fx2_phase_98",
+              "label": "Phase 98"
+            },
+            {
+              "level": "fx2_rumsklang_reverb",
+              "label": "Rumsklang Reverb"
+            },
+            {
+              "level": "fx2_saturator_delay",
+              "label": "Saturator Delay"
+            },
+            {
+              "level": "fx2_steel_box_reverb",
+              "label": "Steel Box Reverb"
+            },
+            {
+              "level": "fx2_supervoid_reverb",
+              "label": "Supervoid Reverb"
+            },
+            {
+              "level": "fx2_warble",
+              "label": "Warble"
+            }
+          ]
+        },
+        "fx1_bypass": {
+          "name": "Bypass",
           "params": [
             {
               "key": "fx1_p1",
-              "name": "A",
+              "name": "(no parameters)",
               "type": "int",
               "min": 0,
-              "max": 127,
-              "default": 64
+              "max": 127
+            }
+          ],
+          "knobs": []
+        },
+        "fx1_chrono_pitch": {
+          "name": "Chrono Pitch",
+          "params": [
+            {
+              "key": "fx1_p1",
+              "name": "TUNE",
+              "type": "int",
+              "min": 0,
+              "max": 127
             },
             {
               "key": "fx1_p2",
-              "name": "B",
+              "name": "WIN",
               "type": "int",
               "min": 0,
-              "max": 127,
-              "default": 64
+              "max": 127
             },
             {
               "key": "fx1_p3",
-              "name": "C",
+              "name": "FDBK",
               "type": "int",
               "min": 0,
-              "max": 127,
-              "default": 64
+              "max": 127
             },
             {
               "key": "fx1_p4",
-              "name": "D",
+              "name": "DEP",
               "type": "int",
               "min": 0,
-              "max": 127,
-              "default": 64
+              "max": 127
             },
             {
               "key": "fx1_p5",
-              "name": "E",
+              "name": "HPF",
               "type": "int",
               "min": 0,
-              "max": 127,
-              "default": 64
+              "max": 127
             },
             {
               "key": "fx1_p6",
-              "name": "F",
+              "name": "LPF",
               "type": "int",
               "min": 0,
-              "max": 127,
-              "default": 64
+              "max": 127
             },
             {
               "key": "fx1_p7",
-              "name": "G",
+              "name": "SPD",
               "type": "int",
               "min": 0,
-              "max": 127,
-              "default": 64
+              "max": 127
             },
             {
               "key": "fx1_p8",
-              "name": "H",
+              "name": "MIX",
               "type": "int",
               "min": 0,
-              "max": 127,
-              "default": 64
+              "max": 127
             }
           ],
           "knobs": [
@@ -186,72 +361,2457 @@
             "fx1_p8"
           ]
         },
-        "fx2p": {
-          "name": "FX 2 Params",
+        "fx1_comb_filter": {
+          "name": "Comb +/- Filter",
+          "params": [
+            {
+              "key": "fx1_p1",
+              "name": "SPD",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p2",
+              "name": "DEP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p3",
+              "name": "SPH",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p4",
+              "name": "DTUN",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p5",
+              "name": "FREQ",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p6",
+              "name": "FDBK",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p7",
+              "name": "LPF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p8",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx1_p1",
+            "fx1_p2",
+            "fx1_p3",
+            "fx1_p4",
+            "fx1_p5",
+            "fx1_p6",
+            "fx1_p7",
+            "fx1_p8"
+          ]
+        },
+        "fx1_compressor": {
+          "name": "Compressor",
+          "params": [
+            {
+              "key": "fx1_p1",
+              "name": "THR",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p2",
+              "name": "ATK",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p3",
+              "name": "REL",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p4",
+              "name": "MUP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p5",
+              "name": "RAT",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p6",
+              "name": "SCS",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p7",
+              "name": "SCF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p8",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx1_p1",
+            "fx1_p2",
+            "fx1_p3",
+            "fx1_p4",
+            "fx1_p5",
+            "fx1_p6",
+            "fx1_p7",
+            "fx1_p8"
+          ]
+        },
+        "fx1_daisy_delay": {
+          "name": "Daisy Delay",
+          "params": [
+            {
+              "key": "fx1_p1",
+              "name": "DRV",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p2",
+              "name": "TIME",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p3",
+              "name": "FDBK",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p4",
+              "name": "WIDH",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p5",
+              "name": "MOD",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p6",
+              "name": "SKEW",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p7",
+              "name": "FILT",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p8",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx1_p1",
+            "fx1_p2",
+            "fx1_p3",
+            "fx1_p4",
+            "fx1_p5",
+            "fx1_p6",
+            "fx1_p7",
+            "fx1_p8"
+          ]
+        },
+        "fx1_degrader": {
+          "name": "Degrader",
+          "params": [
+            {
+              "key": "fx1_p1",
+              "name": "BR",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p2",
+              "name": "OVER",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p3",
+              "name": "SRR",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p4",
+              "name": "DROP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p5",
+              "name": "RATE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p6",
+              "name": "DEP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p7",
+              "name": "FREZ",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p8",
+              "name": "F.TIM",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx1_p1",
+            "fx1_p2",
+            "fx1_p3",
+            "fx1_p4",
+            "fx1_p5",
+            "fx1_p6",
+            "fx1_p7",
+            "fx1_p8"
+          ]
+        },
+        "fx1_dirtshaper": {
+          "name": "Dirtshaper",
+          "params": [
+            {
+              "key": "fx1_p1",
+              "name": "DRV",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p2",
+              "name": "RECT",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p3",
+              "name": "HPF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p4",
+              "name": "LPF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p5",
+              "name": "NOIS",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p6",
+              "name": "N.FRQ",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p7",
+              "name": "N.RES",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p8",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx1_p1",
+            "fx1_p2",
+            "fx1_p3",
+            "fx1_p4",
+            "fx1_p5",
+            "fx1_p6",
+            "fx1_p7",
+            "fx1_p8"
+          ]
+        },
+        "fx1_filter_folder": {
+          "name": "Filter Folder",
+          "params": [
+            {
+              "key": "fx1_p1",
+              "name": "ILEV",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p2",
+              "name": "HP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p3",
+              "name": "FOLD",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p4",
+              "name": "OLEV",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p5",
+              "name": "FREQ",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p6",
+              "name": "RESO",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p7",
+              "name": "TYPE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p8",
+              "name": "DIST",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx1_p1",
+            "fx1_p2",
+            "fx1_p3",
+            "fx1_p4",
+            "fx1_p5",
+            "fx1_p6",
+            "fx1_p7",
+            "fx1_p8"
+          ]
+        },
+        "fx1_filterbank": {
+          "name": "Filterbank",
+          "params": [
+            {
+              "key": "fx1_p1",
+              "name": "90Hz",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p2",
+              "name": "122Hz",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p3",
+              "name": "225Hz",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p4",
+              "name": "418Hz",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p5",
+              "name": "777Hz",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p6",
+              "name": "1k4",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p7",
+              "name": "2k7",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p8",
+              "name": "4k+",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx1_p1",
+            "fx1_p2",
+            "fx1_p3",
+            "fx1_p4",
+            "fx1_p5",
+            "fx1_p6",
+            "fx1_p7",
+            "fx1_p8"
+          ]
+        },
+        "fx1_frequency_warper": {
+          "name": "Frequency Warper",
+          "params": [
+            {
+              "key": "fx1_p1",
+              "name": "SPD",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p2",
+              "name": "DEP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p3",
+              "name": "SPH",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p4",
+              "name": "LAG",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p5",
+              "name": "SHFT",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p6",
+              "name": "SPRD",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p7",
+              "name": "SBND",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p8",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx1_p1",
+            "fx1_p2",
+            "fx1_p3",
+            "fx1_p4",
+            "fx1_p5",
+            "fx1_p6",
+            "fx1_p7",
+            "fx1_p8"
+          ]
+        },
+        "fx1_infinite_flanger": {
+          "name": "Infinite Flanger",
+          "params": [
+            {
+              "key": "fx1_p1",
+              "name": "SPD",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p2",
+              "name": "DEP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p3",
+              "name": "TUNE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p4",
+              "name": "FDBK",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p5",
+              "name": "LPF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx1_p1",
+            "fx1_p2",
+            "fx1_p3",
+            "fx1_p4",
+            "fx1_p5"
+          ]
+        },
+        "fx1_low_pass_filter": {
+          "name": "Low-Pass Filter",
+          "params": [
+            {
+              "key": "fx1_p1",
+              "name": "SPD",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p2",
+              "name": "DEP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p3",
+              "name": "SPH",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p4",
+              "name": "LAG",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p5",
+              "name": "FREQ",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p6",
+              "name": "RESO",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p7",
+              "name": "SPRD",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx1_p1",
+            "fx1_p2",
+            "fx1_p3",
+            "fx1_p4",
+            "fx1_p5",
+            "fx1_p6",
+            "fx1_p7"
+          ]
+        },
+        "fx1_multimode_filter": {
+          "name": "Multimode Filter",
+          "params": [
+            {
+              "key": "fx1_p1",
+              "name": "ATK",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p2",
+              "name": "DEC",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p3",
+              "name": "SUS",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p4",
+              "name": "REL",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p5",
+              "name": "FREQ",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p6",
+              "name": "RESO",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p7",
+              "name": "TYPE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p8",
+              "name": "ENV",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx1_p1",
+            "fx1_p2",
+            "fx1_p3",
+            "fx1_p4",
+            "fx1_p5",
+            "fx1_p6",
+            "fx1_p7",
+            "fx1_p8"
+          ]
+        },
+        "fx1_panoramic_chorus": {
+          "name": "Panoramic Chorus",
+          "params": [
+            {
+              "key": "fx1_p1",
+              "name": "DEP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p2",
+              "name": "SPD",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p3",
+              "name": "HPF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p4",
+              "name": "WDTH",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p5",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx1_p1",
+            "fx1_p2",
+            "fx1_p3",
+            "fx1_p4",
+            "fx1_p5"
+          ]
+        },
+        "fx1_phase_98": {
+          "name": "Phase 98",
+          "params": [
+            {
+              "key": "fx1_p1",
+              "name": "SPD",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p2",
+              "name": "DEP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p3",
+              "name": "SHP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p4",
+              "name": "LAG",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p5",
+              "name": "FREQ",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p6",
+              "name": "FDBK",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p7",
+              "name": "STG",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p8",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx1_p1",
+            "fx1_p2",
+            "fx1_p3",
+            "fx1_p4",
+            "fx1_p5",
+            "fx1_p6",
+            "fx1_p7",
+            "fx1_p8"
+          ]
+        },
+        "fx1_rumsklang_reverb": {
+          "name": "Rumsklang Reverb",
+          "params": [
+            {
+              "key": "fx1_p1",
+              "name": "PRE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p2",
+              "name": "EARLY",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p3",
+              "name": "DAMP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p4",
+              "name": "SIZE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p5",
+              "name": "LOWC",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p6",
+              "name": "HIGHC",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx1_p1",
+            "fx1_p2",
+            "fx1_p3",
+            "fx1_p4",
+            "fx1_p5",
+            "fx1_p6"
+          ]
+        },
+        "fx1_saturator_delay": {
+          "name": "Saturator Delay",
+          "params": [
+            {
+              "key": "fx1_p1",
+              "name": "TIME",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p2",
+              "name": "X",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p3",
+              "name": "WID",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p4",
+              "name": "FDBK",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p5",
+              "name": "HPF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p6",
+              "name": "LPF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p7",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx1_p1",
+            "fx1_p2",
+            "fx1_p3",
+            "fx1_p4",
+            "fx1_p5",
+            "fx1_p6",
+            "fx1_p7"
+          ]
+        },
+        "fx1_steel_box_reverb": {
+          "name": "Steel Box Reverb",
+          "params": [
+            {
+              "key": "fx1_p1",
+              "name": "SIZE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p2",
+              "name": "FDBK",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p3",
+              "name": "BRIT",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p4",
+              "name": "PRE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p5",
+              "name": "WDTH",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p6",
+              "name": "DIFF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p7",
+              "name": "LOWC",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p8",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx1_p1",
+            "fx1_p2",
+            "fx1_p3",
+            "fx1_p4",
+            "fx1_p5",
+            "fx1_p6",
+            "fx1_p7",
+            "fx1_p8"
+          ]
+        },
+        "fx1_supervoid_reverb": {
+          "name": "Supervoid Reverb",
+          "params": [
+            {
+              "key": "fx1_p1",
+              "name": "PRE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p2",
+              "name": "DEC",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p3",
+              "name": "FREQ",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p4",
+              "name": "GAIN",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p5",
+              "name": "HPF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p6",
+              "name": "LPF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p7",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx1_p1",
+            "fx1_p2",
+            "fx1_p3",
+            "fx1_p4",
+            "fx1_p5",
+            "fx1_p6",
+            "fx1_p7"
+          ]
+        },
+        "fx1_warble": {
+          "name": "Warble",
+          "params": [
+            {
+              "key": "fx1_p1",
+              "name": "SPEED",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p2",
+              "name": "DEPTH",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p3",
+              "name": "BASE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p4",
+              "name": "WIDTH",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p5",
+              "name": "N.LEV",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p6",
+              "name": "N.HPF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p7",
+              "name": "STEREO",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx1_p8",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx1_p1",
+            "fx1_p2",
+            "fx1_p3",
+            "fx1_p4",
+            "fx1_p5",
+            "fx1_p6",
+            "fx1_p7",
+            "fx1_p8"
+          ]
+        },
+        "fx2_bypass": {
+          "name": "Bypass",
           "params": [
             {
               "key": "fx2_p1",
-              "name": "A",
+              "name": "(no parameters)",
               "type": "int",
               "min": 0,
-              "max": 127,
-              "default": 64
+              "max": 127
+            }
+          ],
+          "knobs": []
+        },
+        "fx2_chrono_pitch": {
+          "name": "Chrono Pitch",
+          "params": [
+            {
+              "key": "fx2_p1",
+              "name": "TUNE",
+              "type": "int",
+              "min": 0,
+              "max": 127
             },
             {
               "key": "fx2_p2",
-              "name": "B",
+              "name": "WIN",
               "type": "int",
               "min": 0,
-              "max": 127,
-              "default": 64
+              "max": 127
             },
             {
               "key": "fx2_p3",
-              "name": "C",
+              "name": "FDBK",
               "type": "int",
               "min": 0,
-              "max": 127,
-              "default": 64
+              "max": 127
             },
             {
               "key": "fx2_p4",
-              "name": "D",
+              "name": "DEP",
               "type": "int",
               "min": 0,
-              "max": 127,
-              "default": 64
+              "max": 127
             },
             {
               "key": "fx2_p5",
-              "name": "E",
+              "name": "HPF",
               "type": "int",
               "min": 0,
-              "max": 127,
-              "default": 64
+              "max": 127
             },
             {
               "key": "fx2_p6",
-              "name": "F",
+              "name": "LPF",
               "type": "int",
               "min": 0,
-              "max": 127,
-              "default": 64
+              "max": 127
             },
             {
               "key": "fx2_p7",
-              "name": "G",
+              "name": "SPD",
               "type": "int",
               "min": 0,
-              "max": 127,
-              "default": 64
+              "max": 127
             },
             {
               "key": "fx2_p8",
-              "name": "H",
+              "name": "MIX",
               "type": "int",
               "min": 0,
-              "max": 127,
-              "default": 64
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx2_p1",
+            "fx2_p2",
+            "fx2_p3",
+            "fx2_p4",
+            "fx2_p5",
+            "fx2_p6",
+            "fx2_p7",
+            "fx2_p8"
+          ]
+        },
+        "fx2_comb_filter": {
+          "name": "Comb +/- Filter",
+          "params": [
+            {
+              "key": "fx2_p1",
+              "name": "SPD",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p2",
+              "name": "DEP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p3",
+              "name": "SPH",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p4",
+              "name": "DTUN",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p5",
+              "name": "FREQ",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p6",
+              "name": "FDBK",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p7",
+              "name": "LPF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p8",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx2_p1",
+            "fx2_p2",
+            "fx2_p3",
+            "fx2_p4",
+            "fx2_p5",
+            "fx2_p6",
+            "fx2_p7",
+            "fx2_p8"
+          ]
+        },
+        "fx2_compressor": {
+          "name": "Compressor",
+          "params": [
+            {
+              "key": "fx2_p1",
+              "name": "THR",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p2",
+              "name": "ATK",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p3",
+              "name": "REL",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p4",
+              "name": "MUP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p5",
+              "name": "RAT",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p6",
+              "name": "SCS",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p7",
+              "name": "SCF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p8",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx2_p1",
+            "fx2_p2",
+            "fx2_p3",
+            "fx2_p4",
+            "fx2_p5",
+            "fx2_p6",
+            "fx2_p7",
+            "fx2_p8"
+          ]
+        },
+        "fx2_daisy_delay": {
+          "name": "Daisy Delay",
+          "params": [
+            {
+              "key": "fx2_p1",
+              "name": "DRV",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p2",
+              "name": "TIME",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p3",
+              "name": "FDBK",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p4",
+              "name": "WIDH",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p5",
+              "name": "MOD",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p6",
+              "name": "SKEW",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p7",
+              "name": "FILT",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p8",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx2_p1",
+            "fx2_p2",
+            "fx2_p3",
+            "fx2_p4",
+            "fx2_p5",
+            "fx2_p6",
+            "fx2_p7",
+            "fx2_p8"
+          ]
+        },
+        "fx2_degrader": {
+          "name": "Degrader",
+          "params": [
+            {
+              "key": "fx2_p1",
+              "name": "BR",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p2",
+              "name": "OVER",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p3",
+              "name": "SRR",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p4",
+              "name": "DROP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p5",
+              "name": "RATE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p6",
+              "name": "DEP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p7",
+              "name": "FREZ",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p8",
+              "name": "F.TIM",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx2_p1",
+            "fx2_p2",
+            "fx2_p3",
+            "fx2_p4",
+            "fx2_p5",
+            "fx2_p6",
+            "fx2_p7",
+            "fx2_p8"
+          ]
+        },
+        "fx2_dirtshaper": {
+          "name": "Dirtshaper",
+          "params": [
+            {
+              "key": "fx2_p1",
+              "name": "DRV",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p2",
+              "name": "RECT",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p3",
+              "name": "HPF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p4",
+              "name": "LPF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p5",
+              "name": "NOIS",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p6",
+              "name": "N.FRQ",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p7",
+              "name": "N.RES",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p8",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx2_p1",
+            "fx2_p2",
+            "fx2_p3",
+            "fx2_p4",
+            "fx2_p5",
+            "fx2_p6",
+            "fx2_p7",
+            "fx2_p8"
+          ]
+        },
+        "fx2_filter_folder": {
+          "name": "Filter Folder",
+          "params": [
+            {
+              "key": "fx2_p1",
+              "name": "ILEV",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p2",
+              "name": "HP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p3",
+              "name": "FOLD",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p4",
+              "name": "OLEV",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p5",
+              "name": "FREQ",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p6",
+              "name": "RESO",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p7",
+              "name": "TYPE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p8",
+              "name": "DIST",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx2_p1",
+            "fx2_p2",
+            "fx2_p3",
+            "fx2_p4",
+            "fx2_p5",
+            "fx2_p6",
+            "fx2_p7",
+            "fx2_p8"
+          ]
+        },
+        "fx2_filterbank": {
+          "name": "Filterbank",
+          "params": [
+            {
+              "key": "fx2_p1",
+              "name": "90Hz",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p2",
+              "name": "122Hz",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p3",
+              "name": "225Hz",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p4",
+              "name": "418Hz",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p5",
+              "name": "777Hz",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p6",
+              "name": "1k4",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p7",
+              "name": "2k7",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p8",
+              "name": "4k+",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx2_p1",
+            "fx2_p2",
+            "fx2_p3",
+            "fx2_p4",
+            "fx2_p5",
+            "fx2_p6",
+            "fx2_p7",
+            "fx2_p8"
+          ]
+        },
+        "fx2_frequency_warper": {
+          "name": "Frequency Warper",
+          "params": [
+            {
+              "key": "fx2_p1",
+              "name": "SPD",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p2",
+              "name": "DEP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p3",
+              "name": "SPH",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p4",
+              "name": "LAG",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p5",
+              "name": "SHFT",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p6",
+              "name": "SPRD",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p7",
+              "name": "SBND",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p8",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx2_p1",
+            "fx2_p2",
+            "fx2_p3",
+            "fx2_p4",
+            "fx2_p5",
+            "fx2_p6",
+            "fx2_p7",
+            "fx2_p8"
+          ]
+        },
+        "fx2_infinite_flanger": {
+          "name": "Infinite Flanger",
+          "params": [
+            {
+              "key": "fx2_p1",
+              "name": "SPD",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p2",
+              "name": "DEP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p3",
+              "name": "TUNE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p4",
+              "name": "FDBK",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p5",
+              "name": "LPF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx2_p1",
+            "fx2_p2",
+            "fx2_p3",
+            "fx2_p4",
+            "fx2_p5"
+          ]
+        },
+        "fx2_low_pass_filter": {
+          "name": "Low-Pass Filter",
+          "params": [
+            {
+              "key": "fx2_p1",
+              "name": "SPD",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p2",
+              "name": "DEP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p3",
+              "name": "SPH",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p4",
+              "name": "LAG",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p5",
+              "name": "FREQ",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p6",
+              "name": "RESO",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p7",
+              "name": "SPRD",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx2_p1",
+            "fx2_p2",
+            "fx2_p3",
+            "fx2_p4",
+            "fx2_p5",
+            "fx2_p6",
+            "fx2_p7"
+          ]
+        },
+        "fx2_multimode_filter": {
+          "name": "Multimode Filter",
+          "params": [
+            {
+              "key": "fx2_p1",
+              "name": "ATK",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p2",
+              "name": "DEC",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p3",
+              "name": "SUS",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p4",
+              "name": "REL",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p5",
+              "name": "FREQ",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p6",
+              "name": "RESO",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p7",
+              "name": "TYPE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p8",
+              "name": "ENV",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx2_p1",
+            "fx2_p2",
+            "fx2_p3",
+            "fx2_p4",
+            "fx2_p5",
+            "fx2_p6",
+            "fx2_p7",
+            "fx2_p8"
+          ]
+        },
+        "fx2_panoramic_chorus": {
+          "name": "Panoramic Chorus",
+          "params": [
+            {
+              "key": "fx2_p1",
+              "name": "DEP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p2",
+              "name": "SPD",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p3",
+              "name": "HPF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p4",
+              "name": "WDTH",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p5",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx2_p1",
+            "fx2_p2",
+            "fx2_p3",
+            "fx2_p4",
+            "fx2_p5"
+          ]
+        },
+        "fx2_phase_98": {
+          "name": "Phase 98",
+          "params": [
+            {
+              "key": "fx2_p1",
+              "name": "SPD",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p2",
+              "name": "DEP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p3",
+              "name": "SHP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p4",
+              "name": "LAG",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p5",
+              "name": "FREQ",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p6",
+              "name": "FDBK",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p7",
+              "name": "STG",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p8",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx2_p1",
+            "fx2_p2",
+            "fx2_p3",
+            "fx2_p4",
+            "fx2_p5",
+            "fx2_p6",
+            "fx2_p7",
+            "fx2_p8"
+          ]
+        },
+        "fx2_rumsklang_reverb": {
+          "name": "Rumsklang Reverb",
+          "params": [
+            {
+              "key": "fx2_p1",
+              "name": "PRE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p2",
+              "name": "EARLY",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p3",
+              "name": "DAMP",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p4",
+              "name": "SIZE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p5",
+              "name": "LOWC",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p6",
+              "name": "HIGHC",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx2_p1",
+            "fx2_p2",
+            "fx2_p3",
+            "fx2_p4",
+            "fx2_p5",
+            "fx2_p6"
+          ]
+        },
+        "fx2_saturator_delay": {
+          "name": "Saturator Delay",
+          "params": [
+            {
+              "key": "fx2_p1",
+              "name": "TIME",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p2",
+              "name": "X",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p3",
+              "name": "WID",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p4",
+              "name": "FDBK",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p5",
+              "name": "HPF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p6",
+              "name": "LPF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p7",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx2_p1",
+            "fx2_p2",
+            "fx2_p3",
+            "fx2_p4",
+            "fx2_p5",
+            "fx2_p6",
+            "fx2_p7"
+          ]
+        },
+        "fx2_steel_box_reverb": {
+          "name": "Steel Box Reverb",
+          "params": [
+            {
+              "key": "fx2_p1",
+              "name": "SIZE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p2",
+              "name": "FDBK",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p3",
+              "name": "BRIT",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p4",
+              "name": "PRE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p5",
+              "name": "WDTH",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p6",
+              "name": "DIFF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p7",
+              "name": "LOWC",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p8",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx2_p1",
+            "fx2_p2",
+            "fx2_p3",
+            "fx2_p4",
+            "fx2_p5",
+            "fx2_p6",
+            "fx2_p7",
+            "fx2_p8"
+          ]
+        },
+        "fx2_supervoid_reverb": {
+          "name": "Supervoid Reverb",
+          "params": [
+            {
+              "key": "fx2_p1",
+              "name": "PRE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p2",
+              "name": "DEC",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p3",
+              "name": "FREQ",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p4",
+              "name": "GAIN",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p5",
+              "name": "HPF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p6",
+              "name": "LPF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p7",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            }
+          ],
+          "knobs": [
+            "fx2_p1",
+            "fx2_p2",
+            "fx2_p3",
+            "fx2_p4",
+            "fx2_p5",
+            "fx2_p6",
+            "fx2_p7"
+          ]
+        },
+        "fx2_warble": {
+          "name": "Warble",
+          "params": [
+            {
+              "key": "fx2_p1",
+              "name": "SPEED",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p2",
+              "name": "DEPTH",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p3",
+              "name": "BASE",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p4",
+              "name": "WIDTH",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p5",
+              "name": "N.LEV",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p6",
+              "name": "N.HPF",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p7",
+              "name": "STEREO",
+              "type": "int",
+              "min": 0,
+              "max": 127
+            },
+            {
+              "key": "fx2_p8",
+              "name": "MIX",
+              "type": "int",
+              "min": 0,
+              "max": 127
             }
           ],
           "knobs": [
@@ -271,27 +2831,10 @@
             {
               "key": "lfo1_dest",
               "name": "Destination",
-              "type": "enum",
-              "options": [
-                "Off",
-                "FX1 A",
-                "FX1 B",
-                "FX1 C",
-                "FX1 D",
-                "FX1 E",
-                "FX1 F",
-                "FX1 G",
-                "FX1 H",
-                "FX2 A",
-                "FX2 B",
-                "FX2 C",
-                "FX2 D",
-                "FX2 E",
-                "FX2 F",
-                "FX2 G",
-                "FX2 H"
-              ],
-              "default": 0
+              "type": "int",
+              "min": -1,
+              "max": 15,
+              "default": -1
             },
             {
               "key": "lfo1_spd",
@@ -367,27 +2910,10 @@
             {
               "key": "lfo2_dest",
               "name": "Destination",
-              "type": "enum",
-              "options": [
-                "Off",
-                "FX1 A",
-                "FX1 B",
-                "FX1 C",
-                "FX1 D",
-                "FX1 E",
-                "FX1 F",
-                "FX1 G",
-                "FX1 H",
-                "FX2 A",
-                "FX2 B",
-                "FX2 C",
-                "FX2 D",
-                "FX2 E",
-                "FX2 F",
-                "FX2 G",
-                "FX2 H"
-              ],
-              "default": 0
+              "type": "int",
+              "min": -1,
+              "max": 15,
+              "default": -1
             },
             {
               "key": "lfo2_spd",

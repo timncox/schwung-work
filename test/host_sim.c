@@ -777,9 +777,11 @@ static void test_lock_labels(void) {
     work_get_param(w, "locklabel0", s, sizeof(s));
     CHECK(strcmp(s, "1:TUNE") == 0, "slot 1 knob A under Chrono Pitch reads %s", s);
 
+    /* Filterbank's knobs are Gain A..H in the manual, but the label here is
+     * the band's frequency — a knob called "A" tells you nothing. */
     set_slot(w, 0, WORK_FX_FBANK);
     work_get_param(w, "locklabel0", s, sizeof(s));
-    CHECK(strcmp(s, "1:A") == 0, "slot 1 knob A under Filterbank reads %s", s);
+    CHECK(strcmp(s, "1:90Hz") == 0, "slot 1 knob A under Filterbank reads %s", s);
 
     work_get_param(w, "locklabel16", s, sizeof(s));
     CHECK(strcmp(s, "1:MACH") == 0, "lock 16 should be slot 1's machine, reads %s", s);
@@ -815,6 +817,78 @@ static void test_transport_restarts_pattern(void) {
     work_destroy(w);
 }
 
+/* The Shadow UI and the Master FX knob pages get their labels from here.
+ * module.json can only ever say "A".."H"; this must say TUNE, WIN, FDBK... and
+ * must change when the machine changes. */
+static void test_ui_hierarchy_labels(void) {
+    printf("ui_hierarchy carries the loaded machine's real knob labels\n");
+    work_t *w = work_create(&host);
+    assert(w);
+    set_slot(w, 0, WORK_FX_CHRONO);
+    set_slot(w, 1, WORK_FX_WARBLE);
+
+    char buf[16384];
+    int n = work_get_param(w, "ui_hierarchy", buf, sizeof(buf));
+    CHECK(n > 0, "ui_hierarchy returned %d", n);
+    CHECK(n < (int)sizeof(buf) - 1,
+          "hierarchy is %d bytes; the device host buffer is 16384", n);
+
+    CHECK(strstr(buf, "\"TUNE\"") != NULL, "Chrono Pitch's TUNE label missing");
+    CHECK(strstr(buf, "\"FDBK\"") != NULL, "Chrono Pitch's FDBK label missing");
+    CHECK(strstr(buf, "\"N.HPF\"") != NULL, "Warble's N.HPF label missing");
+    CHECK(strstr(buf, "\"FX 1: Chrono Pitch\"") != NULL,
+          "slot 1 link does not name the loaded machine");
+    /* No knob anywhere should be labelled with a bare letter — that was the
+     * original complaint: "I don't know what each does". */
+    for (char c = 'A'; c <= 'H'; ++c) {
+        char probe[16];
+        snprintf(probe, sizeof(probe), "\"name\":\"%c\"", c);
+        CHECK(strstr(buf, probe) == NULL,
+              "hierarchy still exposes a bare letter label \"%c\"", c);
+    }
+
+    /* balanced braces and brackets — a cheap structural check */
+    int braces = 0, brackets = 0, instr = 0;
+    for (const char *c = buf; *c; ++c) {
+        if (*c == '"' && (c == buf || c[-1] != '\\')) instr = !instr;
+        if (instr) continue;
+        if (*c == '{') braces++;
+        else if (*c == '}') braces--;
+        else if (*c == '[') brackets++;
+        else if (*c == ']') brackets--;
+    }
+    CHECK(braces == 0, "unbalanced braces in hierarchy (%d)", braces);
+    CHECK(brackets == 0, "unbalanced brackets in hierarchy (%d)", brackets);
+
+    /* the labels must FOLLOW a machine change */
+    set_slot(w, 0, WORK_FX_FBANK);
+    work_get_param(w, "ui_hierarchy", buf, sizeof(buf));
+    CHECK(strstr(buf, "\"FX 1: Filterbank\"") != NULL,
+          "hierarchy did not follow the machine change");
+    CHECK(strstr(buf, "\"TUNE\"") == NULL,
+          "stale Chrono Pitch label survived the machine change");
+
+    /* Bypass has no parameters — it must say so, not emit an empty level */
+    set_slot(w, 0, WORK_FX_BYPASS);
+    work_get_param(w, "ui_hierarchy", buf, sizeof(buf));
+    CHECK(strstr(buf, "(no parameters)") != NULL,
+          "Bypass produced an empty parameter level");
+
+    /* and the usual short-buffer canary */
+    for (int capsz = 8; capsz <= 4096; capsz *= 4) {
+        char *small = malloc((size_t)capsz + 64);
+        memset(small, 0x3C, (size_t)capsz + 64);
+        int r = work_get_param(w, "ui_hierarchy", small, capsz);
+        int ok = 1;
+        for (int i = capsz; i < capsz + 64; ++i)
+            if ((unsigned char)small[i] != 0x3C) ok = 0;
+        CHECK(ok, "ui_hierarchy into %d bytes overwrote past the buffer", capsz);
+        CHECK(r <= capsz - 1, "ui_hierarchy into %d bytes reported %d", capsz, r);
+        free(small);
+    }
+    work_destroy(w);
+}
+
 int main(void) {
     printf("Work engine — host simulator\n\n");
 
@@ -831,6 +905,7 @@ int main(void) {
     test_machine_load_installs_defaults();
     test_midi_clock();
     test_param_name_table();
+    test_ui_hierarchy_labels();
 
     printf("\n-- sequencer --\n");
     test_seq_locks_apply_and_revert();

@@ -1,18 +1,4 @@
 {
   "version": "0.1.0",
-  "download_url": "https://github.com/timncox/schwung-work/releases/download/v0.1.0/work-module.tar.gz",
-  "modules": {
-    "work": {
-      "version": "0.1.0",
-      "download_url": "https://github.com/timncox/schwung-work/releases/download/v0.1.0/work-module.tar.gz"
-    },
-    "work-in": {
-      "version": "0.1.0",
-      "download_url": "https://github.com/timncox/schwung-work/releases/download/v0.1.0/work-in-module.tar.gz"
-    },
-    "overwork": {
-      "version": "0.1.0",
-      "download_url": "https://github.com/timncox/schwung-work/releases/download/v0.1.0/overwork-module.tar.gz"
-    }
-  }
+  "download_url": "https://github.com/timncox/schwung-work/releases/download/v0.1.0/work-module.tar.gz"
 }

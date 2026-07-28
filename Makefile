@@ -2,7 +2,22 @@ CC ?= cc
 CFLAGS ?= -O2 -g -Wall -Wextra -Wpedantic -Iinclude -Isrc
 LDLIBS = -lm
 
-.PHONY: test test-ui contract bench sanitize arm clean
+.PHONY: test test-ui contract module-json bench sanitize arm clean
+
+# module.json's ui_hierarchy is GENERATED from PARAM_NAME[][] in work_core.c,
+# so adding or renaming a machine parameter cannot leave the Shadow UI showing
+# a stale label. Run this after touching that table.
+module-json: build/gen_hierarchy
+	./build/gen_hierarchy > build/hierarchy.json
+	@python3 -c "import json; \
+	h=json.load(open('build/hierarchy.json')); \
+	[ (lambda p: (json.dump({**json.load(open(p)), 'capabilities': {**json.load(open(p))['capabilities'], 'ui_hierarchy': h}}, open(p,'w'), indent=2, ensure_ascii=False), open(p,'a').write(chr(10))))(p) \
+	  for p in ['modules/audio_fx/work/module.json','modules/sound_generators/work-in/module.json'] ]; \
+	print('module.json ui_hierarchy regenerated:', len(h['levels']), 'levels')"
+
+build/gen_hierarchy: src/work_core.c src/work_core.h test/gen_hierarchy.c
+	@mkdir -p build
+	$(CC) $(CFLAGS) src/work_core.c test/gen_hierarchy.c -o $@ $(LDLIBS)
 
 test: build/host_sim test-ui
 	./build/host_sim

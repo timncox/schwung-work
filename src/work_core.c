@@ -296,7 +296,9 @@ static const char *PARAM_NAME[WORK_FX_COUNT][WORK_PARAMS] = {
 /* Degrader  */ {"BR","OVER","SRR","DROP","RATE","DEP","FREZ","F.TIM"},
 /* Dirt      */ {"DRV","RECT","HPF","LPF","NOIS","N.FRQ","N.RES","MIX"},
 /* Folder    */ {"ILEV","HP","FOLD","OLEV","FREQ","RESO","TYPE","DIST"},
-/* Filterbank*/ {"A","B","C","D","E","F","G","H"},
+/* Filterbank — the manual calls these Gain A..H, but the band each one
+ * controls is the useful thing to know, so the label IS the frequency. */
+/* Filterbank*/ {"90Hz","122Hz","225Hz","418Hz","777Hz","1k4","2k7","4k+"},
 /* Warper    */ {"SPD","DEP","SPH","LAG","SHFT","SPRD","SBND","MIX"},
 /* Flanger   */ {"SPD","DEP","TUNE","FDBK","LPF","","",""},
 /* LPF       */ {"SPD","DEP","SPH","LAG","FREQ","RESO","SPRD",""},
@@ -2073,6 +2075,89 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
         else if (strcmp(f, "trig")  == 0) v = L->trig;
         else return -1;
         return nclamp(snprintf(buf, buf_len, "%d", v), cap);
+    }
+
+    /* The Shadow UI and the auto-generated Master FX knob pages read their
+     * parameter hierarchy from module.json OR from this key. module.json is
+     * static, so it can only ever say "A".."H" — which tells you nothing about
+     * what a knob does. Serving it here instead means the labels follow
+     * whichever machine each slot currently holds.
+     *
+     * Kept deliberately compact: the on-device host reads get_param into a
+     * 16 KB buffer, so this must not sprawl. Only the two loaded machines'
+     * labels are emitted, not all twenty machines' worth. */
+    if (strcmp(key, "ui_hierarchy") == 0) {
+        int n = 0;
+        int m1 = w->cfg[0].machine, m2 = w->cfg[1].machine;
+
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+            "{\"levels\":{\"root\":{\"name\":\"Work\",\"params\":["
+            "{\"key\":\"fx1\",\"name\":\"FX 1 Machine\",\"type\":\"enum\",\"options\":["), cap);
+        for (int i = 0; i < WORK_FX_COUNT; ++i)
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s\"%s\"",
+                                    i ? "," : "", MACHINE_NAME[i]), cap);
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+            "]},{\"key\":\"fx2\",\"name\":\"FX 2 Machine\",\"type\":\"enum\",\"options\":["), cap);
+        for (int i = 0; i < WORK_FX_COUNT; ++i)
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s\"%s\"",
+                                    i ? "," : "", MACHINE_NAME[i]), cap);
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+            "]},{\"key\":\"mix\",\"name\":\"Dry/Wet\",\"type\":\"int\",\"min\":0,\"max\":127},"
+            "{\"level\":\"fx1p\",\"label\":\"FX 1: %s\"},"
+            "{\"level\":\"fx2p\",\"label\":\"FX 2: %s\"},"
+            "{\"level\":\"lfo1\",\"label\":\"FX LFO 1\"},"
+            "{\"level\":\"lfo2\",\"label\":\"FX LFO 2\"}],"
+            "\"knobs\":[\"fx1\",\"fx2\",\"mix\"]}", MACHINE_NAME[m1], MACHINE_NAME[m2]), cap);
+
+        /* One level per slot, named after the machine, carrying its real
+         * knob labels. Unused knobs are omitted rather than shown blank. */
+        for (int s = 0; s < WORK_SLOTS; ++s) {
+            int mc = w->cfg[s].machine;
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                ",\"fx%dp\":{\"name\":\"%s\",\"params\":[", s + 1, MACHINE_NAME[mc]), cap);
+            int first = 1;
+            for (int i = 0; i < WORK_PARAMS; ++i) {
+                if (!PARAM_NAME[mc][i][0]) continue;
+                n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                    "%s{\"key\":\"fx%d_p%d\",\"name\":\"%s\",\"type\":\"int\",\"min\":0,\"max\":127}",
+                    first ? "" : ",", s + 1, i + 1, PARAM_NAME[mc][i]), cap);
+                first = 0;
+            }
+            if (first)  /* Bypass has no parameters — say so rather than be empty */
+                n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                    "{\"key\":\"fx%d_p1\",\"name\":\"(no parameters)\",\"type\":\"int\","
+                    "\"min\":0,\"max\":127}", s + 1), cap);
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "],\"knobs\":["), cap);
+            first = 1;
+            for (int i = 0; i < WORK_PARAMS; ++i) {
+                if (!PARAM_NAME[mc][i][0]) continue;
+                n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s\"fx%d_p%d\"",
+                                        first ? "" : ",", s + 1, i + 1), cap);
+                first = 0;
+            }
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "]}"), cap);
+        }
+
+        for (int l = 0; l < WORK_LFOS; ++l) {
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                ",\"lfo%d\":{\"name\":\"FX LFO %d\",\"params\":["
+                "{\"key\":\"lfo%d_dest\",\"name\":\"Destination\",\"type\":\"int\",\"min\":-1,\"max\":15},"
+                "{\"key\":\"lfo%d_spd\",\"name\":\"Speed\",\"type\":\"int\",\"min\":0,\"max\":127},"
+                "{\"key\":\"lfo%d_mult\",\"name\":\"Multiplier\",\"type\":\"int\",\"min\":0,\"max\":127},"
+                "{\"key\":\"lfo%d_wave\",\"name\":\"Waveform\",\"type\":\"enum\","
+                "\"options\":[\"Triangle\",\"Sine\",\"Square\",\"Saw\",\"Ramp\",\"Exponential\",\"Random\"]},"
+                "{\"key\":\"lfo%d_depth\",\"name\":\"Depth\",\"type\":\"int\",\"min\":0,\"max\":127},"
+                "{\"key\":\"lfo%d_phase\",\"name\":\"Start Phase\",\"type\":\"int\",\"min\":0,\"max\":127},"
+                "{\"key\":\"lfo%d_trig\",\"name\":\"Trig Mode\",\"type\":\"enum\","
+                "\"options\":[\"Free\",\"Retrig\"]}],"
+                "\"knobs\":[\"lfo%d_dest\",\"lfo%d_spd\",\"lfo%d_mult\",\"lfo%d_wave\","
+                "\"lfo%d_depth\",\"lfo%d_phase\",\"lfo%d_trig\"]}",
+                l + 1, l + 1, l + 1, l + 1, l + 1, l + 1, l + 1, l + 1, l + 1,
+                l + 1, l + 1, l + 1, l + 1, l + 1, l + 1, l + 1), cap);
+        }
+
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "}}"), cap);
+        return n;
     }
 
     if (strcmp(key, "state") == 0) {
