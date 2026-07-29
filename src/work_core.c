@@ -288,6 +288,14 @@ struct work {
     /* live recording: knob moves land on the playing step */
     uint8_t              live_rec;
 
+    /* Feedback protection. schwung's own guard walks chain SLOTS only, so it
+     * is blind to overtake modules entirely — Smack hit this on hardware and
+     * had to grow its own. `monitor` 0 mutes the live input; `hw_input` marks
+     * the builds that actually read the mic so a UI knows whether to arm the
+     * guard at all. */
+    uint8_t              monitor;
+    uint8_t              hw_input;
+
     /* MIDI CC duplicate guard. A channel-matched chain slot can deliver one
      * external CC twice (channel dispatch + FX broadcast), so identical
      * messages inside ~2 blocks are dropped — the Mono convention. */
@@ -1944,6 +1952,7 @@ work_t *work_create(const host_api_v1_t *host) {
     w->bpm  = 120.0f;
     w->mix  = 127;
     w->rng  = 0xC2B2AE35u;
+    w->monitor = 1;              /* input passes until a guard says otherwise */
 
     /* Sequencer starts off, so the audio_fx build behaves as a plain static
      * FX chain until something turns it on. */
@@ -2054,9 +2063,17 @@ void work_process(work_t *w, const int16_t *in, int16_t *out, int frames) {
 
     float gmix = p01(w->eff_mix);
 
+    /* Muting at the INPUT rather than the output is deliberate, and differs
+     * from Smack: Smack has a recorded loop that stays audible with the live
+     * input muted, but Work's output IS its processed input, so muting the
+     * output would just be silence. Zeroing the input instead breaks the
+     * feedback path while reverb tails and delay repeats ring out and decay
+     * naturally. */
+    float in_gain = w->monitor ? 1.0f : 0.0f;
+
     for (int f = 0; f < frames; ++f) {
-        float dry_l = (float)in[f * 2]     * (1.0f / 32768.0f);
-        float dry_r = (float)in[f * 2 + 1] * (1.0f / 32768.0f);
+        float dry_l = (float)in[f * 2]     * (1.0f / 32768.0f) * in_gain;
+        float dry_r = (float)in[f * 2 + 1] * (1.0f / 32768.0f) * in_gain;
         float l = dry_l, r = dry_r;
 
         for (int i = 0; i < WORK_SLOTS; ++i) {
@@ -2443,6 +2460,8 @@ void work_set_param(work_t *w, const char *key, const char *val) {
     }
     if (strcmp(key, "fill") == 0) { w->fill = (uint8_t)(atoi(val) ? 1 : 0); return; }
     if (strcmp(key, "live_rec") == 0) { w->live_rec = (uint8_t)(atoi(val) ? 1 : 0); return; }
+    if (strcmp(key, "monitor") == 0)  { w->monitor  = (uint8_t)(atoi(val) ? 1 : 0); return; }
+    if (strcmp(key, "hw_input") == 0) { w->hw_input = (uint8_t)(atoi(val) ? 1 : 0); return; }
 
     /* ------------------------------------------------- bank, song, history */
     if (strcmp(key, "pattern") == 0) {
@@ -2664,6 +2683,8 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
     if (strcmp(key, "fill") == 0)    return nclamp(snprintf(buf, buf_len, "%d", w->fill), cap);
     if (strcmp(key, "seq_pos") == 0)  return nclamp(snprintf(buf, buf_len, "%d", w->seq_pos), cap);
     if (strcmp(key, "live_rec") == 0) return nclamp(snprintf(buf, buf_len, "%d", w->live_rec), cap);
+    if (strcmp(key, "monitor") == 0)  return nclamp(snprintf(buf, buf_len, "%d", w->monitor), cap);
+    if (strcmp(key, "hw_input") == 0) return nclamp(snprintf(buf, buf_len, "%d", w->hw_input), cap);
     if (strcmp(key, "pattern") == 0)   return nclamp(snprintf(buf, buf_len, "%d", w->cur_pattern), cap);
     if (strcmp(key, "page_mask") == 0) return nclamp(snprintf(buf, buf_len, "%d", CURPAT(w)->page_mask), cap);
     if (strcmp(key, "song_on") == 0)   return nclamp(snprintf(buf, buf_len, "%d", w->song_on), cap);

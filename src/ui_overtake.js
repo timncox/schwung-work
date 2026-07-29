@@ -28,6 +28,9 @@
  *
  *   Shift+step      select that pattern from the 16-pattern bank
  *   Pads 81/82/83   undo (shift = redo), memorize/recall, song mode
+ *   SHIFT + 69      monitor: mute or unmute the live input. Auto-muted
+ *                   whenever the speakers are live with nothing in the
+ *                   input jack, because that is a feedback loop.
  *   Shift+jog click open and close the preset browser
  *   Knobs 1-8       the current edit page's eight parameters
  *   Jog             pattern length, or the held step's attribute
@@ -84,6 +87,7 @@ const PAD_MODE_RETRIG = 74;   /* shift + paste      */
 const PAD_LOCK_CLEAR  = 75;   /* shift + clear      */
 const PAD_MODE_PROB   = 71;   /* shift + pattern page */
 const PAD_LIVE_REC    = 68;   /* shift + play         */
+const PAD_MONITOR     = 69;   /* shift + fill         */
 
 /* Row 4: transport and navigation */
 const PAD_PLAY  = 68;
@@ -166,6 +170,20 @@ let liveRec     = 0;
 let songOn      = 0;
 let curPattern  = 0;
 let memoAt      = 0;
+
+/* Feedback protection. schwung's own guard walks chain SLOTS only, so it never
+ * sees an overtake module at all — Smack had to grow its own for exactly this
+ * reason and Overwork is in the same position: it reads the mic and puts the
+ * result on the speakers.
+ *
+ *   monitor      what the engine is actually doing right now
+ *   monitorUser  the user's explicit choice, or null while the guard is in
+ *                charge. A manual override survives until the risk state
+ *                itself changes, so the guard never fights the user. */
+let monitor     = 1;
+let monitorUser = null;
+let atRisk      = false;
+let hwInput     = 0;
 let copyBuf    = null;
 
 /* mirrored DSP state */
@@ -284,6 +302,8 @@ function fetchAll() {
     liveRec = getNum('live_rec');
     songOn = getNum('song_on');
     curPattern = getNum('pattern');
+    monitor = getNum('monitor');
+    hwInput = getNum('hw_input');
 
     fetchSteps();
     needsRedraw = true;
@@ -451,6 +471,43 @@ function clearPage() {
     }
     fetchSteps();
     announce(`Page ${patPage + 1} cleared`);
+    needsRedraw = true;
+}
+
+/* ------------------------------------------------------- feedback guard */
+
+/* Speakers live and no cable in the input jack means the mic is hearing the
+ * speakers: mute the input until that changes. Only armed for builds that
+ * actually read the hardware input. */
+function pollFeedbackGuard() {
+    if (!hwInput) return;
+    if (typeof host_speaker_active !== 'function' ||
+        typeof host_line_in_connected !== 'function') return;
+
+    let risk;
+    try { risk = host_speaker_active() && !host_line_in_connected(); }
+    catch (e) { return; }
+
+    if (risk === atRisk) return;          /* nothing changed */
+    atRisk = risk;
+    monitorUser = null;                   /* a new situation clears the override */
+
+    const want = risk ? 0 : 1;
+    if (want !== monitor) {
+        monitor = want;
+        host_module_set_param('monitor', `${monitor}`);
+        announce(risk ? 'Feedback risk, input muted' : 'Input restored');
+        needsRedraw = true;
+    }
+}
+
+function toggleMonitor() {
+    monitor = monitor ? 0 : 1;
+    monitorUser = monitor;
+    host_module_set_param('monitor', `${monitor}`);
+    announce(monitor
+        ? (atRisk ? 'Input on, feedback risk' : 'Input on')
+        : 'Input muted');
     needsRedraw = true;
 }
 
@@ -651,6 +708,13 @@ function drawUI() {
         print(x, y + 9, val, 1);
     }
 
+    if (!monitor) {
+        /* This is the difference between "broken" and "protecting you", so it
+         * gets the footer outright rather than a corner glyph. */
+        fill_rect(0, 46, 128, 9, 1);
+        print(2, 47, atRisk ? 'INPUT MUTED - FEEDBACK' : 'INPUT MUTED', 0);
+    }
+
     fill_rect(0, 55, 128, 1, 1);
     let foot;
     if (heldStep >= 0) {
@@ -708,7 +772,7 @@ function paintFunctions(force) {
 
 function paintTransport(force) {
     setLED(PAD_PLAY,  liveRec ? Red : (seqOn ? BrightGreen : DarkGrey), force);
-    setLED(PAD_FILL,  fillLatched ? BrightRed : 0x0C, force);
+    setLED(PAD_FILL,  fillLatched ? BrightRed : (!monitor ? OrangeRed : 0x0C), force);
     setLED(PAD_SLOT,  focusSlot === 0 ? SkyBlue : YellowGreen, force);
     setLED(PAD_PPAGE, [Blue, Cyan, Purple, OrangeRed][patPage % 4], force);
     if (shiftHeld) {
@@ -719,6 +783,7 @@ function paintTransport(force) {
         setLED(PAD_LOCK_CLEAR,  heldStep >= 0 ? OrangeRed : 0x08, force);
         setLED(PAD_MODE_PROB,   attrMode === MODE_PROB ? YellowGreen : 0x0A, force);
         setLED(PAD_LIVE_REC,    liveRec ? Red : 0x0A, force);
+        setLED(PAD_MONITOR,     monitor ? (atRisk ? BrightRed : BrightGreen) : DarkGrey, force);
     } else {
         setLED(PAD_EPAGE, [White, Cyan, Cyan, Cyan, Purple, LightGrey][editPage], force);
         setLED(PAD_COPY,  copyBuf ? TealGreen : 0x0A, force);
@@ -777,6 +842,9 @@ function handlePadPress(note) {
                 attrMode = attrMode === MODE_PROB ? MODE_NONE : MODE_PROB;
                 announce(attrMode === MODE_PROB ? 'Probability mode' : 'Mode off');
                 needsRedraw = true;
+                return;
+            case PAD_MONITOR:
+                toggleMonitor();
                 return;
             case PAD_LIVE_REC:
                 liveRec = liveRec ? 0 : 1;
@@ -1044,6 +1112,8 @@ globalThis.tick = function () {
         paintSteps(false);
         needsRedraw = true;
     }
+
+    if (tickCount % 24 === 0) pollFeedbackGuard();
 
     if (tickCount % 12 === 0) {
         fetchSteps();

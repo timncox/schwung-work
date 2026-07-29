@@ -2,7 +2,7 @@
   "id": "work",
   "name": "Work",
   "abbrev": "WORK",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Twenty-one Tonverk-inspired FX machines in two insert slots with two FX LFOs",
   "dsp": "work.so",
   "ui_chain": "ui_chain.js",

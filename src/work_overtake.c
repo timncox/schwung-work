@@ -24,6 +24,10 @@ static const host_api_v1_t *g_host;
 static void *overtake_create(const char *module_dir, const char *json_defaults) {
     (void)module_dir; (void)json_defaults;
     work_t *w = work_create(g_host);
+    /* This build reads the hardware input, so a UI should arm the feedback
+     * guard. The audio_fx build deliberately does NOT set this: it processes
+     * upstream chain audio and must never auto-mute. */
+    if (w) work_set_param(w, "hw_input", "1");
     /* The overtake surface is a sequencer first — start with it running so a
      * freshly placed trig does something without hunting for a switch. */
     if (w) work_set_param(w, "seq_on", "1");

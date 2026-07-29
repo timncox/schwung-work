@@ -251,6 +251,14 @@ void    work_process(work_t *w, const int16_t *in, int16_t *out, int frames);
  *   seq_pos                   current step, read-only
  *   prob<N>                   step N's probability, 1..100
  *   live_rec                  1 = knob moves record locks onto the playing step
+ *   monitor                   1 = live input reaches the engine, 0 = muted.
+ *                             NEVER preset-saved: a patch must not be able to
+ *                             re-open a feedback path when it loads.
+ *   hw_input                  1 = this build reads the hardware mailbox, so a
+ *                             UI should arm the feedback guard. Set by the
+ *                             overtake and sound_generator wrappers only —
+ *                             the audio_fx build processes upstream chain
+ *                             audio and must never auto-mute.
  *   menv_dest/atk/hold/dec/depth   the modulation envelope
  *   pattern                   selected pattern, 0..15
  *   page_mask                 bit p set = page p plays

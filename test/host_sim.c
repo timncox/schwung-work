@@ -1468,6 +1468,75 @@ static void test_nrpn(void) {
     work_destroy(w);
 }
 
+static void test_feedback_monitor(void) {
+    printf("monitor mutes the live input without killing the tails\n");
+    work_t *w = work_create(&host);
+    assert(w);
+
+    char s[16];
+    work_get_param(w, "monitor", s, sizeof(s));
+    CHECK(atoi(s) == 1, "monitor should default to on, got %s", s);
+
+    /* a reverb, so there is a tail to check */
+    set_slot(w, 0, WORK_FX_SUPERVOID);
+    work_set_param(w, "fx1_p7", "127");
+    int dummy;
+    int64_t live = run_blocks(w, 60, &dummy);
+    CHECK(live > 0, "no output with the input live");
+
+    /* muting the input silences the source but the tail must ring out */
+    work_set_param(w, "monitor", "0");
+    int16_t buf[BLOCK * 2];
+    double ph = 0.0;
+    int64_t first = 0, later = 0;
+    for (int b = 0; b < 8; ++b) {
+        fill_signal(buf, BLOCK, &ph);
+        work_process(w, buf, buf, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) first += llabs(buf[i]);
+    }
+    for (int b = 0; b < 200; ++b) {
+        fill_signal(buf, BLOCK, &ph);
+        work_process(w, buf, buf, BLOCK);
+    }
+    for (int b = 0; b < 8; ++b) {
+        fill_signal(buf, BLOCK, &ph);
+        work_process(w, buf, buf, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) later += llabs(buf[i]);
+    }
+    CHECK(first > 0, "muting the input killed the reverb tail immediately");
+    CHECK(later < first, "the tail did not decay while the input was muted");
+
+    /* Bypass with the input muted must be silent — that is the actual
+     * feedback-breaking guarantee. */
+    work_t *q = work_create(&host);
+    work_set_param(q, "monitor", "0");
+    int64_t e = run_blocks(q, 40, &dummy);
+    CHECK(e == 0, "a muted input still passed audio through Bypass (%lld)",
+          (long long)e);
+    work_destroy(q);
+
+    /* monitor must NEVER be preset-saved: loading a patch must not be able to
+     * re-open a feedback path. */
+    char blob[8192];
+    work_get_param(w, "state", blob, sizeof(blob));
+    CHECK(strstr(blob, "monitor") == NULL && strstr(blob, "\"mon\"") == NULL,
+          "monitor leaked into the preset blob");
+    work_destroy(w);
+}
+
+static void test_hw_input_flag(void) {
+    printf("only the builds that read the mic advertise hw_input\n");
+    work_t *w = work_create(&host);
+    char s[16];
+    work_get_param(w, "hw_input", s, sizeof(s));
+    CHECK(atoi(s) == 0,
+          "hw_input must default to 0 so the audio_fx build never auto-mutes (got %s)", s);
+    work_set_param(w, "hw_input", "1");
+    work_get_param(w, "hw_input", s, sizeof(s));
+    CHECK(atoi(s) == 1, "hw_input did not set");
+    work_destroy(w);
+}
+
 int main(void) {
     printf("Work engine — host simulator\n\n");
 
@@ -1516,6 +1585,8 @@ int main(void) {
     test_transform_and_quantize();
     test_page_mask();
     test_nrpn();
+    test_feedback_monitor();
+    test_hw_input_flag();
 
     printf("\n%d checks, %d failed\n", tests_run, tests_failed);
     return tests_failed ? 1 : 0;

@@ -30,7 +30,9 @@ static const host_api_v1_t *g_host;
 
 static void *gen_create(const char *module_dir, const char *json_defaults) {
     (void)module_dir; (void)json_defaults;
-    return work_create(g_host);
+    work_t *w = work_create(g_host);
+    if (w) work_set_param(w, "hw_input", "1");
+    return w;
 }
 
 static void gen_destroy(void *inst) { work_destroy((work_t *)inst); }

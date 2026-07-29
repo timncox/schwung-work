@@ -494,6 +494,76 @@ async function testLfo3AndEnvelopePages() {
           `no envelope parameter was reachable; saw ${[...seen].join(', ')}`);
 }
 
+/* -------------------------------------------------------- feedback guard */
+
+function withJack(ctx, speakers, lineIn) {
+    ctx.host.host_speaker_active = () => speakers;
+    ctx.host.host_line_in_connected = () => lineIn;
+}
+
+async function testFeedbackGuardArmsOnRisk() {
+    console.log('the feedback guard mutes the input when the mic can hear the speakers');
+    const ctx = await loadUI();
+    ctx.store.hw_input = '1';
+    withJack(ctx, true, true);            /* speakers on, but a cable is in */
+    ctx.host.init();
+    ctx.writes.length = 0;
+    for (let i = 0; i < 30; i++) ctx.host.tick();
+    check(!ctx.writes.some((w) => w.key === 'monitor' && `${w.val}` === '0'),
+          'guard muted with a cable plugged in — that is not a feedback path');
+
+    /* pull the cable: speakers live, mic open */
+    withJack(ctx, true, false);
+    ctx.writes.length = 0;
+    for (let i = 0; i < 30; i++) ctx.host.tick();
+    const muted = ctx.writes.find((w) => w.key === 'monitor');
+    check(!!muted && `${muted.val}` === '0',
+          `guard did not mute on risk; writes were ${JSON.stringify(ctx.writes)}`);
+
+    /* plug back in: it must restore, not stay muted forever */
+    withJack(ctx, true, true);
+    ctx.writes.length = 0;
+    for (let i = 0; i < 30; i++) ctx.host.tick();
+    const restored = ctx.writes.find((w) => w.key === 'monitor');
+    check(!!restored && `${restored.val}` === '1',
+          `guard did not restore the input when the risk cleared (${restored && restored.val})`);
+}
+
+async function testGuardSilentForChainBuild() {
+    console.log('the guard stays out of the way when the build does not read the mic');
+    const ctx = await loadUI();
+    ctx.store.hw_input = '0';             /* the audio_fx build */
+    withJack(ctx, true, false);           /* would be risky IF it read the mic */
+    ctx.host.init();
+    ctx.writes.length = 0;
+    for (let i = 0; i < 30; i++) ctx.host.tick();
+    check(!ctx.writes.some((w) => w.key === 'monitor'),
+          'the guard armed for a build that processes upstream chain audio');
+}
+
+async function testMonitorManualOverride() {
+    console.log('shift + fill overrides the guard');
+    const ctx = await loadUI();
+    ctx.store.hw_input = '1';
+    withJack(ctx, true, false);
+    ctx.host.init();
+    for (let i = 0; i < 30; i++) ctx.host.tick();
+
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    ctx.host.onMidiMessageInternal(noteOn(69));
+    ctx.host.onMidiMessageInternal(noteOff(69));
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    const on = ctx.writes.find((w) => w.key === 'monitor');
+    check(!!on && `${on.val}` === '1', `override did not unmute (${on && on.val})`);
+
+    /* and the guard must not immediately stamp on the override */
+    ctx.writes.length = 0;
+    for (let i = 0; i < 30; i++) ctx.host.tick();
+    check(!ctx.writes.some((w) => w.key === 'monitor' && `${w.val}` === '0'),
+          'the guard overrode the user while the risk state was unchanged');
+}
+
 /* ---------------------------------------------------------------- presets */
 
 const PDIR = '/data/UserData/schwung/presets/overwork';
@@ -655,6 +725,9 @@ const tests = [
     testCopyPasteClear,
     testNoUnknownWritesAnywhere,
     testResumeForcesRepaints,
+    testFeedbackGuardArmsOnRisk,
+    testGuardSilentForChainBuild,
+    testMonitorManualOverride,
     testLiveRecordToggle,
     testProbabilityMode,
     testLfo3AndEnvelopePages,

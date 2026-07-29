@@ -78,7 +78,8 @@ int main(void) {
         "eff1", "eff2", "effm", "mix", "seq_on", "seq_len", "fill",
         "seq_pos", "meter", "state", "live_rec",
         "menv_dest", "menv_atk", "menv_hold", "menv_dec", "menv_depth",
-        "pattern", "page_mask", "song_on", "song_len", "song_pos", "undo_state"
+        "pattern", "page_mask", "song_on", "song_len", "song_pos", "undo_state",
+        "monitor", "hw_input"
     };
     for (size_t i = 0; i < sizeof(simple) / sizeof(simple[0]); ++i) emit(w, simple[i]);
 
@@ -128,7 +129,7 @@ int main(void) {
         {"live_rec", "1"}, {"menv_dest", "3"}, {"menv_atk", "20"}, {"menv_hold", "30"},
         {"menv_dec", "40"}, {"menv_depth", "90"}, {"prob5", "37"}, {"pattern", "3"}, {"page_mask", "7"}, {"song_on", "1"},
         {"song_len", "8"}, {"song_row2", "5:3:0"}, {"trigtype4", "1"},
-        {"transform", "reverse"}, {"quantize", "127"},
+        {"transform", "reverse"}, {"quantize", "127"}, {"monitor", "0"}, {"hw_input", "1"},
         {"step5", "1:2:3:1"}, {"locks5", "1=64"}, {"lock5_2", "31"},
         {"state", "{\"v\":1,\"mix\":64}"}
     };

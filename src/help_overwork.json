@@ -14,6 +14,22 @@
       ]
     },
     {
+      "title": "Feedback guard",
+      "lines": [
+        "With the speakers",
+        "live and nothing in",
+        "the input jack, the",
+        "mic hears the",
+        "speakers. Overwork",
+        "mutes the input",
+        "automatically and",
+        "says so on screen.",
+        "",
+        "SHIFT + Fill pad",
+        "overrides it."
+      ]
+    },
+    {
       "title": "The main gesture",
       "lines": [
         "HOLD a step button",
