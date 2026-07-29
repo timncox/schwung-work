@@ -1680,6 +1680,89 @@ static void test_state_carries_the_sample_path(void) {
     work_destroy(t); work_destroy(r); work_destroy(r2);
 }
 
+/* Fire a voice the way a keyboard does. work_src_trigger is internal; the
+ * public door is a note-on from an EXTERNAL source. */
+static void fire_note(work_t *w, int note) {
+    uint8_t on[3] = { 0x90, (uint8_t)note, 100 };
+    work_on_midi(w, on, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+}
+
+/* The sample machines had only an amp AD envelope, so every sample played at
+ * full bandwidth however it was triggered. */
+static void test_voice_filter(void) {
+    printf("the voice filter shapes the sample, and is inert until you touch it\n");
+
+    const int frames = 8000;
+    static int16_t pcm[8000 * 2];
+    make_ramp(pcm, frames);      /* a ramp is broadband: energy everywhere */
+
+    /* Untouched, the filter must not change a single sample. A default that
+     * colours the sound would silently alter every patch saved before it. */
+    work_t *a = work_create(&host);
+    send_sample(a, pcm, frames, 400);
+    set_slot(a, 0, WORK_FX_ONESHOT);
+    work_set_param(a, "fx1_p3", "127");           /* LEN full */
+    fire_note(a, 60);
+    int pa; int64_t ea = run_blocks(a, 40, &pa);
+
+    work_t *b = work_create(&host);
+    send_sample(b, pcm, frames, 400);
+    set_slot(b, 0, WORK_FX_ONESHOT);
+    work_set_param(b, "fx1_p3", "127");
+    work_set_param(b, "vf_base",  "0");           /* the documented defaults */
+    work_set_param(b, "vf_width", "127");
+    work_set_param(b, "vf_env",   "64");
+    fire_note(b, 60);
+    int pb; int64_t eb = run_blocks(b, 40, &pb);
+    CHECK(ea == eb, "the default filter changed the sound: %lld vs %lld",
+          (long long)ea, (long long)eb);
+
+    /* Closed down, it must take energy out. */
+    work_t *c = work_create(&host);
+    send_sample(c, pcm, frames, 400);
+    set_slot(c, 0, WORK_FX_ONESHOT);
+    work_set_param(c, "fx1_p3", "127");
+    work_set_param(c, "vf_base",  "0");
+    work_set_param(c, "vf_width", "8");           /* a narrow band down low */
+    fire_note(c, 60);
+    int pc; int64_t ec = run_blocks(c, 40, &pc);
+    CHECK(ec < ea / 2, "a narrow band left %lld of %lld — it is not filtering",
+          (long long)ec, (long long)ea);
+
+    /* And it must reach the polyphonic machines, per voice. */
+    work_t *d = work_create(&host);
+    send_sample(d, pcm, frames, 400);
+    set_slot(d, 0, WORK_FX_POLYSAMPLE);
+    work_set_param(d, "fx1_p6", "127");
+    fire_note(d, 60);
+    fire_note(d, 64);
+    int pd; int64_t open_e = run_blocks(d, 40, &pd);
+
+    work_t *f = work_create(&host);
+    send_sample(f, pcm, frames, 400);
+    set_slot(f, 0, WORK_FX_POLYSAMPLE);
+    work_set_param(f, "fx1_p6", "127");
+    work_set_param(f, "vf_base",  "0");
+    work_set_param(f, "vf_width", "8");
+    fire_note(f, 60);
+    fire_note(f, 64);
+    int64_t shut_e = run_blocks(f, 40, &pd);
+    CHECK(shut_e < open_e, "Polysample ignored the voice filter (%lld vs %lld)",
+          (long long)shut_e, (long long)open_e);
+
+    /* The settings survive a save. */
+    static char blob[65536];
+    work_get_param(c, "state", blob, sizeof blob);
+    work_t *e = work_create(&host);
+    work_set_param(e, "state", blob);
+    char got[32];
+    work_get_param(e, "vf_width", got, sizeof got);
+    CHECK(atoi(got) == 8, "vf_width came back as %s after a reload", got);
+
+    work_destroy(a); work_destroy(b); work_destroy(c);
+    work_destroy(d); work_destroy(e); work_destroy(f);
+}
+
 static void test_sample_transfer(void) {
     printf("a sample transfers in chunks and lands byte-exact\n");
     work_t *w = work_create(&host);
@@ -2373,6 +2456,7 @@ int main(void) {
     test_hw_input_flag();
 
     test_state_carries_the_sample_path();
+    test_voice_filter();
     test_sample_transfer();
     test_sample_bounds();
     test_single_player();

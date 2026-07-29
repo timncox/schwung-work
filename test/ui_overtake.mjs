@@ -663,6 +663,38 @@ async function testProbabilityMode() {
                  `probability should have come down from 100, got ${w.val}`);
 }
 
+/* The five source machines already spend all eight knobs, so the filter lives
+ * on its own page. A page nothing can reach is the failure this repo keeps
+ * hitting — correct code, no gesture. */
+async function testVoiceFilterPageIsReachable() {
+    console.log('the voice filter has its own reachable edit page');
+    const ctx = await loadUI();
+    ctx.host.init();
+
+    let seen = null;
+    for (let i = 0; i < 12 && !seen; i++) {
+        ctx.host.tick();
+        const shown = ctx.screen.map((x) => x.text).join(' ');
+        if (/VOICE/.test(shown)) seen = shown;
+        else {
+            ctx.host.onMidiMessageInternal(noteOn(72));
+            ctx.host.onMidiMessageInternal(noteOff(72));
+        }
+    }
+    check(!!seen, 'no edit page shows the voice filter');
+    if (seen) {
+        for (const lab of ['BASE', 'WDTH', 'RESO', 'ENV', 'ATK', 'DEC', 'KEY']) {
+            check(seen.indexOf(lab) >= 0, `the filter page is missing ${lab}: "${seen}"`);
+        }
+    }
+
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(KNOB1, 1));
+    const w = ctx.writes.find((x) => x.key === 'vf_base');
+    check(!!w, `knob 1 on the filter page wrote ${JSON.stringify(ctx.writes)}, ` +
+               `expected vf_base`);
+}
+
 async function testLfo3AndEnvelopePages() {
     console.log('the edit pages reach LFO 3 and the modulation envelope');
     const ctx = await loadUI();
@@ -689,14 +721,20 @@ async function testLfo3AndEnvelopePages() {
  * does warble or bypass"); clamped to one step per event, crossing the list
  * took twenty separate clicks ("super slow"). The rule is a cap of a quarter
  * of the range: one detent moves one, a full-speed spin moves ceil(span/4). */
+/* Walk the edit pages until the machine selects are on screen, rather than
+ * pressing a fixed number of times. A count here breaks whenever a page is
+ * added between FX and GLOBAL — which is what adding the voice-filter page
+ * did to six tests at once. */
 async function gotoGlobalPage(ctx) {
-    /* Edit pages cycle FX, LFO1, LFO2, LFO3, MOD ENV, GLOBAL — the machine
-     * selects live on GLOBAL, five presses of the edit-page pad away. */
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 12; i++) {
+        ctx.host.tick();
+        if (ctx.screen.some((x) => /GLOBAL/.test(x.text))) return;
         ctx.host.onMidiMessageInternal(noteOn(72));
         ctx.host.onMidiMessageInternal(noteOff(72));
     }
     ctx.host.tick();
+    throw new Error('never reached the GLOBAL edit page: ' +
+                    JSON.stringify(ctx.screen.map((x) => x.text)));
 }
 
 /* Start the UI with a chosen value already in the DSP, on the GLOBAL page.
@@ -1731,6 +1769,7 @@ const tests = [
     testLiveRecordToggle,
     testProbabilityMode,
     testLfo3AndEnvelopePages,
+    testVoiceFilterPageIsReachable,
     testReaddirContractIsFaithful,
     testPresetSaveThenList,
     testPresetRestoresItsSample,

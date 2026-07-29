@@ -266,6 +266,13 @@ typedef struct {
     double sp_pos;
     float  sp_env;               /* AD envelope level                     */
     int    sp_stage;             /* 0 idle, 1 attack, 2 decay             */
+    int    sp_note;              /* note that fired it, for key tracking  */
+    work_vfilt_t sp_filt;        /* One Shot is monophonic: one filter    */
+    /* Voice-filter coefficients, refreshed once per BLOCK. Per sample would
+     * mean a tanf() per voice per channel per frame, which does not fit. */
+    svf_co_t v_hp[WORK_VOICES], v_lp[WORK_VOICES];
+    svf_co_t sp_hp, sp_lp;
+    int      vf_on;              /* 0 skips the filter entirely           */
 
     /* Polyphonic voices for Polysample and Slicer. */
     work_voice_t voice[WORK_VOICES];
@@ -286,6 +293,7 @@ typedef struct {
 
 struct work {
     const host_api_v1_t *host;
+    work_vfilt_cfg_t     vfilt;        /* voice filter, shared by all slots */
     work_slot_cfg_t      cfg[WORK_SLOTS];
     work_lfo_cfg_t       lfo[WORK_LFOS];
     work_slot_t          slot[WORK_SLOTS];
@@ -1779,6 +1787,103 @@ static void slot_reset(work_slot_t *s) {
 }
 
 
+/* ------------------------------------------------------------ voice filter
+ *
+ * A band, not a ladder: BASE sets the high-pass edge and WDTH the octaves up
+ * to the low-pass edge, so one control moves the whole band and the other
+ * opens or closes it. That is more useful on a sample than two unrelated
+ * cutoffs, because the thing you usually want is "less of the bottom, less of
+ * the top" in one gesture.
+ *
+ * BASE 0 with WDTH at maximum is fully open, and those are the defaults, so a
+ * patch that never visits this page sounds exactly as it did before the filter
+ * existed.
+ *
+ * Coefficients are computed ONCE PER BLOCK per voice, not per sample: at 128
+ * frames that is 344 updates a second, far above any envelope or key movement
+ * you can hear, and tanf() per sample per voice would not fit the budget. */
+static void vfilt_reset(work_vfilt_t *f) {
+    for (int c = 0; c < 2; ++c) {
+        f->hp1[c] = f->hp2[c] = 0.0f;
+        f->lp1[c] = f->lp2[c] = 0.0f;
+    }
+    f->env = 0.0f;
+    f->stage = 1;
+}
+
+/* Is the filter doing anything at all? A wide-open band with no envelope is
+ * skipped outright, so the machines cost exactly what they used to when the
+ * page is untouched. */
+static int vfilt_active(const work_vfilt_cfg_t *v) {
+    return v->base > 0 || v->width < 127 || v->env != 64;
+}
+
+/* Advance one voice's filter envelope by a block and derive its coefficients.
+ * `note` is the note that fired the voice, for key tracking; -1 means none. */
+static void vfilt_block(const work_vfilt_cfg_t *v, work_vfilt_t *f, int note,
+                        int frames, svf_co_t *hp, svf_co_t *lp) {
+    const float dt  = (float)frames / (float)WORK_SR;
+    const float atk = pexp(v->attack, 0.001f, 4.0f);
+    const float dec = pexp(v->decay,  0.005f, 8.0f);
+
+    if (f->stage == 1) {
+        f->env += dt / atk;
+        if (f->env >= 1.0f) { f->env = 1.0f; f->stage = 2; }
+    } else if (f->stage == 2) {
+        f->env -= dt / dec;
+        if (f->env <= 0.0f) { f->env = 0.0f; f->stage = 0; }
+    }
+
+    /* BASE spans 20 Hz to about 8 kHz; the envelope is bipolar around 64 so
+     * it can sweep the band down as well as up. */
+    float oct = (float)v->base / 127.0f * 8.6f;
+    oct += ((float)v->env - 64.0f) / 63.0f * 6.0f * f->env;
+    if (note >= 0 && v->track)
+        oct += ((float)note - 60.0f) / 12.0f * ((float)v->track / 127.0f);
+
+    const float fc_hp = 20.0f * powf(2.0f, fclampf(oct, 0.0f, 11.0f));
+    /* WDTH 127 puts the low-pass above the band limit, i.e. open. */
+    const float fc_lp = fc_hp * powf(2.0f, (float)v->width / 127.0f * 11.0f);
+    const float q     = 0.7f + (float)v->reso / 127.0f * 6.0f;
+
+    svf_coeffs(hp, fc_hp, q);
+    svf_coeffs(lp, fc_lp, q);
+}
+
+/* One sample through one voice's band. */
+static void vfilt_run(work_vfilt_t *f, const svf_co_t *hp, const svf_co_t *lp,
+                      float *l, float *r) {
+    float *io[2] = { l, r };
+    for (int c = 0; c < 2; ++c) {
+        svf_t h = { f->hp1[c], f->hp2[c] };
+        svf_t o = { f->lp1[c], f->lp2[c] };
+        float x = svf_hp(&h, hp, *io[c]);
+        x = svf_lp(&o, lp, x);
+        f->hp1[c] = h.ic1; f->hp2[c] = h.ic2;
+        f->lp1[c] = o.ic1; f->lp2[c] = o.ic2;
+        *io[c] = x;
+    }
+}
+
+static int machine_is_source(int machine);
+
+/* Refresh every voice filter's coefficients for this block. Called once per
+ * work_process, never from the per-sample loop. */
+static void vfilt_prepare(work_t *w, int frames) {
+    const int on = vfilt_active(&w->vfilt);
+    for (int i = 0; i < WORK_SLOTS; ++i) {
+        work_slot_t *s = &w->slot[i];
+        s->vf_on = on && machine_is_source(w->eff_machine[i]);
+        if (!s->vf_on) continue;
+        vfilt_block(&w->vfilt, &s->sp_filt, s->sp_note, frames, &s->sp_hp, &s->sp_lp);
+        for (int v = 0; v < WORK_VOICES; ++v) {
+            if (s->voice[v].stage == 0) continue;
+            vfilt_block(&w->vfilt, &s->voice[v].filt, s->voice[v].note, frames,
+                        &s->v_hp[v], &s->v_lp[v]);
+        }
+    }
+}
+
 /* ----------------------------------------------------------- voice helpers
  *
  * The sample machines are eight-voice polyphonic. A voice here is a read
@@ -1874,6 +1979,7 @@ static void m_multi(mctx_t *m, float *l, float *r) {
 
         float sl, sr;
         sample_read(w, v->pos, &sl, &sr);
+        if (s->vf_on) vfilt_run(&v->filt, &s->v_hp[i], &s->v_lp[i], &sl, &sr);
         ol += sl * v->env * v->gain;
         orr += sr * v->env * v->gain;
 
@@ -1887,6 +1993,8 @@ static void m_multi(mctx_t *m, float *l, float *r) {
         }
     }
 
+    /* Per VOICE, above, not here — one filter on the sum would make every new
+     * note's envelope sweep the notes already sounding. */
     *l = ol * lev * gl;
     *r = orr * lev * gr;
 }
@@ -1942,6 +2050,7 @@ static void m_subtracks(mctx_t *m, float *l, float *r) {
 
         float sl, sr;
         sample_read(w, v->pos, &sl, &sr);
+        if (s->vf_on) vfilt_run(&v->filt, &s->v_hp[i], &s->v_lp[i], &sl, &sr);
         ol += sl * v->env * v->gain;
         orr += sr * v->env * v->gain;
 
@@ -2060,6 +2169,11 @@ static void m_wavefinder(mctx_t *m, float *l, float *r) {
         ol += vl * 0.5f;
         orr += vr * 0.5f;
     }
+
+    /* No note voices here — two oscillators, not eight cursors — so the
+     * filter treats the machine's output using the slot's own state. It is
+     * still the same band and the same envelope. */
+    if (s->vf_on) vfilt_run(&s->sp_filt, &s->sp_hp, &s->sp_lp, &ol, &orr);
 
     *l = (*l) * (1.0f - mix) + ol * lev * mix;
     *r = (*r) * (1.0f - mix) + orr * lev * mix;
@@ -2245,6 +2359,9 @@ static void m_single(mctx_t *m, float *l, float *r) {
     const float gr  = sinf(pan * 1.57079633f);
     const float g   = lev * s->sp_env;
 
+    /* One Shot is monophonic, so its one filter IS its voice filter. */
+    if (s->vf_on) vfilt_run(&s->sp_filt, &s->sp_hp, &s->sp_lp, &ol, &orr);
+
     *l = ol * g * gl * 1.41421356f;
     *r = orr * g * gr * 1.41421356f;
 }
@@ -2386,6 +2503,8 @@ static void work_src_trigger(work_t *w, int note, int vel) {
             s->sp_pos   = start;
             s->sp_env   = 0.0f;
             s->sp_stage = 1;
+            s->sp_note  = note;
+            vfilt_reset(&s->sp_filt);
             break;
         }
         case WORK_FX_POLYSAMPLE: {
@@ -2394,6 +2513,7 @@ static void work_src_trigger(work_t *w, int note, int vel) {
             v->pos = start; v->env = 0.0f; v->stage = 1;
             v->rate = pitch; v->gain = gain; v->dir = 1;
             v->vib_ph = 0.0f; v->vib_fade = 0.0f; v->note = note;
+            vfilt_reset(&v->filt);
             break;
         }
         case WORK_FX_SLICER: {
@@ -2410,6 +2530,7 @@ static void work_src_trigger(work_t *w, int note, int vel) {
             v->dir   = reverse ? -1 : 1;
             v->env   = 0.0f; v->stage = 1;
             v->rate  = pitch; v->gain = gain; v->note = note;
+            vfilt_reset(&v->filt);
             break;
         }
         default: break;
@@ -2605,6 +2726,16 @@ work_t *work_create(const host_api_v1_t *host) {
     }
     w->song_len = 4;
 
+    /* Wide open. A patch that never visits the filter page must sound exactly
+      * as it did before the page existed. */
+    w->vfilt.base   = 0;
+    w->vfilt.width  = 127;
+    w->vfilt.reso   = 0;
+    w->vfilt.env    = 64;      /* bipolar centre = no envelope */
+    w->vfilt.attack = 0;
+    w->vfilt.decay  = 48;
+    w->vfilt.track  = 0;
+
     w->menv.dest   = -1;
     w->menv.attack = 0;
     w->menv.hold   = 8;
@@ -2680,6 +2811,7 @@ void work_process(work_t *w, const int16_t *in, int16_t *out, int frames) {
 
     seq_run(w, frames);
     build_effective(w, frames);
+    vfilt_prepare(w, frames);
 
     /* A machine change resets that slot's state so a reverb tail or delay
      * line from the previous machine cannot leak into the new one. This uses
@@ -3075,6 +3207,20 @@ static void apply_state(work_t *w, const char *json) {
         }
     }
 
+    if ((q = strstr(json, "\"vf\":[")) != NULL) {
+        const char *c = q + 6;
+        int v[7] = {0, 127, 0, 64, 0, 48, 0};
+        for (int i = 0; i < 7 && *c && *c != ']'; ++i) {
+            v[i] = iclamp(atoi(c), 0, 127);
+            while (*c && *c != ',' && *c != ']') c++;
+            if (*c == ',') c++;
+        }
+        w->vfilt.base = (uint8_t)v[0]; w->vfilt.width  = (uint8_t)v[1];
+        w->vfilt.reso = (uint8_t)v[2]; w->vfilt.env    = (uint8_t)v[3];
+        w->vfilt.attack = (uint8_t)v[4]; w->vfilt.decay = (uint8_t)v[5];
+        w->vfilt.track = (uint8_t)v[6];
+    }
+
     for (int n = 0; n < WORK_LFOS; ++n) {
         char key[16];
         snprintf(key, sizeof(key), "\"l%d\":[", n + 1);
@@ -3277,6 +3423,19 @@ void work_set_param(work_t *w, const char *key, const char *val) {
         }
         return;
         }
+    }
+
+    if (strncmp(key, "vf_", 3) == 0) {
+        const char *f = key + 3;
+        int v = iclamp(atoi(val), 0, 127);
+        if      (strcmp(f, "base")  == 0) w->vfilt.base   = (uint8_t)v;
+        else if (strcmp(f, "width") == 0) w->vfilt.width  = (uint8_t)v;
+        else if (strcmp(f, "reso")  == 0) w->vfilt.reso   = (uint8_t)v;
+        else if (strcmp(f, "env")   == 0) w->vfilt.env    = (uint8_t)v;
+        else if (strcmp(f, "atk")   == 0) w->vfilt.attack = (uint8_t)v;
+        else if (strcmp(f, "dec")   == 0) w->vfilt.decay  = (uint8_t)v;
+        else if (strcmp(f, "track") == 0) w->vfilt.track  = (uint8_t)v;
+        return;
     }
 
     if (strcmp(key, "mix") == 0) { w->mix = (uint8_t)iclamp(atoi(val), 0, 127); return; }
@@ -3500,6 +3659,19 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
         int s = parse_machine_key(key);
         if (s >= 0)
             return nclamp(snprintf(buf, buf_len, "%d", w->cfg[s].machine), cap);
+    }
+
+    if (strncmp(key, "vf_", 3) == 0) {
+        const char *f = key + 3;
+        int v = -1;
+        if      (strcmp(f, "base")  == 0) v = w->vfilt.base;
+        else if (strcmp(f, "width") == 0) v = w->vfilt.width;
+        else if (strcmp(f, "reso")  == 0) v = w->vfilt.reso;
+        else if (strcmp(f, "env")   == 0) v = w->vfilt.env;
+        else if (strcmp(f, "atk")   == 0) v = w->vfilt.attack;
+        else if (strcmp(f, "dec")   == 0) v = w->vfilt.decay;
+        else if (strcmp(f, "track") == 0) v = w->vfilt.track;
+        if (v >= 0) return nclamp(snprintf(buf, buf_len, "%d", v), cap);
     }
 
     if (strcmp(key, "mix") == 0)
@@ -3747,6 +3919,11 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
                                         i ? "," : "", w->cfg[s].p[i]), cap);
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "]"), cap);
         }
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                ",\"vf\":[%d,%d,%d,%d,%d,%d,%d]",
+                                w->vfilt.base, w->vfilt.width, w->vfilt.reso,
+                                w->vfilt.env, w->vfilt.attack, w->vfilt.decay,
+                                w->vfilt.track), cap);
         for (int l = 0; l < WORK_LFOS; ++l) {
             work_lfo_cfg_t *L = &w->lfo[l];
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),

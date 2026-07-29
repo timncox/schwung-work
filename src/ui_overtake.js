@@ -119,9 +119,14 @@ const EDIT_LFO1   = 1;
 const EDIT_LFO2   = 2;
 const EDIT_LFO3   = 3;
 const EDIT_MENV   = 4;
-const EDIT_GLOBAL = 5;
-const EDIT_COUNT  = 6;
-const EDIT_NAME   = ['FX', 'LFO 1', 'LFO 2', 'LFO 3', 'MOD ENV', 'GLOBAL'];
+/* The voice filter is its own page rather than knobs on the sample machines:
+ * all five source machines already spend all eight, and a filter belongs to
+ * the voice rather than to the machine reading the sample. */
+const EDIT_VFILT  = 5;
+const EDIT_GLOBAL = 6;
+const EDIT_COUNT  = 7;
+const EDIT_NAME   = ['FX', 'LFO 1', 'LFO 2', 'LFO 3', 'MOD ENV', 'VOICE FLT',
+                     'GLOBAL'];
 
 /* Step-attribute modes the jog edits while a step is held */
 const MODE_NONE   = 0;
@@ -410,6 +415,18 @@ function pageKnobs() {
             });
         }
         return out;
+    }
+    if (editPage === EDIT_VFILT) {
+        return [
+            { key: 'vf_base',  label: 'BASE',  lock: -1, min: 0, max: 127 },
+            { key: 'vf_width', label: 'WDTH',  lock: -1, min: 0, max: 127 },
+            { key: 'vf_reso',  label: 'RESO',  lock: -1, min: 0, max: 127 },
+            { key: 'vf_env',   label: 'ENV',   lock: -1, min: 0, max: 127 },
+            { key: 'vf_atk',   label: 'ATK',   lock: -1, min: 0, max: 127 },
+            { key: 'vf_dec',   label: 'DEC',   lock: -1, min: 0, max: 127 },
+            { key: 'vf_track', label: 'KEY',   lock: -1, min: 0, max: 127 },
+            { key: '', label: '', lock: -1, min: 0, max: 0 }
+        ];
     }
     if (editPage === EDIT_MENV) {
         return [

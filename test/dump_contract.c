@@ -78,6 +78,7 @@ int main(void) {
         "seq_pos", "meter", "state", "live_rec",
         "menv_dest", "menv_atk", "menv_hold", "menv_dec", "menv_depth",
         "pattern", "page_mask", "song_on", "song_len", "song_pos", "undo_state",
+        "vf_base", "vf_width", "vf_reso", "vf_env", "vf_atk", "vf_dec", "vf_track",
         "monitor", "hw_input"
     };
     for (size_t i = 0; i < sizeof(simple) / sizeof(simple[0]); ++i) emit(w, simple[i]);
@@ -144,6 +145,8 @@ int main(void) {
         {"lfo2_mult", "6"}, {"lfo2_phase", "44"}, {"lfo2_depth", "20"}, {"lfo2_trig", "1"},
         {"lfo3_dest", "6"}, {"lfo3_spd", "70"}, {"lfo3_wave", "4"},
         {"lfo3_mult", "7"}, {"lfo3_phase", "22"}, {"lfo3_depth", "55"}, {"lfo3_trig", "1"},
+        {"vf_base", "40"}, {"vf_width", "50"}, {"vf_reso", "60"},
+        {"vf_env", "70"}, {"vf_atk", "10"}, {"vf_dec", "20"}, {"vf_track", "80"},
         {"live_rec", "1"}, {"menv_dest", "3"}, {"menv_atk", "20"}, {"menv_hold", "30"},
         {"menv_dec", "40"}, {"menv_depth", "90"}, {"prob5", "37"}, {"pattern", "3"}, {"page_mask", "7"}, {"song_on", "1"},
         {"song_len", "8"}, {"song_row2", "5:3:0"}, {"trigtype4", "1"},

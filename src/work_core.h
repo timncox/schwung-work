@@ -265,6 +265,18 @@ typedef struct {
     uint8_t depth;                    /* bipolar around 64                  */
 } work_modenv_cfg_t;
 
+/* Filter state and envelope belonging to ONE voice. Sharing it across voices
+ * would make each new note's envelope sweep every note still sounding, which
+ * is audible the moment two trigs overlap. Two filters, because BASE is the
+ * high-pass edge and WDTH is the distance up to the low-pass edge: the pair
+ * is a band whose width you set directly. */
+typedef struct {
+    float hp1[2], hp2[2];        /* SVF integrator state, per channel      */
+    float lp1[2], lp2[2];
+    float env;
+    int   stage;                 /* 0 idle, 1 attack, 2 decay              */
+} work_vfilt_t;
+
 /* One sample voice. Polysample and Slicer are polyphonic, so a voice owns
  * everything that differs per note: where it is reading, how fast, its envelope
  * and its vibrato phase. */
@@ -279,7 +291,26 @@ typedef struct {
     int    note;         /* -1 when free                                  */
     int    dir;          /* +1 forward, -1 reverse                        */
     uint32_t age;        /* for voice stealing: oldest goes first         */
+    work_vfilt_t filt;   /* this voice's own filter and filter envelope    */
 } work_voice_t;
+
+/* The voice filter, shared by every sample machine in the slot.
+ *
+ * It is NOT one of the machine's eight knobs: all five source machines
+ * already spend all eight, and a filter is a property of the voice rather
+ * than of the machine reading the sample. It gets its own edit page.
+ *
+ * Defaults are wide open, so every patch saved before v0.8.0 sounds exactly
+ * as it did. */
+typedef struct {
+    uint8_t base;        /* high-pass edge, 0 = open                       */
+    uint8_t width;       /* octaves from base up to the low-pass edge      */
+    uint8_t reso;        /* resonance, both edges                          */
+    uint8_t env;         /* envelope amount, bipolar around 64             */
+    uint8_t attack;
+    uint8_t decay;
+    uint8_t track;       /* key tracking, 0 = none, 127 = one-for-one      */
+} work_vfilt_cfg_t;
 
 /* One insert slot: machine code + 8 parameters, each 0..127. */
 typedef struct {
