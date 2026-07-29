@@ -55,20 +55,21 @@ function familyServed(key) {
  * Host file bindings are separate and DO return booleans. */
 function makeVFS() {
     const files = new Map();
+    const binaries = new Map();     /* path -> Uint8Array, for base64 reads */
     const dirs = new Set();
     let renameFails = false;
 
     return {
-        files, dirs,
+        files, dirs, binaries,
         failRenames(v) { renameFails = v; },
 
         readdir(path) {
             if (!dirs.has(path)) return [[], 2];            /* ENOENT */
             const names = ['.', '..'];                       /* real listings carry these */
-            for (const f of files.keys()) {
+            for (const f of [...files.keys(), ...binaries.keys()]) {
                 if (f.startsWith(path + '/')) {
                     const rest = f.slice(path.length + 1);
-                    if (!rest.includes('/')) names.push(rest);
+                    if (!rest.includes('/') && !names.includes(rest)) names.push(rest);
                 }
             }
             return [names, 0];
@@ -113,6 +114,14 @@ function makeHost() {
         },
         host_read_file(path) {
             return vfs.files.has(path) ? vfs.files.get(path) : null;
+        },
+        /* Binary-safe read. host_read_file returns a C string and stops at the
+         * first NUL, which in a WAV is usually inside the header — that is why
+         * the loader uses this one. */
+        host_read_file_base64(path) {
+            const raw = vfs.binaries.get(path);
+            if (!raw) return null;
+            return Buffer.from(raw).toString('base64');
         },
         host_ensure_dir(path) { vfs.dirs.add(path); return true; },
 
@@ -873,6 +882,171 @@ async function testPresetEmptyDirIsSafe() {
     check(!threw, 'a corrupt preset file threw');
 }
 
+
+/* ------------------------------------------------------------ Tier B: SRC */
+
+/* A real RIFF/WAVE file, built here rather than checked in, so the parser is
+ * tested against the format and not against a fixture that might itself be
+ * wrong. `extra` inserts a LIST chunk BEFORE fmt — plenty of real WAVs carry
+ * one, and a parser that assumes fmt sits at offset 12 reads metadata as
+ * audio. */
+function makeWav({ frames, channels = 2, bits = 16, rate = 44100, extra = false }) {
+    const bytesPerSample = bits >> 3;
+    const dataLen = frames * channels * bytesPerSample;
+    const listLen = extra ? 12 : 0;
+    const total = 12 + listLen + 24 + 8 + dataLen;
+    const b = Buffer.alloc(total);
+    let at = 0;
+    b.write('RIFF', at); at += 4;
+    b.writeUInt32LE(total - 8, at); at += 4;
+    b.write('WAVE', at); at += 4;
+    if (extra) {
+        b.write('LIST', at); at += 4;
+        b.writeUInt32LE(4, at); at += 4;
+        b.write('INFO', at); at += 4;
+    }
+    b.write('fmt ', at); at += 4;
+    b.writeUInt32LE(16, at); at += 4;
+    b.writeUInt16LE(bits === 32 ? 3 : 1, at); at += 2;    /* 3 = IEEE float */
+    b.writeUInt16LE(channels, at); at += 2;
+    b.writeUInt32LE(rate, at); at += 4;
+    b.writeUInt32LE(rate * channels * bytesPerSample, at); at += 4;
+    b.writeUInt16LE(channels * bytesPerSample, at); at += 2;
+    b.writeUInt16LE(bits, at); at += 2;
+    b.write('data', at); at += 4;
+    b.writeUInt32LE(dataLen, at); at += 4;
+    for (let f = 0; f < frames; f++) {
+        for (let c = 0; c < channels; c++) {
+            const v = ((f * (c + 1) * 13) % 20000) - 10000;
+            if (bits === 16) b.writeInt16LE(v, at);
+            else if (bits === 8) b.writeUInt8(((v >> 8) + 128) & 0xFF, at);
+            else if (bits === 24) { b.writeUInt8(0, at); b.writeInt16LE(v, at + 1); }
+            else if (bits === 32) b.writeFloatLE(v / 32768, at);
+            at += bytesPerSample;
+        }
+    }
+    return b;
+}
+
+/* Decode what the UI actually sent, using the engine's own wire format. */
+function decodeSent(writes) {
+    const begin = writes.find((w) => w.key === 'sample_begin');
+    const chunks = writes.filter((w) => w.key === 'sample_chunk');
+    const ended = writes.some((w) => w.key === 'sample_end');
+    if (!begin) return null;
+    const bytes = Buffer.concat(chunks.map((c) => Buffer.from(`${c.val}`, 'base64')));
+    return {
+        frames: parseInt(`${begin.val}`, 10),
+        name: `${begin.val}`.split(':')[1] || '',
+        bytes, ended, chunkCount: chunks.length
+    };
+}
+
+async function testWavLoadRoundTrip() {
+    console.log('a 16-bit stereo WAV loads and transfers byte-exact');
+    const ctx = await loadUI();
+    ctx.host.init();
+
+    const wav = makeWav({ frames: 1000 });
+    ctx.vfs.dirs.add('/data/UserData/Samples');
+    ctx.vfs.binaries.set('/data/UserData/Samples/kick.wav', wav);
+
+    ctx.writes.length = 0;
+    const ok = ctx.host.loadSampleFile('/data/UserData/Samples/kick.wav');
+    check(ok === true, 'loadSampleFile reported failure on a valid WAV');
+
+    const sent = decodeSent(ctx.writes);
+    check(!!sent, 'nothing was sent to the engine');
+    if (sent) {
+        check(sent.ended, 'the transfer never committed with sample_end');
+        check(sent.frames === 1000, `declared ${sent.frames} frames, expected 1000`);
+        check(sent.name === 'kick', `sample name was "${sent.name}", expected kick`);
+        check(sent.bytes.length === 1000 * 4,
+              `sent ${sent.bytes.length} bytes, expected ${1000 * 4}`);
+        const src = wav.subarray(wav.length - 1000 * 4);
+        check(Buffer.compare(sent.bytes, src) === 0,
+              'transferred audio does not match the file');
+    }
+}
+
+async function testWavVariantsAndChunkParsing() {
+    console.log('mono, 8/24/32-bit and chunk-padded WAVs all convert to stereo 16-bit');
+    for (const spec of [
+        { frames: 300, channels: 1, bits: 16, label: 'mono 16-bit' },
+        { frames: 300, channels: 2, bits: 8,  label: 'stereo 8-bit' },
+        { frames: 300, channels: 2, bits: 24, label: 'stereo 24-bit' },
+        { frames: 300, channels: 2, bits: 32, label: 'stereo float' },
+        { frames: 300, channels: 2, bits: 16, extra: true, label: 'LIST chunk before fmt' }
+    ]) {
+        const ctx = await loadUI();
+        ctx.host.init();
+        ctx.vfs.dirs.add('/data/UserData/Samples');
+        ctx.vfs.binaries.set('/data/UserData/Samples/x.wav', makeWav(spec));
+        ctx.writes.length = 0;
+        ctx.host.loadSampleFile('/data/UserData/Samples/x.wav');
+        const sent = decodeSent(ctx.writes);
+        check(sent && sent.frames === 300 && sent.bytes.length === 300 * 4,
+              `${spec.label}: sent ${sent && sent.frames} frames / ` +
+              `${sent && sent.bytes.length} bytes, expected 300 / 1200`);
+        if (spec.channels === 1 && sent) {
+            check(sent.bytes.readInt16LE(0) === sent.bytes.readInt16LE(2),
+                  'mono was not duplicated across both channels');
+        }
+    }
+}
+
+/* The engine's buffer is finite. The UI must clamp to what sample_max reports
+ * rather than sending frames the engine will drop — a mismatch between the
+ * declared length and the audio is how a transfer goes silently out of sync. */
+async function testOversizedSampleIsTruncated() {
+    console.log('a sample longer than the engine buffer is truncated before sending');
+    const ctx = await loadUI();
+    ctx.store.sample_max = '500';
+    ctx.host.init();
+    ctx.vfs.dirs.add('/data/UserData/Samples');
+    ctx.vfs.binaries.set('/data/UserData/Samples/long.wav', makeWav({ frames: 4000 }));
+    ctx.writes.length = 0;
+    ctx.host.loadSampleFile('/data/UserData/Samples/long.wav');
+    const sent = decodeSent(ctx.writes);
+    check(sent && sent.frames === 500, `declared ${sent && sent.frames}, expected 500`);
+    check(sent && sent.bytes.length === 500 * 4,
+          `sent ${sent && sent.bytes.length} bytes for a 500-frame declaration`);
+}
+
+async function testSampleTransferIsChunked() {
+    console.log('a large transfer is split into chunks the param channel can carry');
+    const ctx = await loadUI();
+    ctx.store.sample_max = '200000';
+    ctx.host.init();
+    ctx.vfs.dirs.add('/data/UserData/Samples');
+    ctx.vfs.binaries.set('/data/UserData/Samples/big.wav', makeWav({ frames: 60000 }));
+    ctx.writes.length = 0;
+    ctx.host.loadSampleFile('/data/UserData/Samples/big.wav');
+    const sent = decodeSent(ctx.writes);
+    check(sent && sent.chunkCount > 1,
+          `60000 frames went in ${sent && sent.chunkCount} chunk(s)`);
+    /* SHADOW_PARAM_VALUE_LEN is 65536; anything bigger is truncated in transit. */
+    const biggest = Math.max(...ctx.writes
+        .filter((w) => w.key === 'sample_chunk')
+        .map((w) => `${w.val}`.length));
+    check(biggest < 65536,
+          `largest chunk was ${biggest} chars — over the 64 KB param buffer, so ` +
+          'it would be truncated in transit');
+}
+
+async function testGarbageFileIsRejected() {
+    console.log('a non-WAV file is refused rather than loaded as noise');
+    const ctx = await loadUI();
+    ctx.host.init();
+    ctx.vfs.dirs.add('/data/UserData/Samples');
+    ctx.vfs.binaries.set('/data/UserData/Samples/notes.txt', Buffer.from('hello there'));
+    ctx.writes.length = 0;
+    const ok = ctx.host.loadSampleFile('/data/UserData/Samples/notes.txt');
+    check(ok === false, 'a text file was accepted as a sample');
+    check(!ctx.writes.some((w) => w.key === 'sample_begin'),
+          'a rejected file still started a transfer');
+}
+
 /* ------------------------------------------------------------------ run */
 
 const tests = [
@@ -887,6 +1061,11 @@ const tests = [
     testCopyPasteClear,
     testNoUnknownWritesAnywhere,
     testResumeForcesRepaints,
+    testWavLoadRoundTrip,
+    testWavVariantsAndChunkParsing,
+    testOversizedSampleIsTruncated,
+    testSampleTransferIsChunked,
+    testGarbageFileIsRejected,
     testKnobResponseCurve,
     testFetchAllUsesBulkReads,
     testBulkDecodeIsPositionallyCorrect,

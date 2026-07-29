@@ -260,6 +260,13 @@ typedef struct {
     float  frez_pos;
     uint32_t rng;
 
+    /* Single Player voice. One-shot playback of the loaded sample, retriggered
+     * by a sequencer trig or an incoming note. `pos` is a fractional read
+     * cursor in frames; -1 means idle. */
+    double sp_pos;
+    float  sp_env;               /* AD envelope level                     */
+    int    sp_stage;             /* 0 idle, 1 attack, 2 decay             */
+
     int    last_machine;         /* reset state when the machine changes  */
 } work_slot_t;
 
@@ -347,6 +354,21 @@ struct work {
     uint32_t             rng;           /* LFO random wave; kept separate from
                                          * the slots' so an LFO cannot shift a
                                          * Degrader's dropout sequence */
+
+    /* ------------------------------------------------------ sample memory
+     *
+     * Allocated once in work_create() and never resized — the render path
+     * must not allocate. Interleaved stereo int16, which is both half the
+     * size of float and exactly the format the host already speaks.
+     *
+     * `sample_frames` is what has been COMMITTED. `sample_fill` is how far
+     * an in-progress transfer has got; the render path reads only
+     * sample_frames, so a partial upload is never audible. */
+    int16_t             *sample;
+    int                  sample_frames; /* committed length, 0 = empty       */
+    int                  sample_fill;   /* frames written by the transfer    */
+    int                  sample_declared; /* frames the transfer promised    */
+    char                 sample_name[32];
 };
 
 /* ---------------------------------------------------------- machine names */
@@ -356,7 +378,7 @@ static const char *MACHINE_NAME[WORK_FX_COUNT] = {
     "Degrader", "Dirtshaper", "Filter Folder", "Filterbank", "Frequency Warper",
     "Infinite Flanger", "Low-Pass Filter", "Multimode Filter", "Panoramic Chorus",
     "Phase 98", "Rumsklang Reverb", "Saturator Delay", "Steel Box Reverb",
-    "Supervoid Reverb", "Warble", "Grainer"
+    "Supervoid Reverb", "Warble", "Grainer", "Single Player"
 };
 
 /* Knob labels A-H per machine, matching the Tonverk manual's abbreviations.
@@ -384,7 +406,8 @@ static const char *PARAM_NAME[WORK_FX_COUNT][WORK_PARAMS] = {
 /* SteelBox  */ {"SIZE","FDBK","BRIT","PRE","WDTH","DIFF","LOWC","MIX"},
 /* Supervoid */ {"PRE","DEC","FREQ","GAIN","HPF","LPF","MIX",""},
 /* Warble    */ {"SPEED","DEPTH","BASE","WIDTH","N.LEV","N.HPF","STEREO","MIX"},
-/* Grainer   */ {"TUNE","DENS","SIZE","POS","SCAN","SPRD","AMNT","MIX"}
+/* Grainer   */ {"TUNE","DENS","SIZE","POS","SCAN","SPRD","AMNT","MIX"},
+/* Single    */ {"TUNE","STRT","LEN","LOOP","ATK","DEC","LEV","PAN"},
 };
 
 const char *work_machine_name(int code) {
@@ -458,7 +481,8 @@ static const uint8_t PARAM_DEFAULT[WORK_FX_COUNT][WORK_PARAMS] = {
 /* SteelBox  */ {64,72,72,16,80,64,24,48},
 /* Supervoid */ {16,72,72,64,16,110,48,0},
 /* Warble    */ {40,40,48,72,16,64,64,64},
-/* Grainer   */ {64,72,40,24,68,24,80,80}
+/* Grainer   */ {64,72,40,24,68,24,80,80},
+/* Single    */ {  64,    0,  127,    0,    0,  127,  100,   64},
 };
 
 /* ------------------------------------------------- transport / tempo helpers */
@@ -1573,17 +1597,29 @@ static void m_warble(mctx_t *m, float *l, float *r) {
  * governs how often grains launch, AMNT how many may sound at once, and TUNE
  * is bipolar over +/- 2 octaves.
  *
- * Not carried across, and worth knowing: the sample slot, the AMNT/DIR/MODE
- * and PAN controls of SRC page 2, and the FADE/SHAPE window pair — grains use
- * a fixed Hann window here, which is the smooth end of what SHAPE offers.
+ * Not carried across, and worth knowing: the AMNT/DIR/MODE and PAN controls of
+ * SRC page 2, and the FADE/SHAPE window pair — grains use a fixed Hann window
+ * here, which is the smooth end of what SHAPE offers.
+ *
+ * SOURCE (Tier B): if a sample is loaded, the grains read THAT instead of the
+ * live input, which is what makes this a real SRC machine rather than a
+ * live-input effect. POS and SCAN then scan the sample rather than the last
+ * two seconds of history. With no sample loaded it falls back to the live
+ * input exactly as before, so an existing patch sounds unchanged.
  */
 static void m_grainer(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
     const uint8_t *p = m->p;
 
-    /* the buffer under the grains is the live input */
+    /* The buffer under the grains is a loaded sample when there is one, and
+     * the live input otherwise. The ring keeps recording either way, so
+     * clearing the sample returns to live granulation with history intact. */
     s->dl[s->dw * 2]     = *l;
     s->dl[s->dw * 2 + 1] = *r;
+
+    work_t     *w      = m->w;
+    const int   frames = w->sample_frames;
+    const int   from_sample = (frames > 4 && w->sample != NULL);
 
     float rate  = powf(2.0f, pbi(p[0]) * 2.0f);                  /* TUNE +/-2 oct */
     float size  = fclampf(0.01f + p01(p[2]) * 1.2f, 0.01f, 1.4f) * (float)WORK_SR;
@@ -1646,8 +1682,26 @@ static void m_grainer(mctx_t *m, float *l, float *r) {
         float back = s->grain[g].pos - s->grain[g].age * (s->grain[g].step - 1.0f);
         back = fclampf(back, 2.0f, (float)(WORK_DLY_LEN - 4));
 
-        wl += dl_read(s->dl, WORK_DLY_LEN, s->dw, back, 0) * win * s->grain[g].gl;
-        wr += dl_read(s->dl, WORK_DLY_LEN, s->dw, back, 1) * win * s->grain[g].gr;
+        if (from_sample) {
+            /* `back` is an offset behind a notional head; map it onto the
+             * sample by treating the buffer span as the sample length. Every
+             * index is clamped against sample_frames rather than trusted — a
+             * transfer can shorten the sample between blocks. */
+            float scaled = back * (float)frames / (float)WORK_DLY_LEN;
+            int   i0 = (int)scaled;
+            if (i0 < 0) i0 = 0;
+            if (i0 >= frames - 1) i0 = frames - 2;
+            float fr = scaled - (float)i0;
+            const float a0 = w->sample[i0 * 2]           / 32768.0f;
+            const float a1 = w->sample[(i0 + 1) * 2]     / 32768.0f;
+            const float b0 = w->sample[i0 * 2 + 1]       / 32768.0f;
+            const float b1 = w->sample[(i0 + 1) * 2 + 1] / 32768.0f;
+            wl += (a0 + (a1 - a0) * fr) * win * s->grain[g].gl;
+            wr += (b0 + (b1 - b0) * fr) * win * s->grain[g].gr;
+        } else {
+            wl += dl_read(s->dl, WORK_DLY_LEN, s->dw, back, 0) * win * s->grain[g].gl;
+            wr += dl_read(s->dl, WORK_DLY_LEN, s->dw, back, 1) * win * s->grain[g].gr;
+        }
 
         s->grain[g].age += 1.0f;
     }
@@ -1687,6 +1741,89 @@ static void slot_reset(work_slot_t *s) {
     if (fdn)  memset(fdn,  0, sizeof(float) * WORK_FDN_LINES * WORK_FDN_LEN);
 }
 
+
+/* ---------------------------------------------------------- Single Player
+ *
+ * The first of Tonverk's SRC machines: one shot of the loaded sample per trig.
+ * TUNE is +/- two octaves around 64, STRT and LEN scan a window into the
+ * sample, LOOP holds the window instead of stopping at its end, ATK and DEC
+ * shape an AD envelope, LEV is output level and PAN places it.
+ *
+ * This is a SOURCE, not an insert effect: it replaces its input rather than
+ * processing it, which is what makes Work's chain slot able to originate
+ * audio. Nothing is read until a sample is committed, so an empty slot is
+ * silent rather than noisy.
+ *
+ * Realtime rules: no allocation, and every read of the sample buffer is
+ * clamped against sample_frames rather than trusting the cursor. A transfer
+ * running concurrently only ever moves sample_fill, which this never reads. */
+static void m_single(mctx_t *m, float *l, float *r) {
+    work_slot_t *s = m->s;
+    work_t      *w = m->w;
+
+    const int frames = w->sample_frames;
+    if (frames <= 0 || !w->sample) { *l = 0.0f; *r = 0.0f; return; }
+
+    /* window into the sample */
+    int start = (int)((double)m->p[1] / 127.0 * (frames - 1));
+    int len   = (int)((double)m->p[2] / 127.0 * (frames - start));
+    if (len < 2) len = 2;
+    if (start + len > frames) len = frames - start;
+
+    const int   loop = m->p[3] >= 64;
+    const float rate = powf(2.0f, ((float)m->p[0] - 64.0f) / 32.0f);  /* +/-2 oct */
+
+    if (s->sp_stage == 0) { *l = 0.0f; *r = 0.0f; return; }
+
+    /* AD envelope. ATK 0 is an instant start, which is what a one-shot
+     * sample player normally wants; DEC 127 holds until the window ends. */
+    const float atk = 0.0005f + (float)m->p[4] / 127.0f * 2.0f;   /* seconds */
+    const float dec = 0.0100f + (float)m->p[5] / 127.0f * 8.0f;
+    if (s->sp_stage == 1) {
+        s->sp_env += 1.0f / (atk * (float)WORK_SR);
+        if (s->sp_env >= 1.0f) { s->sp_env = 1.0f; s->sp_stage = 2; }
+    } else {
+        s->sp_env -= 1.0f / (dec * (float)WORK_SR);
+        if (s->sp_env <= 0.0f) { s->sp_env = 0.0f; s->sp_stage = 0; }
+    }
+
+    /* linear interpolation between neighbouring frames */
+    double pos = s->sp_pos;
+    int    i0  = (int)pos;
+    float  fr  = (float)(pos - i0);
+    int    i1  = i0 + 1;
+
+    if (i0 < start) i0 = start;
+    if (i1 >= start + len) i1 = loop ? start : start + len - 1;
+    if (i0 >= frames) i0 = frames - 1;
+    if (i1 >= frames) i1 = frames - 1;
+
+    const float a_l = w->sample[i0 * 2]     / 32768.0f;
+    const float a_r = w->sample[i0 * 2 + 1] / 32768.0f;
+    const float b_l = w->sample[i1 * 2]     / 32768.0f;
+    const float b_r = w->sample[i1 * 2 + 1] / 32768.0f;
+
+    float ol = a_l + (b_l - a_l) * fr;
+    float orr = a_r + (b_r - a_r) * fr;
+
+    pos += rate;
+    if (pos >= start + len) {
+        if (loop) pos = start + (pos - (start + len));
+        else { s->sp_stage = 0; s->sp_env = 0.0f; }
+    }
+    s->sp_pos = pos;
+
+    /* level and pan — equal power, 64 = centre */
+    const float lev = (float)m->p[6] / 127.0f;
+    const float pan = (float)m->p[7] / 127.0f;
+    const float gl  = cosf(pan * 1.57079633f);
+    const float gr  = sinf(pan * 1.57079633f);
+    const float g   = lev * s->sp_env;
+
+    *l = ol * g * gl * 1.41421356f;
+    *r = orr * g * gr * 1.41421356f;
+}
+
 static void run_machine(mctx_t *m, int machine, float *l, float *r) {
     switch (machine) {
         case WORK_FX_CHRONO:    m_chrono(m, l, r);    break;
@@ -1709,6 +1846,7 @@ static void run_machine(mctx_t *m, int machine, float *l, float *r) {
         case WORK_FX_SUPERVOID: m_supervoid(m, l, r); break;
         case WORK_FX_WARBLE:    m_warble(m, l, r);    break;
         case WORK_FX_GRAINER:   m_grainer(m, l, r);   break;
+        case WORK_FX_SINGLE:    m_single(m, l, r);    break;
         case WORK_FX_BYPASS:
         default:                                      break;
     }
@@ -1798,6 +1936,22 @@ static void song_advance(work_t *w) {
     w->last_step = -1;
 }
 
+/* Start every SRC voice from the top of its window. Called by a full trig and
+ * by an incoming note; both are the "something happened" edge. Only slots
+ * actually holding an SRC machine react, so this is free on an FX-only chain. */
+static void work_src_trigger(work_t *w) {
+    for (int i = 0; i < WORK_SLOTS; ++i) {
+        if (w->cfg[i].machine != WORK_FX_SINGLE) continue;
+        work_slot_t *s = &w->slot[i];
+        const int frames = w->sample_frames;
+        if (frames <= 0) continue;
+        int start = (int)((double)w->cfg[i].p[1] / 127.0 * (frames - 1));
+        s->sp_pos   = start;
+        s->sp_env   = 0.0f;
+        s->sp_stage = 1;
+    }
+}
+
 static void seq_run(work_t *w, int frames) {
     if (!w->seq_on) {
         w->held_mask = 0;
@@ -1853,6 +2007,10 @@ static void seq_run(work_t *w, int frames) {
         }
         w->menv_stage = 1.0f;
         w->menv_t     = 0.0f;
+        /* An SRC machine has a voice to start, unlike every FX machine before
+         * it: a full trig fires the sample from its window start. A LOCK trig
+         * deliberately does not, matching Elektron's trigless lock. */
+        work_src_trigger(w);
     }
 }
 
@@ -1948,6 +2106,12 @@ work_t *work_create(const host_api_v1_t *host) {
     work_t *w = (work_t *)calloc(1, sizeof(work_t));
     if (!w) return NULL;
 
+    /* Sample memory: allocated ONCE, here, never in the render path. If the
+     * allocation fails the engine still runs — every SRC machine checks
+     * w->sample before reading, so the module degrades to silence in that slot
+     * rather than refusing to load. */
+    w->sample = (int16_t *)calloc((size_t)WORK_SAMPLE_FRAMES * 2, sizeof(int16_t));
+
     w->host = host;
     w->bpm  = 120.0f;
     w->mix  = 127;
@@ -2014,6 +2178,7 @@ work_t *work_create(const host_api_v1_t *host) {
 
 void work_destroy(work_t *w) {
     if (!w) return;
+    free(w->sample);
     for (int i = 0; i < WORK_SLOTS; ++i) {
         free(w->slot[i].dl);
         free(w->slot[i].pre);
@@ -2058,6 +2223,9 @@ void work_process(work_t *w, const int16_t *in, int16_t *out, int frames) {
             for (int n = 0; n < WORK_LFOS; ++n)
                 if (w->lfo[n].trig) w->lfo_ph[n] = 0.0f;
         }
+        /* A played note fires the SRC voice too, so Work is usable from a
+         * keyboard or Move's own pads without the sequencer running. */
+        work_src_trigger(w);
         w->note_pending = 0;
     }
 
@@ -2411,7 +2579,93 @@ static void apply_state(work_t *w, const char *json) {
     }
 }
 
+/* ------------------------------------------------------- sample transfer
+ *
+ * work_set_param runs on the SHIM'S AUDIO THREAD — shim_handle_param_bulk says
+ * so in its own comment ("this runs on the audio thread ~44x/sec"). So the
+ * engine must never open a file here. The UI reads the WAV with the host's
+ * file bindings, converts to interleaved 16-bit, and pushes it through in
+ * base64 chunks; all the engine does per chunk is a bounded decode into
+ * already-allocated memory.
+ *
+ * Protocol:
+ *   sample_begin  "<frames>[:<name>]"   reset the cursor, declare the length
+ *   sample_chunk  "<base64>"            append; bounded by the allocation
+ *   sample_end    anything              commit — sample_frames becomes visible
+ *   sample_clear  anything              drop the sample
+ *
+ * Nothing the render path reads moves until sample_end, so an interrupted
+ * transfer leaves the previous sample playing rather than half of a new one. */
+static int b64_val(char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;                      /* '=' padding and any junk */
+}
+
+/* Decode base64 straight into the sample buffer as little-endian int16.
+ * Bounded by the remaining space, so a malformed or over-long chunk cannot
+ * run past the allocation. */
+static void sample_append_b64(work_t *w, const char *b64) {
+    if (!w->sample || !b64) return;
+
+    const int cap_bytes = WORK_SAMPLE_FRAMES * 2 * (int)sizeof(int16_t);
+    uint8_t  *dst = (uint8_t *)w->sample;
+    int       off = w->sample_fill * 2 * (int)sizeof(int16_t);
+
+    int acc = 0, bits = 0;
+    for (const char *c = b64; *c; ++c) {
+        int v = b64_val(*c);
+        if (v < 0) continue;
+        acc = (acc << 6) | v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            if (off >= cap_bytes) break;
+            dst[off++] = (uint8_t)((acc >> bits) & 0xFF);
+        }
+    }
+    /* Only whole stereo frames count as filled. */
+    w->sample_fill = off / (2 * (int)sizeof(int16_t));
+}
+
 void work_set_param(work_t *w, const char *key, const char *val) {
+    if (!w || !key || !val) return;
+
+    if (strcmp(key, "sample_begin") == 0) {
+        int frames = atoi(val);
+        if (frames < 0) frames = 0;
+        if (frames > WORK_SAMPLE_FRAMES) frames = WORK_SAMPLE_FRAMES;
+        w->sample_declared = frames;
+        w->sample_fill = 0;
+        const char *colon = strchr(val, ':');
+        if (colon) {
+            size_t n = strlen(colon + 1);
+            if (n >= sizeof(w->sample_name)) n = sizeof(w->sample_name) - 1;
+            memcpy(w->sample_name, colon + 1, n);
+            w->sample_name[n] = '\0';
+        } else {
+            w->sample_name[0] = '\0';
+        }
+        return;
+    }
+    if (strcmp(key, "sample_chunk") == 0) { sample_append_b64(w, val); return; }
+    if (strcmp(key, "sample_end") == 0) {
+        int n = w->sample_fill;
+        if (w->sample_declared > 0 && n > w->sample_declared) n = w->sample_declared;
+        w->sample_frames = n;
+        return;
+    }
+    if (strcmp(key, "sample_clear") == 0) {
+        w->sample_frames = 0;
+        w->sample_fill = 0;
+        w->sample_declared = 0;
+        w->sample_name[0] = '\0';
+        return;
+    }
+
     if (!w || !key || !val) return;
 
     int slot, idx;
@@ -2802,6 +3056,17 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
                                     i ? "," : "", PARAM_NAME[mc][i]), cap);
         return n;
     }
+
+    /* What the UI needs to show and gate on: whether a sample is loaded, how
+     * long it is, and how far a transfer has got. */
+    if (strcmp(key, "sample_frames") == 0)
+        return nclamp(snprintf(buf, buf_len, "%d", w->sample_frames), cap);
+    if (strcmp(key, "sample_fill") == 0)
+        return nclamp(snprintf(buf, buf_len, "%d", w->sample_fill), cap);
+    if (strcmp(key, "sample_max") == 0)
+        return nclamp(snprintf(buf, buf_len, "%d", WORK_SAMPLE_FRAMES), cap);
+    if (strcmp(key, "sample_name") == 0)
+        return nclamp(snprintf(buf, buf_len, "%s", w->sample_name), cap);
 
     if (strcmp(key, "machines") == 0) {
         int n = 0;

@@ -140,8 +140,14 @@ static void test_all_machines_bounded(void) {
                   work_machine_name(mc), label[sIdx], railed, (long long)samples);
 
             /* Bypass at all-min is still bypass; every other machine at its
-             * defaults should pass or produce something audible. */
-            if (sIdx == 1 && mc != WORK_FX_BYPASS) {
+             * defaults should pass or produce something audible.
+             *
+             * SRC machines are the exception, and it is not a loophole: they
+             * REPLACE their input instead of processing it, so with no sample
+             * loaded and no trig fired, silence is the correct output. Their
+             * real coverage is test_sample_transfer / test_single_player
+             * below, which load audio and fire it. */
+            if (sIdx == 1 && mc != WORK_FX_BYPASS && mc != WORK_FX_SINGLE) {
                 CHECK(e > 0, "%s (default): output is completely silent",
                       work_machine_name(mc));
             }
@@ -1498,6 +1504,285 @@ static void test_hw_input_flag(void) {
     work_destroy(w);
 }
 
+
+/* ------------------------------------------------------------- Tier B: SRC
+ *
+ * Sample transfer has to survive the one constraint that shapes the whole
+ * design: work_set_param runs on the shim's AUDIO THREAD, so the engine can
+ * never open a file. Audio arrives base64-encoded in chunks and the engine
+ * only ever does a bounded decode into memory allocated at create time.
+ */
+
+static void b64_encode(const uint8_t *src, int n, char *out) {
+    static const char T[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    int o = 0;
+    for (int i = 0; i < n; i += 3) {
+        int v = src[i] << 16;
+        if (i + 1 < n) v |= src[i + 1] << 8;
+        if (i + 2 < n) v |= src[i + 2];
+        out[o++] = T[(v >> 18) & 63];
+        out[o++] = T[(v >> 12) & 63];
+        out[o++] = (i + 1 < n) ? T[(v >> 6) & 63] : '=';
+        out[o++] = (i + 2 < n) ? T[v & 63] : '=';
+    }
+    out[o] = '\0';
+}
+
+/* Build a ramp so every frame is individually identifiable — a transfer that
+ * drops, duplicates or misaligns a chunk shows up as a wrong value at a known
+ * index, not as vague distortion. */
+static void make_ramp(int16_t *pcm, int frames) {
+    for (int i = 0; i < frames; ++i) {
+        pcm[i * 2]     = (int16_t)((i * 7) % 30000 - 15000);
+        pcm[i * 2 + 1] = (int16_t)((i * 11) % 30000 - 15000);
+    }
+}
+
+static void send_sample(work_t *w, const int16_t *pcm, int frames, int chunk_frames) {
+    char begin[64];
+    snprintf(begin, sizeof begin, "%d:ramp", frames);
+    work_set_param(w, "sample_begin", begin);
+
+    char b64[64 * 1024];
+    for (int at = 0; at < frames; at += chunk_frames) {
+        int n = frames - at;
+        if (n > chunk_frames) n = chunk_frames;
+        b64_encode((const uint8_t *)(pcm + at * 2), n * 2 * (int)sizeof(int16_t), b64);
+        work_set_param(w, "sample_chunk", b64);
+    }
+    work_set_param(w, "sample_end", "1");
+}
+
+static void test_sample_transfer(void) {
+    printf("a sample transfers in chunks and lands byte-exact\n");
+    work_t *w = work_create(&host);
+
+    const int frames = 3000;
+    static int16_t pcm[3000 * 2];
+    make_ramp(pcm, frames);
+
+    /* Nothing is visible until the transfer commits. */
+    work_set_param(w, "sample_begin", "3000:ramp");
+    char probe[64];
+    work_get_param(w, "sample_frames", probe, sizeof probe);
+    CHECK(atoi(probe) == 0, "sample_frames was %s before sample_end — a partial "
+          "upload must never be audible", probe);
+
+    work_destroy(w);
+    w = work_create(&host);
+    send_sample(w, pcm, frames, 400);
+
+    work_get_param(w, "sample_frames", probe, sizeof probe);
+    CHECK(atoi(probe) == frames, "committed %s frames, sent %d", probe, frames);
+    work_get_param(w, "sample_name", probe, sizeof probe);
+    CHECK(strcmp(probe, "ramp") == 0, "sample name round-tripped as \"%s\"", probe);
+
+    /* Play it back and compare against the source. START 0, LEN full, LOOP off,
+     * instant attack, full level, centre pan, unity tune. */
+    work_set_param(w, "machine1", "21");
+    work_set_param(w, "fx1_p1", "64");   /* TUNE = unity */
+    work_set_param(w, "fx1_p2", "0");    /* STRT */
+    work_set_param(w, "fx1_p3", "127");  /* LEN  */
+    work_set_param(w, "fx1_p4", "0");    /* LOOP off */
+    work_set_param(w, "fx1_p5", "0");    /* ATK  */
+    work_set_param(w, "fx1_p6", "127");  /* DEC  */
+    work_set_param(w, "fx1_p7", "127");  /* LEV  */
+    work_set_param(w, "fx1_p8", "64");   /* PAN centre */
+    work_set_param(w, "mix", "127");
+    work_set_param(w, "machine2", "0");
+
+    /* A note fires the voice. */
+    uint8_t note_on[3] = { 0x90, 60, 100 };
+    work_on_midi(w, note_on, 3, 2);
+
+    int16_t in[BLOCK * 2] = {0}, out[BLOCK * 2];
+    work_process(w, in, out, BLOCK);
+
+    /* Playback should track the ramp. Compare SHAPE, not values — level, pan
+     * law and the envelope all scale it. Start at frame 32: even at ATK 0 the
+     * attack is half a millisecond (~22 frames), and a rising envelope over a
+     * falling sample inverts the comparison while it lasts. */
+    int matched = 0, tested = 0;
+    for (int i = 33; i < 96; ++i) {
+        int src_up = pcm[i * 2] > pcm[(i - 1) * 2];
+        int out_up = out[i * 2] > out[(i - 1) * 2];
+        if (src_up == out_up) matched++;
+        tested++;
+    }
+    CHECK(matched >= tested - 2, "playback followed the source ramp in only %d "
+          "of %d steps — the transfer is misaligned", matched, tested);
+
+    work_destroy(w);
+}
+
+static void test_sample_bounds(void) {
+    printf("an oversized or malformed transfer cannot run past the buffer\n");
+    work_t *w = work_create(&host);
+    char probe[64];
+
+    work_get_param(w, "sample_max", probe, sizeof probe);
+    const int cap = atoi(probe);
+    CHECK(cap > 0, "sample_max reported %s", probe);
+
+    /* Declare far more than fits. The engine must clamp rather than trust it. */
+    char begin[64];
+    snprintf(begin, sizeof begin, "%d", cap * 4);
+    work_set_param(w, "sample_begin", begin);
+
+    /* Garbage must be skipped, not decoded. Note the characters: "not base64"
+     * would NOT do as a junk string, because every letter and digit in it is a
+     * valid base64 symbol — it decodes to real bytes. Only symbols outside the
+     * alphabet actually test the rejection path. */
+    work_set_param(w, "sample_chunk", "!!!!@@@@####$$$$%%%%^^^^&&&&");
+    work_get_param(w, "sample_fill", probe, sizeof probe);
+    CHECK(atoi(probe) == 0, "junk decoded to %s frames", probe);
+
+    /* Now push more real audio than the buffer holds. */
+    static int16_t pcm[8192 * 2];
+    make_ramp(pcm, 8192);
+    char b64[64 * 1024];
+    for (int i = 0; i < 200; ++i) {
+        b64_encode((const uint8_t *)pcm, 8192 * 2 * (int)sizeof(int16_t), b64);
+        work_set_param(w, "sample_chunk", b64);
+    }
+    work_set_param(w, "sample_end", "1");
+    work_get_param(w, "sample_frames", probe, sizeof probe);
+    CHECK(atoi(probe) <= cap, "committed %s frames against a %d-frame buffer",
+          probe, cap);
+    CHECK(atoi(probe) > 0, "an over-long transfer committed nothing at all");
+
+    work_destroy(w);
+}
+
+static void test_single_player(void) {
+    printf("Single Player fires on a trig and honours its window\n");
+    work_t *w = work_create(&host);
+
+    const int frames = 4000;
+    static int16_t pcm[4000 * 2];
+    make_ramp(pcm, frames);
+    send_sample(w, pcm, frames, 600);
+
+    work_set_param(w, "machine1", "21");
+    work_set_param(w, "machine2", "0");
+    work_set_param(w, "mix", "127");
+    work_set_param(w, "fx1_p1", "64");
+    work_set_param(w, "fx1_p2", "0");
+    work_set_param(w, "fx1_p3", "127");
+    work_set_param(w, "fx1_p4", "0");
+    work_set_param(w, "fx1_p5", "0");
+    work_set_param(w, "fx1_p6", "127");
+    work_set_param(w, "fx1_p7", "127");
+    work_set_param(w, "fx1_p8", "64");
+
+    int16_t in[BLOCK * 2] = {0}, out[BLOCK * 2];
+
+    /* Untriggered, a source machine is silent. */
+    work_process(w, in, out, BLOCK);
+    int64_t idle = 0;
+    for (int i = 0; i < BLOCK * 2; ++i) idle += llabs(out[i]);
+    CHECK(idle == 0, "Single Player made sound with no trig (energy %lld)",
+          (long long)idle);
+
+    /* A sequencer trig starts it. */
+    work_set_param(w, "seq_on", "1");
+    work_set_param(w, "step0", "1:0:0:0");
+    work_set_param(w, "seq_len", "16");
+    uint8_t start[1] = { 0xFA };
+    work_on_midi(w, start, 1, 2);
+
+    int64_t fired = 0;
+    for (int b = 0; b < 8; ++b) {
+        work_process(w, in, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) fired += llabs(out[i]);
+    }
+    CHECK(fired > 0, "a trig did not start the sample");
+
+    /* LOOP off must eventually stop; LOOP on must not. */
+    work_destroy(w);
+    w = work_create(&host);
+    send_sample(w, pcm, 400, 400);           /* a short one, ~9 ms */
+    work_set_param(w, "machine1", "21");
+    work_set_param(w, "machine2", "0");
+    work_set_param(w, "mix", "127");
+    work_set_param(w, "fx1_p1", "64"); work_set_param(w, "fx1_p2", "0");
+    work_set_param(w, "fx1_p3", "127"); work_set_param(w, "fx1_p5", "0");
+    work_set_param(w, "fx1_p6", "127"); work_set_param(w, "fx1_p7", "127");
+    work_set_param(w, "fx1_p8", "64");
+
+    work_set_param(w, "fx1_p4", "0");        /* LOOP off */
+    uint8_t note_on[3] = { 0x90, 60, 100 };
+    work_on_midi(w, note_on, 3, 2);
+    for (int b = 0; b < 12; ++b) work_process(w, in, out, BLOCK);
+    int64_t tail = 0;
+    for (int b = 0; b < 4; ++b) {
+        work_process(w, in, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) tail += llabs(out[i]);
+    }
+    CHECK(tail == 0, "LOOP off kept sounding past the window (energy %lld)",
+          (long long)tail);
+
+    work_set_param(w, "fx1_p4", "127");      /* LOOP on */
+    work_on_midi(w, note_on, 3, 2);
+    for (int b = 0; b < 12; ++b) work_process(w, in, out, BLOCK);
+    int64_t looped = 0;
+    for (int b = 0; b < 4; ++b) {
+        work_process(w, in, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) looped += llabs(out[i]);
+    }
+    CHECK(looped > 0, "LOOP on stopped at the end of the window");
+
+    work_destroy(w);
+}
+
+
+static void test_grainer_reads_the_sample(void) {
+    printf("Grainer granulates the loaded sample, and live input without one\n");
+    work_t *w = work_create(&host);
+
+    work_set_param(w, "machine1", "20");     /* Grainer */
+    work_set_param(w, "machine2", "0");
+    work_set_param(w, "mix", "127");
+
+    /* No sample, no input: a live-input granulator has nothing to grind. */
+    int16_t in[BLOCK * 2] = {0}, out[BLOCK * 2];
+    int64_t silent = 0;
+    for (int b = 0; b < 20; ++b) {
+        work_process(w, in, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) silent += llabs(out[i]);
+    }
+    CHECK(silent == 0, "Grainer made sound from silence with no sample (%lld)",
+          (long long)silent);
+
+    /* Load one. Now the same silent input must produce grains — that is the
+     * whole point of an SRC machine. */
+    const int frames = 4000;
+    static int16_t pcm[4000 * 2];
+    make_ramp(pcm, frames);
+    send_sample(w, pcm, frames, 800);
+
+    int64_t grained = 0;
+    for (int b = 0; b < 40; ++b) {
+        work_process(w, in, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) grained += llabs(out[i]);
+    }
+    CHECK(grained > 0, "Grainer stayed silent with a sample loaded");
+
+    /* Clearing it returns to live granulation. */
+    work_set_param(w, "sample_clear", "1");
+    int64_t after = 0;
+    for (int b = 0; b < 40; ++b) {
+        work_process(w, in, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) after += llabs(out[i]);
+    }
+    CHECK(after < grained / 4,
+          "clearing the sample left Grainer sounding (%lld vs %lld)",
+          (long long)after, (long long)grained);
+
+    work_destroy(w);
+}
+
 int main(void) {
     printf("Work engine — host simulator\n\n");
 
@@ -1548,6 +1833,12 @@ int main(void) {
     test_nrpn();
     test_feedback_monitor();
     test_hw_input_flag();
+
+    test_sample_transfer();
+    test_sample_bounds();
+    test_single_player();
+
+    test_grainer_reads_the_sample();
 
     printf("\n%d checks, %d failed\n", tests_run, tests_failed);
     return tests_failed ? 1 : 0;

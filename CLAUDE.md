@@ -178,8 +178,32 @@ Phase 1 (**done**) — the 20 FX machines as an `audio_fx` build.
 Phase 2 (**done**) — `overwork`: the overtake build. Step buttons as Tonverk's
 [TRIG] keys, machine palette on the pads, hold-step + turn-knob parameter locks,
 trig conditions, micro-timing, retrig, pattern pages, copy/paste.
-Phase 3 — the SRC machines (Single/Multi Player, Subtracks, Grainer, Wavefinder,
-Shape). Highest risk: sample memory and CPU on the A53 are unmeasured.
+Phase 3 (**started**, v0.6.0) — the SRC machines.
+
+Landed: **sample memory and transfer**, **Single Player**, and Grainer reading
+the loaded sample instead of live input.
+
+The constraint that shaped the whole design: `work_set_param` runs on the
+SHIM'S AUDIO THREAD — `shim_handle_param_bulk` says so in its own comment
+("this runs on the audio thread ~44x/sec") — so the DSP must never open a file.
+The UI reads the WAV with `host_read_file_base64` (binary-safe; plain
+`host_read_file` returns a C string and stops at the first NUL, which in a WAV
+is usually inside the header), converts to interleaved 16-bit, and pushes it in
+base64 chunks. Per chunk the engine does nothing but a bounded decode into
+memory allocated once at `work_create()`.
+
+    sample_begin  "<frames>[:<name>]"   reset the cursor, declare the length
+    sample_chunk  "<base64>"            append, bounded by the allocation
+    sample_end    anything              commit — sample_frames becomes visible
+    sample_clear  anything              drop it
+
+Nothing the render path reads moves until `sample_end`, so an interrupted
+transfer leaves the previous sample playing rather than half of a new one.
+Budget is `WORK_SAMPLE_SECONDS` (8) of stereo int16 = 1.35 MB per instance.
+
+Still to do: Multi Player, Subtracks, Wavefinder, Shape; voice architecture
+(polyphony, per-track filter/amp envelopes, voice LFOs); arpeggiator. CPU on
+the A53 remains unmeasured.
 
 Phase 2 leftovers worth doing: song mode, per-step trig probability beyond the
 three fixed percentages, and a browser editor (`web_ui.html`) — the manager

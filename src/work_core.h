@@ -63,6 +63,23 @@
 /* Grainer: concurrent grains in flight. Tonverk allows 8 per voice across 8
  * voices; Work is monotimbral, so 8 is the whole budget. */
 #define WORK_GRAINS      8
+
+/* ------------------------------------------------------------- sample RAM
+ *
+ * Tier B's SRC machines need somewhere to put audio. The realtime path never
+ * allocates, so the buffer is sized once at work_create() and never grows:
+ * eight seconds of stereo at 44.1 kHz stored as int16, which is 1.35 MB per
+ * instance. Two instances of Work in a chain is 2.7 MB — affordable next to
+ * the A53's headroom, and int16 rather than float is what halves it.
+ *
+ * The transfer route matters more than the size. work_set_param runs on the
+ * SHIM'S AUDIO THREAD (shim_handle_param_bulk's own comment: "this runs on the
+ * audio thread ~44x/sec"), so a sample must NOT be read from disk here — file
+ * I/O in set_param would block the audio callback. Instead the UI reads the
+ * WAV with the host's file bindings and pushes it through in chunks, and the
+ * engine does nothing but a bounded memcpy per chunk. */
+#define WORK_SAMPLE_SECONDS 8
+#define WORK_SAMPLE_FRAMES  (WORK_SAMPLE_SECONDS * 44100)
 /* Longest comb line: the Freeverb-derived tuning table tops out at 1617
  * frames, doubled by SIZE at max, so 4096 leaves headroom without paying
  * 500 kB per slot for space we can never address. */
@@ -98,6 +115,7 @@ typedef enum {
      * costs, stated plainly: no sample slot, no AMNT/DIR/MODE/PAN pages, and a
      * fixed Hann window in place of FADE + SHAPE. */
     WORK_FX_GRAINER,     /* Grainer           live granular                   */
+    WORK_FX_SINGLE,      /* Single Player     one-shot sample voice            */
     WORK_FX_COUNT
 } work_fx_t;
 

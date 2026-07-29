@@ -2,7 +2,7 @@
   "id": "overwork",
   "name": "Overwork",
   "abbrev": "OVWK",
-  "version": "0.5.5",
+  "version": "0.6.0",
   "description": "Full-surface Work: 21 FX machines on live input with a step sequencer, parameter locks and presets",
   "dsp": "dsp.so",
   "ui": "ui.js",

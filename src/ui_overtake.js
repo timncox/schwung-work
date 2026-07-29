@@ -66,7 +66,11 @@ const STEP_FIRST = 16;          /* step buttons are CC 16-31 */
 const STEP_COUNT = 16;
 const PAGE_STEPS = 16;
 const MAX_STEPS  = 64;
-const N_MACHINES = 21;
+/* The machine count comes from the ENGINE's own list, never a constant. A
+ * hardcoded 19 here is what made Grainer unreachable when the 21st machine
+ * landed, and a hardcoded 21 did the same to Single Player. The fallback only
+ * covers the window before the first fetchAll answers. */
+function nMachines() { return machineList.length || 21; }
 /* palette slots past the last machine are free for functions */
 const PAD_UNDO = 81;
 const PAD_MEMO = 82;
@@ -142,7 +146,9 @@ const MACHINE_COLOR = [
     SkyBlue,       /* 17 Steel Box Reverb  space */
     SkyBlue,       /* 18 Supervoid Reverb  space */
     TealGreen,     /* 19 Warble            tape */
-    Rose           /* 20 Grainer           granular */
+    Rose,          /* 20 Grainer           granular */
+    White          /* 21 Single Player     source — the only machine that
+                    *    ORIGINATES audio, so it gets its own colour */
 ];
 
 /* ----------------------------------------------------------------- state */
@@ -323,8 +329,8 @@ function pageKnobs() {
     }
     /* EDIT_GLOBAL */
     return [
-        { key: 'machine1',     label: 'FX1',  lock: 16, min: 0, max: N_MACHINES - 1 },
-        { key: 'machine2',     label: 'FX2',  lock: 17, min: 0, max: N_MACHINES - 1 },
+        { key: 'machine1',     label: 'FX1',  lock: 16, min: 0, max: nMachines() - 1 },
+        { key: 'machine2',     label: 'FX2',  lock: 17, min: 0, max: nMachines() - 1 },
         { key: 'mix',     label: 'MIX',  lock: 18, min: 0, max: 127 },
         { key: 'seq_len', label: 'LEN',  lock: -1, min: 1, max: MAX_STEPS },
         { key: '', label: '', lock: -1, min: 0, max: 0 },
@@ -430,6 +436,213 @@ function unpackSteps(v, keys) {
 function fetchSteps() {
     const keys = stepKeysForPage();
     unpackSteps(getParams(keys), keys);
+}
+
+
+/* ------------------------------------------------------------ sample load
+ *
+ * Tier B's SRC machines need audio in the engine, and the constraint that
+ * shapes the whole route is that work_set_param runs on the SHIM'S AUDIO
+ * THREAD (shim_handle_param_bulk's own comment: "this runs on the audio thread
+ * ~44x/sec"). The DSP therefore must not open files. The UI reads the WAV
+ * instead — schwung's host_read_file_base64 is the binary-safe binding, since
+ * host_read_file hands back a C string and would stop at the first NUL, which
+ * in a WAV is usually inside the header.
+ *
+ * The engine wants interleaved 16-bit stereo, so anything else is converted
+ * here: 8/24/32-bit and float PCM are scaled, mono is duplicated across both
+ * channels, and extra channels past the second are dropped. Sample RATE is NOT
+ * converted — playback pitch follows the file, which is what a sampler does
+ * and what TUNE is for.
+ *
+ * Transfer is chunked because each set_param crosses the same shared-memory
+ * channel as everything else (SHADOW_PARAM_VALUE_LEN is 64 KB) and is serviced
+ * once per SPI frame. CHUNK_FRAMES keeps each message inside that and spreads
+ * the cost over several frames rather than one enormous blocking write.
+ */
+const SAMPLE_DIRS = [
+    '/data/UserData/Samples/Schwung',
+    '/data/UserData/Samples',
+    '/data/UserData/schwung/samples'
+];
+const CHUNK_FRAMES = 8192;              /* 32 KB raw -> ~43 KB of base64 */
+
+const B64_CHARS =
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+const B64_LOOKUP = (() => {
+    const t = new Array(256).fill(-1);
+    for (let i = 0; i < B64_CHARS.length; i++) t[B64_CHARS.charCodeAt(i)] = i;
+    return t;
+})();
+
+function b64ToBytes(b64) {
+    const out = [];
+    let acc = 0, bits = 0;
+    for (let i = 0; i < b64.length; i++) {
+        const v = B64_LOOKUP[b64.charCodeAt(i)];
+        if (v < 0) continue;                        /* '=' padding, newlines */
+        acc = (acc << 6) | v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push((acc >> bits) & 0xFF);
+        }
+    }
+    return out;
+}
+
+function bytesToB64(bytes, from, count) {
+    let out = '';
+    const end = from + count;
+    for (let i = from; i < end; i += 3) {
+        const b0 = bytes[i];
+        const b1 = i + 1 < end ? bytes[i + 1] : 0;
+        const b2 = i + 2 < end ? bytes[i + 2] : 0;
+        const v = (b0 << 16) | (b1 << 8) | b2;
+        out += B64_CHARS[(v >> 18) & 63];
+        out += B64_CHARS[(v >> 12) & 63];
+        out += (i + 1 < end) ? B64_CHARS[(v >> 6) & 63] : '=';
+        out += (i + 2 < end) ? B64_CHARS[v & 63] : '=';
+    }
+    return out;
+}
+
+function u32(b, at) {
+    return (b[at] | (b[at + 1] << 8) | (b[at + 2] << 16) | (b[at + 3] << 24)) >>> 0;
+}
+function u16(b, at) { return b[at] | (b[at + 1] << 8); }
+
+/* Walk the RIFF chunk list rather than assuming fmt/data sit at fixed offsets —
+ * plenty of WAVs carry LIST/fact/cue chunks first, and a fixed offset reads
+ * metadata as audio. Returns interleaved stereo Int16 bytes, or null. */
+function parseWav(bytes) {
+    if (bytes.length < 44) return null;
+    if (String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]) !== 'RIFF') return null;
+    if (String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11]) !== 'WAVE') return null;
+
+    let at = 12, fmt = null, dataAt = -1, dataLen = 0;
+    while (at + 8 <= bytes.length) {
+        const id = String.fromCharCode(bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]);
+        const size = u32(bytes, at + 4);
+        const body = at + 8;
+        if (id === 'fmt ' && size >= 16) {
+            fmt = {
+                format: u16(bytes, body),
+                channels: u16(bytes, body + 2),
+                rate: u32(bytes, body + 4),
+                bits: u16(bytes, body + 14)
+            };
+            /* WAVE_FORMAT_EXTENSIBLE hides the real format in the GUID's
+             * first two bytes. */
+            if (fmt.format === 0xFFFE && size >= 40) fmt.format = u16(bytes, body + 24);
+        } else if (id === 'data') {
+            dataAt = body;
+            dataLen = Math.min(size, bytes.length - body);
+        }
+        at = body + size + (size & 1);              /* chunks are word-aligned */
+    }
+    if (!fmt || dataAt < 0 || !fmt.channels) return null;
+
+    const bytesPerSample = fmt.bits >> 3;
+    if (!bytesPerSample) return null;
+    const frames = Math.floor(dataLen / (bytesPerSample * fmt.channels));
+    if (frames <= 0) return null;
+
+    const read = (at2) => {
+        if (fmt.format === 3) {                     /* IEEE float */
+            if (fmt.bits === 32) {
+                const v = u32(bytes, at2);
+                const sign = (v >>> 31) ? -1 : 1;
+                const exp = (v >>> 23) & 0xFF;
+                const man = v & 0x7FFFFF;
+                if (exp === 0) return 0;
+                const f = sign * (1 + man / 0x800000) * Math.pow(2, exp - 127);
+                return Math.max(-32768, Math.min(32767, Math.round(f * 32767)));
+            }
+            return 0;
+        }
+        if (fmt.bits === 8) return (bytes[at2] - 128) << 8;      /* 8-bit is unsigned */
+        if (fmt.bits === 16) {
+            const v = u16(bytes, at2);
+            return v >= 0x8000 ? v - 0x10000 : v;
+        }
+        if (fmt.bits === 24) {
+            let v = bytes[at2] | (bytes[at2 + 1] << 8) | (bytes[at2 + 2] << 16);
+            if (v >= 0x800000) v -= 0x1000000;
+            return v >> 8;
+        }
+        if (fmt.bits === 32) {
+            const v = u32(bytes, at2) | 0;
+            return v >> 16;
+        }
+        return 0;
+    };
+
+    const out = new Array(frames * 4);              /* 2 channels x int16 LE */
+    for (let f = 0; f < frames; f++) {
+        const base = dataAt + f * bytesPerSample * fmt.channels;
+        const l = read(base);
+        const r = fmt.channels > 1 ? read(base + bytesPerSample) : l;
+        const o = f * 4;
+        out[o]     = l & 0xFF;
+        out[o + 1] = (l >> 8) & 0xFF;
+        out[o + 2] = r & 0xFF;
+        out[o + 3] = (r >> 8) & 0xFF;
+    }
+    return { bytes: out, frames, rate: fmt.rate, channels: fmt.channels };
+}
+
+/* Push a parsed WAV into the engine. Returns the number of frames sent. */
+function sendSample(name, wav, maxFrames) {
+    let frames = wav.frames;
+    if (maxFrames > 0 && frames > maxFrames) frames = maxFrames;
+
+    host_module_set_param('sample_begin', `${frames}:${name.slice(0, 24)}`);
+    for (let at = 0; at < frames; at += CHUNK_FRAMES) {
+        const n = Math.min(CHUNK_FRAMES, frames - at);
+        host_module_set_param('sample_chunk', bytesToB64(wav.bytes, at * 4, n * 4));
+    }
+    host_module_set_param('sample_end', '1');
+    return frames;
+}
+
+function loadSampleFile(path) {
+    const b64 = typeof host_read_file_base64 === 'function'
+        ? host_read_file_base64(path) : null;
+    if (!b64) { announce('Could not read that file'); return false; }
+
+    const wav = parseWav(b64ToBytes(`${b64}`));
+    if (!wav) { announce('Not a WAV this can read'); return false; }
+
+    const maxFrames = parseInt(getParam('sample_max'), 10) || 0;
+    const name = path.slice(path.lastIndexOf('/') + 1).replace(/\.wav$/i, '');
+    const sent = sendSample(name, wav, maxFrames);
+
+    if (sent < wav.frames) {
+        announce(`Loaded ${name}, truncated to ${Math.round(sent / 44100)} seconds`);
+    } else {
+        announce(`Loaded ${name}`);
+    }
+    needsRedraw = true;
+    return true;
+}
+
+/* Every .wav the sample directories hold, newest directory first. */
+function listSamples() {
+    const found = [];
+    for (const dir of SAMPLE_DIRS) {
+        let result;
+        try { result = os.readdir(dir); } catch (e) { continue; }
+        /* os.readdir returns a [names, errno] TUPLE and the listing includes
+         * "." and ".." — treating it as a flat array is the bug that broke
+         * Mono's preset browser. */
+        if (!result || result[1] !== 0) continue;
+        for (const f of result[0]) {
+            if (f === '.' || f === '..') continue;
+            if (/\.wav$/i.test(f)) found.push(`${dir}/${f}`);
+        }
+    }
+    return found;
 }
 
 /* --------------------------------------------------------------- editing */
@@ -873,7 +1086,7 @@ function paintPalette(force) {
         if (pad === PAD_UNDO || pad === PAD_MEMO || pad === PAD_SONG) continue;
         const code = i;
         let color = Black;
-        if (code < N_MACHINES) {
+        if (code < nMachines()) {
             color = MACHINE_COLOR[code];
             /* the machine loaded in the focused slot burns brighter */
             if (code === (cfg[`machine${focusSlot + 1}`] | 0)) color = White;
@@ -930,7 +1143,7 @@ function handlePadPress(note) {
     /* Machine palette */
     const pi = PALETTE_PADS.indexOf(note);
     if (pi >= 0) {
-        if (pi < N_MACHINES) loadMachine(pi);
+        if (pi < nMachines()) loadMachine(pi);
         return;
     }
 
@@ -1264,6 +1477,11 @@ globalThis.tick = function () {
 globalThis.onUnload = function () {
     /* The host clears LEDs and unloads the DSP; nothing to release here. */
 };
+
+/* Exposed for the harness: sample loading is pure data handling with no input
+ * gesture attached yet, so this is the only way to drive it. */
+globalThis.loadSampleFile = loadSampleFile;
+globalThis.listSamples = listSamples;
 
 globalThis.onMidiMessageInternal = onMidiMessageInternal;
 
