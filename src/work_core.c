@@ -295,10 +295,32 @@ struct work {
     uint64_t             cc_last_frames;
     uint64_t             cc_frames;
 
-    /* sequencer */
-    work_step_t          step[WORK_STEPS];
+    /* NRPN assembly. Tonverk's own release notes record repeated bugs where
+     * NRPN could not reach a parameter's full range, so this resolves the
+     * 14-bit value and scales it across the destination's real range rather
+     * than truncating to 7 bits. */
+    int                  nrpn_num;
+    int                  nrpn_msb;
+
+    /* sequencer. A bank of patterns; CURPAT() is the one being edited and
+     * played, which song mode moves underneath the editor. */
+    work_pattern_t       pat[WORK_PATTERNS];
+    uint8_t              cur_pattern;
     uint8_t              seq_on;
-    uint8_t              seq_len;
+
+    /* edit history: one undo level plus a separate memorize slot, both
+     * whole-pattern snapshots (a pattern is ~1.8 kB, so 2 copies is cheap) */
+    work_pattern_t       undo_buf;
+    work_pattern_t       redo_buf;
+    work_pattern_t       memo_buf;
+    uint8_t              undo_valid, redo_valid, memo_valid;
+
+    /* song */
+    work_song_row_t      song[WORK_SONG_ROWS];
+    uint8_t              song_on;
+    uint8_t              song_len;
+    uint8_t              song_row;
+    uint8_t              song_rep;
     uint8_t              fill;
     double               seq_frame;     /* frames since the pattern restarted */
     int                  seq_pos;       /* step whose locks are currently held */
@@ -1686,6 +1708,11 @@ static void run_machine(mctx_t *m, int machine, float *l, float *r) {
 
 /* ------------------------------------------------------------- sequencer */
 
+/* The pattern currently being edited and played. Song mode moves this
+ * underneath the editor, which is why every sequencer path goes through it
+ * rather than caching a pointer. */
+#define CURPAT(w) (&(w)->pat[(w)->cur_pattern])
+
 /* Does this step's condition allow it to fire on this pass? */
 static int cond_fires(work_t *w, int cond) {
     switch (cond) {
@@ -1719,12 +1746,12 @@ static int cond_fires(work_t *w, int cond) {
  * resolution at one block (~2.9 ms) — finer than a 1/24 step at any sane
  * tempo, but not sample-accurate. */
 static int active_step(const work_t *w, double sf) {
-    int len = w->seq_len ? w->seq_len : 1;
+    int len = CURPAT(w)->len ? CURPAT(w)->len : 1;
     int best = -1;
     double best_start = -1e18;
 
     for (int i = 0; i < len; ++i) {
-        double start = (double)i * sf + ((double)w->step[i].micro / 24.0) * sf;
+        double start = (double)i * sf + ((double)CURPAT(w)->step[i].micro / 24.0) * sf;
         if (start <= w->seq_frame && start > best_start) {
             best_start = start;
             best = i;
@@ -1735,6 +1762,34 @@ static int active_step(const work_t *w, double sf) {
     return best < 0 ? len - 1 : best;
 }
 
+/* Snapshot the pattern before a destructive edit, so undo has somewhere to go.
+ * Called by every operation that rewrites more than one step. */
+static void push_undo(work_t *w) {
+    w->undo_buf   = *CURPAT(w);
+    w->undo_valid = 1;
+    w->redo_valid = 0;
+}
+
+/* Pages can be muted individually: a step on a silenced page is skipped
+ * entirely rather than firing with its locks. */
+static int page_plays(const work_t *w, int step) {
+    int page = step / WORK_PAGE_STEPS;
+    if (page < 0 || page > 3) return 1;
+    return (CURPAT(w)->page_mask >> page) & 1;
+}
+
+/* Song mode: at the end of each pattern pass, count repeats and move to the
+ * next row, wrapping at the end of the song. */
+static void song_advance(work_t *w) {
+    if (!w->song_on || w->song_len == 0) return;
+    if (++w->song_rep >= (w->song[w->song_row].repeats ? w->song[w->song_row].repeats : 1)) {
+        w->song_rep = 0;
+        w->song_row = (uint8_t)((w->song_row + 1) % w->song_len);
+    }
+    w->cur_pattern = (uint8_t)iclamp(w->song[w->song_row].pattern, 0, WORK_PATTERNS - 1);
+    w->last_step = -1;
+}
+
 static void seq_run(work_t *w, int frames) {
     if (!w->seq_on) {
         w->held_mask = 0;
@@ -1742,13 +1797,14 @@ static void seq_run(work_t *w, int frames) {
     }
 
     double sf    = (double)step_frames(w);
-    int    len   = w->seq_len ? w->seq_len : 1;
+    int    len   = CURPAT(w)->len ? CURPAT(w)->len : 1;
     double total = sf * (double)len;
 
     w->seq_frame += (double)frames;
     while (w->seq_frame >= total) {
         w->seq_frame -= total;
         w->pass++;
+        song_advance(w);            /* a completed pass may change pattern */
     }
 
     int cur = active_step(w, sf);
@@ -1756,8 +1812,9 @@ static void seq_run(work_t *w, int frames) {
     if (cur == w->last_step) return;
     w->last_step = cur;
 
-    const work_step_t *st = &w->step[cur];
+    const work_step_t *st = &CURPAT(w)->step[cur];
     if (!st->active) return;                  /* no trig: nothing changes */
+    if (!page_plays(w, cur)) return;          /* this page is silenced    */
 
     if (!cond_fires(w, st->cond)) {
         w->pre_result = 0;
@@ -1779,14 +1836,16 @@ static void seq_run(work_t *w, int frames) {
 
     /* Retrig restarts the FX LFOs and the Multimode Filter envelope. It does
      * not stutter audio — the Degrader's FREZ is the machine for that. */
-    if (st->retrig != WORK_RETRIG_OFF) {
-        for (int n = 0; n < WORK_LFOS; ++n) w->lfo_ph[n] = 0.0f;
-        for (int s = 0; s < WORK_SLOTS; ++s) w->slot[s].env_stage = 1.0f;
+    /* A LOCK trig applies its locks and stops there — Elektron's trigless
+     * lock. Only a FULL trig restarts the modulators. */
+    if (st->trig_type == WORK_TRIG_FULL) {
+        if (st->retrig != WORK_RETRIG_OFF) {
+            for (int n = 0; n < WORK_LFOS; ++n) w->lfo_ph[n] = 0.0f;
+            for (int s = 0; s < WORK_SLOTS; ++s) w->slot[s].env_stage = 1.0f;
+        }
+        w->menv_stage = 1.0f;
+        w->menv_t     = 0.0f;
     }
-
-    /* every firing trig restarts the modulation envelope */
-    w->menv_stage = 1.0f;
-    w->menv_t     = 0.0f;
 }
 
 /* Build the effective parameter set for this block: base, then the locks the
@@ -1889,13 +1948,21 @@ work_t *work_create(const host_api_v1_t *host) {
     /* Sequencer starts off, so the audio_fx build behaves as a plain static
      * FX chain until something turns it on. */
     w->seq_on    = 0;
-    w->seq_len   = WORK_PAGE_STEPS;
     w->last_step = -1;
     w->cond_rng  = 0x6C078965u;
 
-    /* PROB defaults to 100 (always) on every step, and an empty pattern must
-     * read back that way rather than as "never". */
-    for (int i = 0; i < WORK_STEPS; ++i) w->step[i].prob = 100;
+    /* Every pattern in the bank gets its defaults: PROB 100 (always) on each
+     * step, 16 steps long, all four pages playing. */
+    for (int p = 0; p < WORK_PATTERNS; ++p) {
+        w->pat[p].len = WORK_PAGE_STEPS;
+        w->pat[p].page_mask = 0x0F;
+        for (int i = 0; i < WORK_STEPS; ++i) w->pat[p].step[i].prob = 100;
+    }
+    for (int r = 0; r < WORK_SONG_ROWS; ++r) {
+        w->song[r].pattern = (uint8_t)r;
+        w->song[r].repeats = 1;
+    }
+    w->song_len = 4;
 
     w->menv.dest   = -1;
     w->menv.attack = 0;
@@ -2018,9 +2085,47 @@ void work_process(work_t *w, const int16_t *in, int16_t *out, int frames) {
  * Values write through work_set_param, so a CC move records a parameter lock
  * when live record is armed exactly like a knob move does.
  */
+/* NRPN parameter numbers mirror the CC map, so CC 8 and NRPN 8 reach the same
+ * place — one map to learn, two resolutions. */
+static void nrpn_apply(work_t *w, int num, int value14) {
+    char key[16], val[8];
+    int  v7 = (value14 * 127) / 16383;
+
+    if (num >= 8 && num <= 23) {
+        int slot = (num - 8) / WORK_PARAMS, idx = (num - 8) % WORK_PARAMS;
+        snprintf(key, sizeof(key), "fx%d_p%d", slot + 1, idx + 1);
+        snprintf(val, sizeof(val), "%d", v7);
+        work_set_param(w, key, val);
+        return;
+    }
+    if (num == 24 || num == 25) {
+        snprintf(key, sizeof(key), "fx%d", num - 23);
+        /* full range from 14 bits — the whole reason NRPN exists here */
+        snprintf(val, sizeof(val), "%d", (value14 * (WORK_FX_COUNT - 1)) / 16383);
+        work_set_param(w, key, val);
+        return;
+    }
+    if (num == 26) {
+        snprintf(val, sizeof(val), "%d", v7);
+        work_set_param(w, "mix", val);
+        return;
+    }
+    if (num >= 100 && num < 100 + WORK_PATTERNS) {   /* pattern select */
+        snprintf(val, sizeof(val), "%d", num - 100);
+        work_set_param(w, "pattern", val);
+        return;
+    }
+}
+
 static void cc_apply(work_t *w, int cc, int v) {
     char key[16], val[8];
     snprintf(val, sizeof(val), "%d", v);
+
+    /* NRPN assembly: 99/98 select the parameter, 6/38 carry the value. */
+    if (cc == 99) { w->nrpn_num = (w->nrpn_num & 0x7F) | (v << 7); return; }
+    if (cc == 98) { w->nrpn_num = (w->nrpn_num & 0x3F80) | v;      return; }
+    if (cc == 6)  { w->nrpn_msb = v; nrpn_apply(w, w->nrpn_num, v << 7); return; }
+    if (cc == 38) { nrpn_apply(w, w->nrpn_num, (w->nrpn_msb << 7) | v); return; }
 
     if (cc >= 8 && cc <= 23) {                    /* FX 1 A-H, then FX 2 A-H */
         int slot = (cc - 8) / WORK_PARAMS;
@@ -2242,23 +2347,26 @@ static void apply_state(work_t *w, const char *json) {
     if ((q = strstr(json, "\"sq\":[")) != NULL) {
         const char *c = q + 6;
         w->seq_on = (uint8_t)(atoi(c) ? 1 : 0);
-        if ((c = strchr(c, ',')) != NULL)
-            w->seq_len = (uint8_t)iclamp(atoi(c + 1), 1, WORK_STEPS);
+        if ((c = strchr(c, ',')) != NULL) {
+            CURPAT(w)->len = (uint8_t)iclamp(atoi(c + 1), 1, WORK_STEPS);
+            if ((c = strchr(c + 1, ',')) != NULL)
+                CURPAT(w)->page_mask = (uint8_t)iclamp(atoi(c + 1), 1, 15);
+        }
     }
 
     /* The pattern replaces whatever was loaded — a blob carrying "stp" is a
      * complete pattern, so a stale step from the previous patch must not
      * survive underneath it. */
     if ((q = strstr(json, "\"stp\":\"")) != NULL) {
-        memset(w->step, 0, sizeof(w->step));
-        for (int i = 0; i < WORK_STEPS; ++i) w->step[i].prob = 100;
+        memset(CURPAT(w)->step, 0, sizeof(CURPAT(w)->step));
+        for (int i = 0; i < WORK_STEPS; ++i) CURPAT(w)->step[i].prob = 100;
         w->held_mask = 0;
         w->last_step = -1;
 
         const char *c = q + 7;
         while (*c && *c != '"') {
             int idx = atoi(c);
-            work_step_t *st = (idx >= 0 && idx < WORK_STEPS) ? &w->step[idx] : NULL;
+            work_step_t *st = (idx >= 0 && idx < WORK_STEPS) ? &CURPAT(w)->step[idx] : NULL;
             int field = 0;
 
             while (*c && *c != '|' && *c != '"') {
@@ -2271,6 +2379,7 @@ static void apply_state(work_t *w, const char *json) {
                         else if (field == 3) st->micro = (int8_t)iclamp(v, -23, 23);
                         else if (field == 4) st->retrig = (uint8_t)iclamp(v, 0, WORK_RETRIG_COUNT - 1);
                         else if (field == 5) st->prob = (uint8_t)iclamp(v, 1, 100);
+                        else if (field == 6) st->trig_type = (uint8_t)iclamp(v, 0, WORK_TRIG_TYPES - 1);
                     }
                 } else if (*c == '+' && st) {
                     int k = atoi(c + 1);
@@ -2296,7 +2405,7 @@ void work_set_param(work_t *w, const char *key, const char *val) {
          * lays a lock on the step that is playing — the Elektron gesture,
          * routed through the same path the UI and MIDI CC both use. */
         if (w->live_rec && w->seq_on && w->seq_pos >= 0 && w->seq_pos < WORK_STEPS) {
-            work_step_t *st = &w->step[w->seq_pos];
+            work_step_t *st = &CURPAT(w)->step[w->seq_pos];
             st->active = 1;
             step_set_lock(st, slot * WORK_PARAMS + idx, v);
         }
@@ -2328,12 +2437,114 @@ void work_set_param(work_t *w, const char *key, const char *val) {
         return;
     }
     if (strcmp(key, "seq_len") == 0) {
-        w->seq_len = (uint8_t)iclamp(atoi(val), 1, WORK_STEPS);
-        if (w->last_step >= w->seq_len) w->last_step = -1;
+        CURPAT(w)->len = (uint8_t)iclamp(atoi(val), 1, WORK_STEPS);
+        if (w->last_step >= CURPAT(w)->len) w->last_step = -1;
         return;
     }
     if (strcmp(key, "fill") == 0) { w->fill = (uint8_t)(atoi(val) ? 1 : 0); return; }
     if (strcmp(key, "live_rec") == 0) { w->live_rec = (uint8_t)(atoi(val) ? 1 : 0); return; }
+
+    /* ------------------------------------------------- bank, song, history */
+    if (strcmp(key, "pattern") == 0) {
+        int p = iclamp(atoi(val), 0, WORK_PATTERNS - 1);
+        if (p != w->cur_pattern) { w->cur_pattern = (uint8_t)p; w->last_step = -1; }
+        return;
+    }
+    if (strcmp(key, "page_mask") == 0) {
+        CURPAT(w)->page_mask = (uint8_t)(iclamp(atoi(val), 0, 15));
+        if (CURPAT(w)->page_mask == 0) CURPAT(w)->page_mask = 1;   /* never silence all */
+        return;
+    }
+    if (strcmp(key, "song_on") == 0) {
+        w->song_on = (uint8_t)(atoi(val) ? 1 : 0);
+        if (w->song_on) { w->song_row = 0; w->song_rep = 0;
+                          w->cur_pattern = (uint8_t)iclamp(w->song[0].pattern, 0, WORK_PATTERNS - 1); }
+        return;
+    }
+    if (strcmp(key, "song_len") == 0) {
+        w->song_len = (uint8_t)iclamp(atoi(val), 1, WORK_SONG_ROWS);
+        if (w->song_row >= w->song_len) w->song_row = 0;
+        return;
+    }
+    {
+        int n = key_index(key, "song_row");
+        if (n >= 0 && n < WORK_SONG_ROWS) {
+            const char *c = val;                        /* "pattern:repeats:len" */
+            w->song[n].pattern = (uint8_t)iclamp(atoi(c), 0, WORK_PATTERNS - 1);
+            if ((c = strchr(c, ':')) != NULL) {
+                w->song[n].repeats = (uint8_t)iclamp(atoi(++c), 1, 64);
+                if ((c = strchr(c, ':')) != NULL)
+                    w->song[n].len = (uint8_t)iclamp(atoi(++c), 0, WORK_STEPS);
+            }
+            return;
+        }
+    }
+    {
+        int n = key_index(key, "trigtype");
+        if (n >= 0) {
+            CURPAT(w)->step[n].trig_type =
+                (uint8_t)iclamp(atoi(val), 0, WORK_TRIG_TYPES - 1);
+            return;
+        }
+    }
+
+    if (strcmp(key, "undo") == 0) {
+        if (!w->undo_valid) return;
+        w->redo_buf = *CURPAT(w); w->redo_valid = 1;
+        *CURPAT(w) = w->undo_buf; w->undo_valid = 0;
+        w->last_step = -1;
+        return;
+    }
+    if (strcmp(key, "redo") == 0) {
+        if (!w->redo_valid) return;
+        w->undo_buf = *CURPAT(w); w->undo_valid = 1;
+        *CURPAT(w) = w->redo_buf; w->redo_valid = 0;
+        w->last_step = -1;
+        return;
+    }
+    if (strcmp(key, "memorize") == 0) { w->memo_buf = *CURPAT(w); w->memo_valid = 1; return; }
+    if (strcmp(key, "recall") == 0) {
+        if (!w->memo_valid) return;
+        push_undo(w);
+        *CURPAT(w) = w->memo_buf;
+        w->last_step = -1;
+        return;
+    }
+
+    /* ------------------------------------------------ transform / quantize */
+    if (strcmp(key, "transform") == 0) {
+        work_pattern_t *P = CURPAT(w);
+        int len = P->len ? P->len : 1;
+        push_undo(w);
+        if (strcmp(val, "reverse") == 0) {
+            for (int i = 0; i < len / 2; ++i) {
+                work_step_t t = P->step[i];
+                P->step[i] = P->step[len - 1 - i];
+                P->step[len - 1 - i] = t;
+            }
+        } else if (strcmp(val, "rotl") == 0 || strcmp(val, "rotr") == 0) {
+            work_step_t tmp[WORK_STEPS];
+            int dir = (val[3] == 'l') ? 1 : len - 1;
+            for (int i = 0; i < len; ++i) tmp[i] = P->step[(i + dir) % len];
+            for (int i = 0; i < len; ++i) P->step[i] = tmp[i];
+        } else if (strcmp(val, "invert") == 0) {
+            for (int i = 0; i < len; ++i) P->step[i].active = !P->step[i].active;
+        } else if (strcmp(val, "random") == 0) {
+            for (int i = 0; i < len; ++i)
+                P->step[i].active = rnd_01(&w->cond_rng) < 0.5f ? 1 : 0;
+        }
+        w->last_step = -1;
+        return;
+    }
+    if (strcmp(key, "quantize") == 0) {
+        /* Pull micro-timing toward the grid; 127 lands everything exactly on it. */
+        float amt = fclampf((float)atoi(val) / 127.0f, 0.0f, 1.0f);
+        work_pattern_t *P = CURPAT(w);
+        push_undo(w);
+        for (int i = 0; i < WORK_STEPS; ++i)
+            P->step[i].micro = (int8_t)lrintf((float)P->step[i].micro * (1.0f - amt));
+        return;
+    }
 
     if (strncmp(key, "menv_", 5) == 0) {
         const char *f = key + 5;
@@ -2348,12 +2559,13 @@ void work_set_param(work_t *w, const char *key, const char *val) {
 
     {
         int n = key_index(key, "prob");
-        if (n >= 0) { w->step[n].prob = (uint8_t)iclamp(atoi(val), 1, 100); return; }
+        if (n >= 0) { CURPAT(w)->step[n].prob = (uint8_t)iclamp(atoi(val), 1, 100); return; }
     }
 
     if (strcmp(key, "seq_clear") == 0) {
-        memset(w->step, 0, sizeof(w->step));
-        for (int i = 0; i < WORK_STEPS; ++i) w->step[i].prob = 100;
+        push_undo(w);
+        memset(CURPAT(w)->step, 0, sizeof(CURPAT(w)->step));
+        for (int i = 0; i < WORK_STEPS; ++i) CURPAT(w)->step[i].prob = 100;
         w->held_mask = 0;
         w->last_step = -1;
         return;
@@ -2362,21 +2574,21 @@ void work_set_param(work_t *w, const char *key, const char *val) {
     {
         int stp, idx;
         if (parse_lock_key(key, &stp, &idx)) {
-            step_set_lock(&w->step[stp], idx, atoi(val));
+            step_set_lock(&CURPAT(w)->step[stp], idx, atoi(val));
             return;
         }
     }
 
     {
         int n = key_index(key, "locks");
-        if (n >= 0) { step_set_locks(&w->step[n], val); return; }
+        if (n >= 0) { step_set_locks(&CURPAT(w)->step[n], val); return; }
     }
 
     {
         int n = key_index(key, "step");
         if (n >= 0) {
             /* "active:cond:micro:retrig" — trailing fields may be omitted */
-            work_step_t *st = &w->step[n];
+            work_step_t *st = &CURPAT(w)->step[n];
             const char *c = val;
             st->active = (uint8_t)(atoi(c) ? 1 : 0);
             if ((c = strchr(c, ':')) != NULL) {
@@ -2385,8 +2597,11 @@ void work_set_param(work_t *w, const char *key, const char *val) {
                     st->micro = (int8_t)iclamp(atoi(++c), -23, 23);
                     if ((c = strchr(c, ':')) != NULL) {
                         st->retrig = (uint8_t)iclamp(atoi(++c), 0, WORK_RETRIG_COUNT - 1);
-                        if ((c = strchr(c, ':')) != NULL)
+                        if ((c = strchr(c, ':')) != NULL) {
                             st->prob = (uint8_t)iclamp(atoi(++c), 1, 100);
+                            if ((c = strchr(c, ':')) != NULL)
+                                st->trig_type = (uint8_t)iclamp(atoi(++c), 0, WORK_TRIG_TYPES - 1);
+                        }
                     }
                 }
             }
@@ -2445,10 +2660,27 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
                                w->eff_machine[0], w->eff_machine[1], w->eff_mix), cap);
 
     if (strcmp(key, "seq_on") == 0)  return nclamp(snprintf(buf, buf_len, "%d", w->seq_on), cap);
-    if (strcmp(key, "seq_len") == 0) return nclamp(snprintf(buf, buf_len, "%d", w->seq_len), cap);
+    if (strcmp(key, "seq_len") == 0) return nclamp(snprintf(buf, buf_len, "%d", CURPAT(w)->len), cap);
     if (strcmp(key, "fill") == 0)    return nclamp(snprintf(buf, buf_len, "%d", w->fill), cap);
     if (strcmp(key, "seq_pos") == 0)  return nclamp(snprintf(buf, buf_len, "%d", w->seq_pos), cap);
     if (strcmp(key, "live_rec") == 0) return nclamp(snprintf(buf, buf_len, "%d", w->live_rec), cap);
+    if (strcmp(key, "pattern") == 0)   return nclamp(snprintf(buf, buf_len, "%d", w->cur_pattern), cap);
+    if (strcmp(key, "page_mask") == 0) return nclamp(snprintf(buf, buf_len, "%d", CURPAT(w)->page_mask), cap);
+    if (strcmp(key, "song_on") == 0)   return nclamp(snprintf(buf, buf_len, "%d", w->song_on), cap);
+    if (strcmp(key, "song_len") == 0)  return nclamp(snprintf(buf, buf_len, "%d", w->song_len), cap);
+    if (strcmp(key, "song_pos") == 0)  return nclamp(snprintf(buf, buf_len, "%d:%d", w->song_row, w->song_rep), cap);
+    if (strcmp(key, "undo_state") == 0)
+        return nclamp(snprintf(buf, buf_len, "%d:%d:%d", w->undo_valid, w->redo_valid, w->memo_valid), cap);
+    {
+        int n = key_index(key, "song_row");
+        if (n >= 0 && n < WORK_SONG_ROWS)
+            return nclamp(snprintf(buf, buf_len, "%d:%d:%d",
+                                   w->song[n].pattern, w->song[n].repeats, w->song[n].len), cap);
+    }
+    {
+        int n = key_index(key, "trigtype");
+        if (n >= 0) return nclamp(snprintf(buf, buf_len, "%d", CURPAT(w)->step[n].trig_type), cap);
+    }
 
     if (strncmp(key, "menv_", 5) == 0) {
         const char *f = key + 5;
@@ -2464,20 +2696,20 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
 
     {
         int n = key_index(key, "prob");
-        if (n >= 0) return nclamp(snprintf(buf, buf_len, "%d", w->step[n].prob), cap);
+        if (n >= 0) return nclamp(snprintf(buf, buf_len, "%d", CURPAT(w)->step[n].prob), cap);
     }
 
     /* "a:c:m:r:nlocks" — one poll per step for the UI's grid */
     {
         int n = key_index(key, "step");
         if (n >= 0) {
-            const work_step_t *st = &w->step[n];
+            const work_step_t *st = &CURPAT(w)->step[n];
             int nl = 0;
             for (int i = 0; i < WORK_LOCKABLE; ++i)
                 if (st->lock_mask & (1u << i)) nl++;
-            return nclamp(snprintf(buf, buf_len, "%d:%d:%d:%d:%d:%d",
+            return nclamp(snprintf(buf, buf_len, "%d:%d:%d:%d:%d:%d:%d",
                                    st->active, st->cond, st->micro, st->retrig, nl,
-                                   st->prob), cap);
+                                   st->prob, st->trig_type), cap);
         }
     }
 
@@ -2488,7 +2720,7 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
     {
         int stp, idx;
         if (parse_lock_key(key, &stp, &idx)) {
-            const work_step_t *st = &w->step[stp];
+            const work_step_t *st = &CURPAT(w)->step[stp];
             int v = (st->lock_mask & (1u << idx)) ? st->lock[idx] : -1;
             return nclamp(snprintf(buf, buf_len, "%d", v), cap);
         }
@@ -2497,7 +2729,7 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
     {
         int n = key_index(key, "locks");
         if (n >= 0) {
-            const work_step_t *st = &w->step[n];
+            const work_step_t *st = &CURPAT(w)->step[n];
             int written = 0, out = 0;
             for (int i = 0; i < WORK_LOCKABLE; ++i) {
                 if (!(st->lock_mask & (1u << i))) continue;
@@ -2673,18 +2905,18 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
          * static patch's blob stays small. Steps are separated by '|',
          * fields by ',', and a step's locks by '+' as "index=value". */
         n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                ",\"sq\":[%d,%d],\"stp\":\"",
-                                w->seq_on, w->seq_len), cap);
+                                ",\"sq\":[%d,%d,%d],\"stp\":\"",
+                                w->seq_on, CURPAT(w)->len, CURPAT(w)->page_mask), cap);
         int emitted = 0;
         for (int i = 0; i < WORK_STEPS; ++i) {
-            const work_step_t *st = &w->step[i];
+            const work_step_t *st = &CURPAT(w)->step[i];
             if (!st->active && !st->lock_mask && !st->cond && !st->micro &&
                 !st->retrig && st->prob == 100)
                 continue;
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                    "%s%d,%d,%d,%d,%d,%d", emitted ? "|" : "",
+                                    "%s%d,%d,%d,%d,%d,%d,%d", emitted ? "|" : "",
                                     i, st->active, st->cond, st->micro, st->retrig,
-                                    st->prob), cap);
+                                    st->prob, st->trig_type), cap);
             emitted = 1;
             for (int k = 0; k < WORK_LOCKABLE; ++k) {
                 if (!(st->lock_mask & (1u << k))) continue;

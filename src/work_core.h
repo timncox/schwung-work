@@ -115,6 +115,8 @@ typedef enum {
 /* ------------------------------------------------------------- sequencer */
 
 #define WORK_STEPS      64     /* four 16-step pages */
+#define WORK_PATTERNS   16     /* a bank; song mode chains them  */
+#define WORK_SONG_ROWS  32     /* rows in the song               */
 #define WORK_PAGE_STEPS 16
 /* Lockable parameters, in lock-index order:
  *   0..7   slot 1 parameters A-H
@@ -139,6 +141,17 @@ typedef enum {
     WORK_COND_COUNT
 } work_cond_t;
 
+/* Trig types. Tonverk distinguishes note trigs, lock trigs and trigless trigs;
+ * a module with no voices has no note to place, so the distinction that
+ * survives is whether the trig also RESTARTS the modulators. A LOCK trig
+ * applies its parameter locks and nothing else, which is exactly Elektron's
+ * trigless-lock behaviour. */
+typedef enum {
+    WORK_TRIG_FULL = 0,   /* applies locks AND restarts envelope + LFOs */
+    WORK_TRIG_LOCK,       /* applies locks only                         */
+    WORK_TRIG_TYPES
+} work_trigtype_t;
+
 /* Retrig rates, in 16th-note steps per repeat */
 typedef enum {
     WORK_RETRIG_OFF = 0,
@@ -158,9 +171,27 @@ typedef struct {
      * condition, so it is one here too: 1..100, and 100 means always. Both
      * gates must pass for the trig to fire. */
     uint8_t  prob;
+    uint8_t  trig_type;               /* work_trigtype_t                    */
     uint32_t lock_mask;               /* bit i set = parameter i is locked  */
     uint8_t  lock[WORK_LOCKABLE];
 } work_step_t;
+
+/* One pattern: the steps plus the settings that belong to it rather than to
+ * the engine. Length and the page play/loop mask move here so switching
+ * pattern switches those too, as it does on the hardware. */
+typedef struct {
+    work_step_t step[WORK_STEPS];
+    uint8_t     len;                  /* 1..64                              */
+    uint8_t     page_mask;            /* bit p set = page p plays           */
+} work_pattern_t;
+
+/* A song row: play `pattern` for `repeats` passes, optionally overriding the
+ * pattern's own length. */
+typedef struct {
+    uint8_t pattern;
+    uint8_t repeats;                  /* 1..64                              */
+    uint8_t len;                      /* 0 = use the pattern's own length   */
+} work_song_row_t;
 
 /* Modulation envelope. Tonverk gives a track two voice LFOs, a mod envelope
  * and two FX LFOs; Work had only the FX LFOs until v0.3.0. AHD rather than
@@ -221,6 +252,13 @@ void    work_process(work_t *w, const int16_t *in, int16_t *out, int frames);
  *   prob<N>                   step N's probability, 1..100
  *   live_rec                  1 = knob moves record locks onto the playing step
  *   menv_dest/atk/hold/dec/depth   the modulation envelope
+ *   pattern                   selected pattern, 0..15
+ *   page_mask                 bit p set = page p plays
+ *   trigtype<N>               step N's trig type: 0 full, 1 lock-only
+ *   undo / redo / memorize / recall     pattern-level edit history
+ *   transform                 "reverse" | "rotl" | "rotr" | "invert" | "random"
+ *   quantize                  strength 0..127, pulls micro-timing to the grid
+ *   song_on / song_len / song_row<N> ("pattern:repeats:len") / song_pos
  *
  * MIDI CC, external only (Move's own encoders arrive as internal CCs):
  *   CC 8..15   FX 1 parameters A..H     CC 16..23  FX 2 parameters A..H

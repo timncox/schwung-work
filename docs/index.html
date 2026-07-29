@@ -247,7 +247,7 @@ footer a{color:var(--rust)}
     <div class="tb-side">
       <div class="tb-cell">Module<b>Schwung / Move</b></div>
       <div class="tb-cell">Builds<b>audio_fx · overtake</b></div>
-      <div class="tb-cell">Revision<b>v0.3.0</b></div>
+      <div class="tb-cell">Revision<b>v0.4.0</b></div>
       <div class="tb-cell">Source<b><a href="https://github.com/timncox/schwung-work">timncox/schwung-work</a></b></div>
     </div>
   </div>
@@ -480,6 +480,15 @@ footer a{color:var(--rust)}
       </div>
     </div>
   </div>
+  <h3>Pattern bank and song mode</h3>
+  <p>Sixteen patterns; <strong>Shift + a step button</strong> selects one, the way it works on the hardware. Song rows chain patterns with a repeat count and an optional length override, and pad 83 switches between pattern and song playback. Each pattern carries its own length and page mask, so switching pattern switches those too.</p>
+
+  <h3>Undo, redo, memorize</h3>
+  <p>Pad 81 undoes the last destructive edit and Shift+tap redoes it; pad 82 recalls on a tap and memorizes on a hold. Every transform, clear and recall takes a snapshot first.</p>
+
+  <h3>Trig types</h3>
+  <p>A <strong>full</strong> trig applies its locks and restarts the LFOs and modulation envelope. A <strong>lock</strong> trig applies its locks and nothing else &mdash; Elektron&rsquo;s trigless lock. With no voices to place notes for, that is the distinction that carries over.</p>
+
   <h3>Live recording</h3>
   <p><strong>Shift + Play</strong> arms it. With the sequencer running, turning a knob writes a parameter lock onto whichever step is playing and arms a trig there — the same path a MIDI CC takes, so an external controller records locks too. The play pad turns red while armed.</p>
 
@@ -528,7 +537,7 @@ footer a{color:var(--rust)}
 </main>
 
 <footer>
-  <p><strong>Work &amp; Overwork</strong> v0.3.0 &mdash; a module for <a href="https://github.com/charlesvestal/schwung">Schwung</a> on the Ableton Move. MIT licensed.<br>
+  <p><strong>Work &amp; Overwork</strong> v0.4.0 &mdash; a module for <a href="https://github.com/charlesvestal/schwung">Schwung</a> on the Ableton Move. MIT licensed.<br>
   Source and tests: <a href="https://github.com/timncox/schwung-work">timncox/schwung-work</a> &middot; distribution: <a href="https://github.com/timncox/schwung-overwork">timncox/schwung-overwork</a> &middot; <a href="https://timncox.github.io/schwung/">all modules</a></p>
   <p>Inspired by the Elektron Tonverk and written from its published user manual. Not affiliated with or endorsed by Elektron. Tonverk is Elektron&rsquo;s trademark.</p>
 </footer>

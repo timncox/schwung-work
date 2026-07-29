@@ -26,6 +26,8 @@
  *                   SHIFT + 68 arms LIVE RECORD: knob moves then write locks
  *                   onto whichever step is playing.
  *
+ *   Shift+step      select that pattern from the 16-pattern bank
+ *   Pads 81/82/83   undo (shift = redo), memorize/recall, song mode
  *   Shift+jog click open and close the preset browser
  *   Knobs 1-8       the current edit page's eight parameters
  *   Jog             pattern length, or the held step's attribute
@@ -62,6 +64,10 @@ const STEP_COUNT = 16;
 const PAGE_STEPS = 16;
 const MAX_STEPS  = 64;
 const N_MACHINES = 21;
+/* palette slots past the last machine are free for functions */
+const PAD_UNDO = 81;
+const PAD_MEMO = 82;
+const PAD_SONG = 83;
 
 /* Machine palette occupies pad rows 1-3 in reading order: 92-99, 84-91, 76-79 */
 const PALETTE_PADS = [
@@ -149,6 +155,7 @@ let resumeRepaints = 0;
 let presetMode  = false;
 let presetIndex = 0;         /* 0 = "Save new", 1..n = a stored preset      */
 let presets     = [];
+let undoState   = [0, 0, 0];   /* undo / redo / memo availability */
 
 let heldStep   = -1;         /* absolute step index held down, or -1        */
 let heldUsed   = false;      /* a lock or attribute edit happened this hold */
@@ -156,6 +163,9 @@ let clearAt    = 0;          /* PAD_CLEAR press time, for the hold gesture  */
 let fillAt     = 0;
 let fillLatched = false;
 let liveRec     = 0;
+let songOn      = 0;
+let curPattern  = 0;
+let memoAt      = 0;
 let copyBuf    = null;
 
 /* mirrored DSP state */
@@ -266,10 +276,14 @@ function fetchAll() {
     for (const k of pageKnobs()) if (k.key) cfg[k.key] = getNum(k.key);
     cfg.mix = getNum('mix');
 
+    const us = getParam('undo_state');
+    undoState = us ? us.split(':').map((x) => parseInt(x, 10) || 0) : [0, 0, 0];
     seqLen = getNum('seq_len') || 16;
     seqOn  = getNum('seq_on');
     fillLatched = getNum('fill') !== 0;
     liveRec = getNum('live_rec');
+    songOn = getNum('song_on');
+    curPattern = getNum('pattern');
 
     fetchSteps();
     needsRedraw = true;
@@ -611,7 +625,7 @@ function drawUI() {
     if (title.length > 20) title = title.slice(0, 20);
     print(0, 1, title, 1);
 
-    const right = `${seqOn ? '>' : '||'}${seqPos + 1}/${seqLen}`;
+    const right = `P${curPattern + 1}${songOn ? 'S' : ''} ${seqOn ? '>' : '||'}${seqPos + 1}/${seqLen}`;
     print(128 - text_width(right), 1, right, 1);
     fill_rect(0, 9, 128, 1, 1);
 
@@ -673,6 +687,8 @@ function paintSteps(force) {
 
 function paintPalette(force) {
     for (let i = 0; i < PALETTE_PADS.length; i++) {
+        const pad = PALETTE_PADS[i];
+        if (pad === PAD_UNDO || pad === PAD_MEMO || pad === PAD_SONG) continue;
         const code = i;
         let color = Black;
         if (code < N_MACHINES) {
@@ -682,6 +698,12 @@ function paintPalette(force) {
         }
         setLED(PALETTE_PADS[i], color, force);
     }
+}
+
+function paintFunctions(force) {
+    setLED(PAD_UNDO, undoState[0] ? BurntOrange : 0x08, force);
+    setLED(PAD_MEMO, undoState[2] ? TealGreen : 0x08, force);
+    setLED(PAD_SONG, songOn ? Lime : 0x0A, force);
 }
 
 function paintTransport(force) {
@@ -708,6 +730,7 @@ function paintTransport(force) {
 function paintAll(force) {
     paintSteps(force);
     paintPalette(force);
+    paintFunctions(force);
     paintTransport(force);
 }
 
@@ -767,6 +790,20 @@ function handlePadPress(note) {
     }
 
     switch (note) {
+        case PAD_UNDO:
+            host_module_set_param(shiftHeld ? 'redo' : 'undo', '1');
+            fetchAll();
+            announce(shiftHeld ? 'Redo' : 'Undo');
+            return;
+        case PAD_MEMO:
+            memoAt = Date.now();
+            return;
+        case PAD_SONG:
+            songOn = songOn ? 0 : 1;
+            host_module_set_param('song_on', `${songOn}`);
+            announce(songOn ? 'Song mode' : 'Pattern mode');
+            needsRedraw = true;
+            return;
         case PAD_PLAY:
             seqOn = seqOn ? 0 : 1;
             host_module_set_param('seq_on', `${seqOn}`);
@@ -817,6 +854,15 @@ function handlePadPress(note) {
 }
 
 function handlePadRelease(note) {
+    if (note === PAD_MEMO) {
+        const held = Date.now() - memoAt;
+        host_module_set_param(held >= HOLD_MS ? 'memorize' : 'recall', '1');
+        if (held < HOLD_MS) fetchAll();
+        announce(held >= HOLD_MS ? 'Memorized' : 'Recalled');
+        memoAt = 0;
+        needsRedraw = true;
+        return;
+    }
     if (note === PAD_CLEAR) {
         const held = Date.now() - clearAt;
         if (held >= HOLD_MS) {
@@ -854,6 +900,15 @@ function onMidiMessageInternal(data) {
         /* Step buttons arrive as CC. Press latches the hold; release either
          * commits the hold's edits or, if nothing happened, toggles the trig. */
         if (d1 >= STEP_FIRST && d1 < STEP_FIRST + STEP_COUNT) {
+            /* SHIFT + a step selects that pattern from the bank. */
+            if (shiftHeld && d2 >= 64) {
+                const p = d1 - STEP_FIRST;
+                host_module_set_param('pattern', `${p}`);
+                curPattern = p;
+                fetchAll();
+                announceView(`Pattern ${p + 1}`);
+                return;
+            }
             const idx = patPage * PAGE_STEPS + (d1 - STEP_FIRST);
             if (d2 >= 64) {
                 heldStep = idx;

@@ -739,7 +739,7 @@ static void test_seq_clear(void) {
 
     char s[64];
     work_get_param(w, "step3", s, sizeof(s));
-    CHECK(strcmp(s, "0:0:0:0:0:100") == 0, "step 3 after clear reads %s", s);
+    CHECK(strcmp(s, "0:0:0:0:0:100:0") == 0, "step 3 after clear reads %s", s);
     work_get_param(w, "locks3", s, sizeof(s));
     CHECK(s[0] == '\0', "locks remained after clear: %s", s);
     work_destroy(w);
@@ -1229,6 +1229,245 @@ static void test_midi_cc(void) {
     work_destroy(w);
 }
 
+/* ------------------------------------------------------------- Tier A */
+
+static void test_pattern_bank(void) {
+    printf("the pattern bank holds independent patterns\n");
+    work_t *w = work_create(&host);
+    assert(w);
+    char s[64];
+
+    work_set_param(w, "pattern", "0");
+    work_set_param(w, "step0", "1:0:0:0");
+    work_set_param(w, "seq_len", "8");
+
+    work_set_param(w, "pattern", "5");
+    work_get_param(w, "step0", s, sizeof(s));
+    CHECK(s[0] == '0', "pattern 5 inherited pattern 0's trig (%s)", s);
+    work_get_param(w, "seq_len", s, sizeof(s));
+    CHECK(atoi(s) == 16, "pattern 5's length should default to 16, got %s", s);
+
+    work_set_param(w, "step3", "1:0:0:0");
+    work_set_param(w, "seq_len", "32");
+
+    work_set_param(w, "pattern", "0");
+    work_get_param(w, "step0", s, sizeof(s));
+    CHECK(s[0] == '1', "pattern 0 lost its trig (%s)", s);
+    work_get_param(w, "step3", s, sizeof(s));
+    CHECK(s[0] == '0', "pattern 5's edit leaked into pattern 0 (%s)", s);
+    work_get_param(w, "seq_len", s, sizeof(s));
+    CHECK(atoi(s) == 8, "pattern 0's length changed to %s", s);
+
+    /* out-of-range selects clamp rather than corrupt */
+    work_set_param(w, "pattern", "99");
+    work_get_param(w, "pattern", s, sizeof(s));
+    CHECK(atoi(s) == WORK_PATTERNS - 1, "pattern select did not clamp (%s)", s);
+    work_destroy(w);
+}
+
+static void test_song_mode(void) {
+    printf("song mode chains patterns with repeats\n");
+    work_t *w = work_create(&host);
+    assert(w);
+
+    /* two rows: pattern 2 twice, then pattern 7 once */
+    work_set_param(w, "song_row0", "2:2:0");
+    work_set_param(w, "song_row1", "7:1:0");
+    work_set_param(w, "song_len", "2");
+    for (int p = 0; p < WORK_PATTERNS; ++p) {
+        char v[8]; snprintf(v, sizeof(v), "%d", p);
+        work_set_param(w, "pattern", v);
+        work_set_param(w, "seq_len", "1");
+        work_set_param(w, "step0", "1:0:0:0");
+    }
+    work_set_param(w, "song_on", "1");
+    work_set_param(w, "seq_on", "1");
+
+    char s[32];
+    work_get_param(w, "pattern", s, sizeof(s));
+    CHECK(atoi(s) == 2, "song should start on pattern 2, got %s", s);
+
+    idle(w, blocks_per_step() + 2);      /* pass 1 of row 0 done */
+    work_get_param(w, "pattern", s, sizeof(s));
+    CHECK(atoi(s) == 2, "row 0 has 2 repeats; still expected pattern 2, got %s", s);
+
+    idle(w, blocks_per_step() + 2);      /* pass 2 done -> row 1 */
+    work_get_param(w, "pattern", s, sizeof(s));
+    CHECK(atoi(s) == 7, "after 2 repeats the song should move to pattern 7, got %s", s);
+
+    idle(w, blocks_per_step() + 2);      /* row 1 done -> wrap to row 0 */
+    work_get_param(w, "pattern", s, sizeof(s));
+    CHECK(atoi(s) == 2, "the song should wrap back to pattern 2, got %s", s);
+
+    work_destroy(w);
+}
+
+static void test_undo_redo_memorize(void) {
+    printf("undo, redo and memorize/recall work on the pattern\n");
+    work_t *w = work_create(&host);
+    assert(w);
+    char s[64];
+
+    work_set_param(w, "step0", "1:0:0:0");
+    work_set_param(w, "step1", "1:0:0:0");
+    work_set_param(w, "memorize", "1");
+
+    work_set_param(w, "seq_clear", "1");
+    work_get_param(w, "step0", s, sizeof(s));
+    CHECK(s[0] == '0', "clear did not empty step 0 (%s)", s);
+
+    work_set_param(w, "undo", "1");
+    work_get_param(w, "step0", s, sizeof(s));
+    CHECK(s[0] == '1', "undo did not restore step 0 (%s)", s);
+
+    work_set_param(w, "redo", "1");
+    work_get_param(w, "step0", s, sizeof(s));
+    CHECK(s[0] == '0', "redo did not re-apply the clear (%s)", s);
+
+    work_set_param(w, "recall", "1");
+    work_get_param(w, "step1", s, sizeof(s));
+    CHECK(s[0] == '1', "recall did not restore the memorized pattern (%s)", s);
+
+    /* undo with nothing to undo must be a no-op, not a corruption */
+    work_t *q = work_create(&host);
+    work_set_param(q, "undo", "1");
+    work_get_param(q, "step0", s, sizeof(s));
+    CHECK(s[0] == '0', "undo on a fresh engine changed something (%s)", s);
+    work_destroy(q);
+    work_destroy(w);
+}
+
+static void test_trig_types(void) {
+    printf("a lock trig applies locks without restarting the modulators\n");
+    work_t *w = work_create(&host);
+    assert(w);
+    set_slot(w, 0, WORK_FX_LPF);
+    work_set_param(w, "fx1_p5", "100");
+    work_set_param(w, "seq_len", "2");
+    work_set_param(w, "step0", "1:0:0:0");
+    work_set_param(w, "step1", "1:0:0:0:100:1");     /* lock trig */
+    work_set_param(w, "lock1_4", "12");
+    work_set_param(w, "menv_dest", "6");
+    work_set_param(w, "menv_depth", "127");
+    work_set_param(w, "seq_on", "1");
+
+    char s[32];
+    work_get_param(w, "trigtype1", s, sizeof(s));
+    CHECK(atoi(s) == WORK_TRIG_LOCK, "step 1 trig type reads %s", s);
+
+    idle(w, 2);
+    idle(w, blocks_per_step());
+    /* the lock still applies */
+    CHECK(eff_param(w, 0, 4) == 12,
+          "a lock trig failed to apply its lock (%d)", eff_param(w, 0, 4));
+    work_destroy(w);
+}
+
+static void test_transform_and_quantize(void) {
+    printf("transform and quantize rewrite the pattern\n");
+    work_t *w = work_create(&host);
+    assert(w);
+    char s[64];
+
+    work_set_param(w, "seq_len", "4");
+    work_set_param(w, "step0", "1:0:0:0");
+
+    work_set_param(w, "transform", "reverse");
+    work_get_param(w, "step3", s, sizeof(s));
+    CHECK(s[0] == '1', "reverse did not move step 0's trig to step 3 (%s)", s);
+    work_get_param(w, "step0", s, sizeof(s));
+    CHECK(s[0] == '0', "reverse left a trig on step 0 (%s)", s);
+
+    work_set_param(w, "transform", "rotl");
+    work_get_param(w, "step2", s, sizeof(s));
+    CHECK(s[0] == '1', "rotate-left did not move the trig to step 2 (%s)", s);
+
+    work_set_param(w, "transform", "invert");
+    work_get_param(w, "step2", s, sizeof(s));
+    CHECK(s[0] == '0', "invert did not clear the trig (%s)", s);
+    work_get_param(w, "step0", s, sizeof(s));
+    CHECK(s[0] == '1', "invert did not set the empty steps (%s)", s);
+
+    /* every transform is undoable */
+    work_set_param(w, "undo", "1");
+    work_get_param(w, "step2", s, sizeof(s));
+    CHECK(s[0] == '1', "undo did not reverse the invert (%s)", s);
+
+    /* quantize pulls micro-timing toward the grid */
+    work_set_param(w, "step1", "1:0:20:0");
+    work_set_param(w, "quantize", "127");
+    work_get_param(w, "step1", s, sizeof(s));
+    int micro = atoi(strchr(strchr(s, ':') + 1, ':') + 1);
+    CHECK(micro == 0, "full quantize left micro timing at %d", micro);
+    work_destroy(w);
+}
+
+static void test_page_mask(void) {
+    printf("silencing a page stops its trigs firing\n");
+    work_t *w = work_create(&host);
+    assert(w);
+    set_slot(w, 0, WORK_FX_LPF);
+    work_set_param(w, "fx1_p5", "100");
+    work_set_param(w, "seq_len", "32");            /* two pages */
+    work_set_param(w, "step0", "1:0:0:0");
+    work_set_param(w, "step16", "1:0:0:0");
+    work_set_param(w, "lock16_4", "9");
+    work_set_param(w, "page_mask", "1");           /* page 1 only */
+    work_set_param(w, "seq_on", "1");
+
+    idle(w, 2);
+    idle(w, blocks_per_step() * 16 + 2);           /* into page 2 */
+    CHECK(eff_param(w, 0, 4) == 100,
+          "a silenced page still fired its lock (%d)", eff_param(w, 0, 4));
+
+    work_set_param(w, "page_mask", "3");           /* both pages */
+    work_set_param(w, "seq_on", "0");
+    work_set_param(w, "seq_on", "1");
+    idle(w, 2);
+    idle(w, blocks_per_step() * 16 + 2);
+    CHECK(eff_param(w, 0, 4) == 9,
+          "re-enabling the page did not restore its lock (%d)", eff_param(w, 0, 4));
+    work_destroy(w);
+}
+
+static void test_nrpn(void) {
+    printf("NRPN reaches parameters at full 14-bit resolution\n");
+    work_t *w = work_create(&host);
+    assert(w);
+    char s[32];
+
+    /* NRPN 24 = FX 1 machine. At full scale it must select the LAST machine —
+     * the range bug Tonverk's own release notes kept reporting. */
+    uint8_t msb[3]  = {0xB0, 99, 0};
+    uint8_t lsb[3]  = {0xB0, 98, 24};
+    uint8_t dmsb[3] = {0xB0, 6, 127};
+    uint8_t dlsb[3] = {0xB0, 38, 127};
+    work_on_midi(w, msb, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+    work_on_midi(w, lsb, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+    work_on_midi(w, dmsb, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+    work_on_midi(w, dlsb, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+    work_get_param(w, "fx1", s, sizeof(s));
+    CHECK(atoi(s) == WORK_FX_COUNT - 1,
+          "NRPN 24 at full scale selected %s, expected %d", s, WORK_FX_COUNT - 1);
+
+    /* NRPN 8 = FX 1 knob A */
+    uint8_t lsb2[3] = {0xB0, 98, 8};
+    uint8_t d2[3]   = {0xB0, 6, 64};
+    work_on_midi(w, lsb2, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+    work_on_midi(w, d2, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+    work_get_param(w, "fx1_p1", s, sizeof(s));
+    CHECK(atoi(s) > 60 && atoi(s) < 68, "NRPN 8 at half scale gave %s", s);
+
+    /* internal NRPN must be ignored like internal CC */
+    work_t *q = work_create(&host);
+    work_on_midi(q, lsb2, 3, MOVE_MIDI_SOURCE_INTERNAL);
+    work_on_midi(q, d2, 3, MOVE_MIDI_SOURCE_INTERNAL);
+    work_get_param(q, "fx1_p1", s, sizeof(s));
+    CHECK(atoi(s) != 64, "an internal NRPN reached a parameter (%s)", s);
+    work_destroy(q);
+    work_destroy(w);
+}
+
 int main(void) {
     printf("Work engine — host simulator\n\n");
 
@@ -1268,6 +1507,15 @@ int main(void) {
     test_mod_envelope();
     test_third_lfo();
     test_midi_cc();
+
+    printf("\n-- Tier A: bank, song, history, transform --\n");
+    test_pattern_bank();
+    test_song_mode();
+    test_undo_redo_memorize();
+    test_trig_types();
+    test_transform_and_quantize();
+    test_page_mask();
+    test_nrpn();
 
     printf("\n%d checks, %d failed\n", tests_run, tests_failed);
     return tests_failed ? 1 : 0;

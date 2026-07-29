@@ -37,7 +37,7 @@ function check(cond, msg) {
 /* Keys the engine serves as families — the fixture holds concrete instances,
  * so a request for lock12_3 is legal if lock<N>_<P> is a served family. */
 const FAMILIES = [
-    /^step\d+$/, /^locks\d+$/, /^lock\d+_\d+$/, /^locklabel\d+$/, /^prob\d+$/
+    /^step\d+$/, /^locks\d+$/, /^lock\d+_\d+$/, /^locklabel\d+$/, /^prob\d+$/, /^trigtype\d+$/, /^song_row\d+$/
 ];
 
 function familyServed(key) {
