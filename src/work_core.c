@@ -2598,6 +2598,14 @@ void work_destroy(work_t *w) {
     free(w);
 }
 
+/* A SOURCE machine replaces its input instead of processing it. Grainer is
+ * deliberately NOT one: with no sample loaded it granulates the live input,
+ * which is the behaviour it shipped with and which people may be relying on. */
+static int machine_is_source(int machine) {
+    return machine == WORK_FX_SINGLE || machine == WORK_FX_MULTI ||
+           machine == WORK_FX_SUBTRACKS || machine == WORK_FX_WAVEFINDER;
+}
+
 void work_process(work_t *w, const int16_t *in, int16_t *out, int frames) {
     if (!w || frames <= 0) return;
 
@@ -2644,6 +2652,19 @@ void work_process(work_t *w, const int16_t *in, int16_t *out, int frames) {
      * feedback path while reverb tails and delay repeats ring out and decay
      * naturally. */
     float in_gain = w->monitor ? 1.0f : 0.0f;
+
+    /* A SOURCE machine in the first slot means the chain generates rather than
+     * inserts, and then the hardware input has no business being in the signal
+     * path at all: there is nothing to blend it with and it is pure feedback
+     * risk. Zeroing it here removes the loop structurally instead of relying on
+     * the guard to notice the risk and mute in time — which is what the
+     * feedback reported from hardware came down to.
+     *
+     * Only the FIRST slot decides. A source in slot 2 is fed by slot 1, and a
+     * source in slot 1 with an FX in slot 2 is the normal generate-then-treat
+     * arrangement; both leave slot 1 as the thing that determines whether the
+     * input matters. */
+    if (machine_is_source(w->eff_machine[0])) in_gain = 0.0f;
 
     for (int f = 0; f < frames; ++f) {
         float dry_l = (float)in[f * 2]     * (1.0f / 32768.0f) * in_gain;

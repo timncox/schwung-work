@@ -2005,6 +2005,66 @@ static void test_shape_shelves(void) {
     work_destroy(w);
 }
 
+
+/* Reported from hardware: "I keep getting feedback." Overwork always reads the
+ * mic, and with a SOURCE machine generating there is no reason for it to be in
+ * the path — nothing to blend it with, and a live mic into speakers is a loop.
+ * The guard mutes on RISK; this removes the path entirely, which does not
+ * depend on detecting anything. */
+static void test_source_machine_ignores_the_input(void) {
+    printf("a source machine keeps the live input out of the signal path\n");
+    work_t *w = work_create(&host);
+
+    const int frames = 4000;
+    static int16_t pcm[4000 * 2];
+    make_ramp(pcm, frames);
+    send_sample(w, pcm, frames, 800);
+
+    /* a loud input, the mic howling */
+    int16_t loud[BLOCK * 2], out[BLOCK * 2];
+    for (int i = 0; i < BLOCK * 2; ++i) loud[i] = (int16_t)(20000 - (i % 40000));
+
+    /* Bypass in both slots at MIX 0 is the dry path: the input SHOULD pass. */
+    work_set_param(w, "machine1", "0");
+    work_set_param(w, "machine2", "0");
+    work_set_param(w, "mix", "0");
+    int64_t passed = 0;
+    for (int b = 0; b < 8; ++b) {
+        work_process(w, loud, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) passed += llabs(out[i]);
+    }
+    CHECK(passed > 0, "the dry path is silent even with Bypass — this test "
+          "would pass for the wrong reason");
+
+    /* Now a source machine in slot 1, still MIX 0 and monitor ON. The input
+     * must not reach the output by ANY route. */
+    work_set_param(w, "machine1", "21");
+    work_set_param(w, "monitor", "1");
+    for (int p = 1; p <= 8; ++p) {
+        char k[16]; snprintf(k, sizeof k, "fx1_p%d", p);
+        work_set_param(w, k, p == 7 ? "0" : "0");   /* LEV 0: no sample either */
+    }
+    int64_t leaked = 0;
+    for (int b = 0; b < 8; ++b) {
+        work_process(w, loud, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) leaked += llabs(out[i]);
+    }
+    CHECK(leaked == 0, "the live input leaked through a source machine "
+          "(energy %lld) — that is the feedback path", (long long)leaked);
+
+    /* An FX machine must still hear the input, or the module is broken. */
+    work_set_param(w, "machine1", "11");        /* Low-Pass Filter */
+    work_set_param(w, "mix", "127");
+    int64_t heard = 0;
+    for (int b = 0; b < 8; ++b) {
+        work_process(w, loud, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) heard += llabs(out[i]);
+    }
+    CHECK(heard > 0, "an FX machine stopped hearing the input");
+
+    work_destroy(w);
+}
+
 int main(void) {
     printf("Work engine — host simulator\n\n");
 
@@ -2067,6 +2127,8 @@ int main(void) {
     test_subtracks_play_modes();
     test_wavefinder_needs_a_wavetable();
     test_shape_shelves();
+
+    test_source_machine_ignores_the_input();
 
     printf("\n%d checks, %d failed\n", tests_run, tests_failed);
     return tests_failed ? 1 : 0;

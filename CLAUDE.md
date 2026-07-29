@@ -141,6 +141,27 @@ These are all lessons other Schwung modules paid for. Do not relearn them.
   caught that `lock<N>_<P>` had a setter but **no getter**, so lock display and
   lock nudging were both silently reading the base value.
 
+## Feedback
+
+Overwork reads the hardware input, so speakers plus a live mic is a loop. Two
+things stop it, and they are different in kind:
+
+- **The guard** (`pollFeedbackGuard` in `ui_overtake.js`) watches
+  `host_speaker_active() && !host_line_in_connected()` and mutes `monitor`,
+  which zeroes the input in the engine. It has to DETECT the risk, and it
+  cannot see Move's own firmware monitoring, which is out of our reach.
+- **A source machine in slot 1 removes the input path entirely**
+  (`machine_is_source` in `work_core.c`). If the chain generates, the mic has
+  nothing to blend with and is pure liability, so it is zeroed regardless of
+  monitor state. This does not depend on detecting anything.
+
+Grainer is deliberately NOT a source for this purpose: with no sample loaded it
+granulates the live input, which is what it shipped with.
+
+If feedback persists with a source machine loaded and "INPUT MUTED" showing,
+the loop is Move's own input monitoring rather than ours — schwung's docs put
+the firmware's autosample and line-in monitoring explicitly out of scope.
+
 ## Verification
 
 ```bash
