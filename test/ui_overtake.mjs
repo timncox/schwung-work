@@ -1047,6 +1047,26 @@ async function testGarbageFileIsRejected() {
           'a rejected file still started a transfer');
 }
 
+
+/* MACHINE_COLOR is indexed by machine but hand-maintained in JS while the
+ * machine list lives in C — the same shape as the N_MACHINES constant that
+ * made Grainer and then Single Player unreachable. A colour cannot be derived
+ * from the engine, so the drift is caught here instead of on hardware. */
+async function testMachineColorTableCoversEveryMachine() {
+    console.log('every machine the engine lists has a palette colour');
+    const ctx = await loadUI();
+    ctx.host.init();
+    const engine = ctx.store.machines.split(',').length;
+    const colors = ctx.host.__machineColorCount();
+    check(colors === engine,
+          `MACHINE_COLOR has ${colors} entries, the engine lists ${engine} machines — ` +
+          `machine ${Math.min(colors, engine)} would light with no colour of its own`);
+
+    /* and the lookup must not hand undefined to setLED even if it does drift */
+    const lit = [...ctx.leds.values()].filter((v) => v === undefined);
+    check(lit.length === 0, `${lit.length} pads were lit with an undefined colour`);
+}
+
 /* ------------------------------------------------------------------ run */
 
 const tests = [
@@ -1061,6 +1081,7 @@ const tests = [
     testCopyPasteClear,
     testNoUnknownWritesAnywhere,
     testResumeForcesRepaints,
+    testMachineColorTableCoversEveryMachine,
     testWavLoadRoundTrip,
     testWavVariantsAndChunkParsing,
     testOversizedSampleIsTruncated,

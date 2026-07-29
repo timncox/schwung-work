@@ -125,6 +125,12 @@ const HOLD_MS = 600;
 
 /* Machine colours, grouped by family the way Smack groups its effects, so the
  * palette reads as a map rather than twenty arbitrary lights. */
+/* A hand-maintained table indexed by machine, which is the same shape as the
+ * N_MACHINES constant that made two machines unreachable — a UI value mirroring
+ * a table the engine owns, with nothing linking them. It cannot be derived
+ * (a colour is a design choice, not engine data), so instead: the lookup below
+ * falls back rather than handing `undefined` to setLED, and a test asserts this
+ * table is the same length as the engine's machine list. */
 const MACHINE_COLOR = [
     DarkGrey,      /* 0  Bypass            */
     Purple,        /* 1  Chrono Pitch      pitch family */
@@ -1087,7 +1093,9 @@ function paintPalette(force) {
         const code = i;
         let color = Black;
         if (code < nMachines()) {
-            color = MACHINE_COLOR[code];
+            /* A machine added to the engine without a colour here would
+             * otherwise hand `undefined` to setLED and light nothing. */
+            color = MACHINE_COLOR[code] !== undefined ? MACHINE_COLOR[code] : LightGrey;
             /* the machine loaded in the focused slot burns brighter */
             if (code === (cfg[`machine${focusSlot + 1}`] | 0)) color = White;
         }
@@ -1480,6 +1488,9 @@ globalThis.onUnload = function () {
 
 /* Exposed for the harness: sample loading is pure data handling with no input
  * gesture attached yet, so this is the only way to drive it. */
+/* Exposed so the harness can check this table against the engine's list. */
+globalThis.__machineColorCount = () => MACHINE_COLOR.length;
+
 globalThis.loadSampleFile = loadSampleFile;
 globalThis.listSamples = listSamples;
 
