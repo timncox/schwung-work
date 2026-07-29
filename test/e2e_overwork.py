@@ -80,6 +80,14 @@ def overwork(bus):
             pytest.skip("a different overtake tool is loaded")
     except SchwungBusError as exc:
         pytest.skip(f"overtake DSP not answering: {exc}")
+
+    # Wait out the module's SHIFT settling window before any test runs.
+    # For about a second after init the UI deliberately clears Shift, because
+    # the launch gesture is itself a Shift combo whose release is swallowed
+    # while init runs. A Shift-dependent test starting inside that window sees
+    # Shift ignored and reports a palette bug that is not there — which it did,
+    # intermittently, depending on how fast the earlier tests ran.
+    time.sleep(1.5)
     return bus
 
 
@@ -131,6 +139,13 @@ def _release_modifiers(bus):
     surface was simply holding Shift. Tests establish what they depend on."""
     bus.inject_midi(bytes([0x0B, 0xB0, 49, 0]))
     bus.wait_frame(3)
+    # Twice, with a gap. One release can be dropped if it shares a frame with
+    # the pad traffic from the previous test, and a single missed release is
+    # exactly what latches Shift in the first place — the failure this suite
+    # exists to catch. Belt and braces here keeps a REAL latch detectable
+    # instead of drowning in our own flakiness.
+    bus.inject_midi(bytes([0x0B, 0xB0, 49, 0]))
+    bus.wait_frame(6)
 
 
 # ----------------------------------------------------------------- contract
@@ -208,10 +223,22 @@ def test_hold_step_plus_knob_writes_a_parameter_lock(overwork):
 
 # ------------------------------------------------------------------ palette
 
+@pytest.mark.flaky_modifier          # see the note in the body
 @pytest.mark.parametrize("shift,offset", [(False, 0), (True, 21)])
 def test_palette_pads_load_machines(overwork, shift, offset):
     """Unshifted pads reach machines 0-20, Shift reaches 21 and up. The Shift
-    bank exists because 26 machines do not fit 21 palette slots."""
+    bank exists because 26 machines do not fit 21 palette slots.
+
+    KNOWN FLAKY, roughly one run in three, and worth being straight about: the
+    two parametrisations differ only in modifier state, and injected Shift
+    releases can be dropped when they share a frame with the previous test's
+    pad traffic. A dropped release leaves Shift latched and the next case loads
+    machine+21 — which is the very failure this suite exists to detect, so the
+    test cannot simply paper over it by retrying.
+
+    The right fix is for the bus to report the module's modifier state so the
+    test can establish it rather than infer it. Until then, read a failure here
+    as "check whether Shift latched" rather than "the palette is broken"."""
     bus = overwork
     _release_modifiers(bus)
     machines = _machines(bus)
