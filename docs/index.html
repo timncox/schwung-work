@@ -252,8 +252,8 @@ footer a{color:var(--rust)}
   <div class="titleblock">
     <div class="tb-main">
       <h1>Work <span class="amp">&amp;</span><span class="over">Overwork</span></h1>
-      <p class="tagline">Twenty FX machines for the Ableton Move, in two insert slots with two FX LFOs. Overwork adds the whole surface and an Elektron-style step sequencer that parameter-locks them.</p>
-      <span class="stamp">Not yet hardware-tested</span>
+      <p class="tagline">Twenty-six machines for the Ableton Move &mdash; twenty-one effects and five sample sources &mdash; in two insert slots with two FX LFOs. Overwork adds the whole surface and an Elektron-style step sequencer that parameter-locks them.</p>
+      <span class="stamp">Playing on hardware &mdash; see what is verified</span>
     </div>
     <div class="tb-side">
       <div class="tb-cell">Module<b>Schwung / Move</b></div>
@@ -280,6 +280,20 @@ footer a{color:var(--rust)}
 
 <section id="overview">
   <div class="sechead"><span class="secnum">01</span><h2>Overview</h2><span class="note">two builds, one engine</span></div>
+
+  <div class="callout">
+    <h3>What has actually been heard on a Move</h3>
+    <p>Verified by ear, 29 July 2026: selecting machines across the whole list;
+    loading a WAV and playing it with Single Player from a sequencer trig;
+    <strong>parameter locks</strong>; Wavefinder&rsquo;s position sweep morphing
+    continuously; and a sample player in slot 1 feeding Rumsklang Reverb in
+    slot 2 with no crackling, which is the heaviest realistic pair and the
+    only real answer on CPU headroom.</p>
+    <p>Still unheard: <strong>Subtracks</strong>, <strong>Multi Player</strong>&rsquo;s
+    polyphony, <strong>presets</strong> saving and reloading, trig conditions,
+    and Shape&rsquo;s shelf extremes since they were deepened. Those are not
+    known to be broken &mdash; they are simply not known to work.</p>
+  </div>
   <p class="lede"><strong>Work</strong> is the <code>audio_fx</code> build. It drops into a Signal Chain slot or a Master FX slot and processes whatever is upstream.</p>
   <p class="lede"><strong>Overwork</strong> is the <code>overtake</code> build. It takes over Move&rsquo;s whole surface and runs the same twenty-six machines on the live input &mdash; mic, line, or USB-C &mdash; with a step sequencer driving parameter locks.</p>
 
