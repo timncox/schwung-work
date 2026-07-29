@@ -107,6 +107,15 @@ const STUBS = {
     `,
     '/data/UserData/schwung/shared/input_filter.mjs': `
         export function decodeDelta(v){ if(v===0) return 0; if(v>=1&&v<=63) return v; if(v>=65&&v<=127) return -(128-v); return 0; }
+        /* Transcribed from schwung's src/shared/input_filter.mjs: clock,
+         * sysex, aftertouch and the capacitive knob-touch notes. */
+        export function shouldFilterMessage(d){
+            const st = d[0], t = st & 0xF0;
+            if (st === 0xF8 || st === 0xF0 || st === 0xF7) return true;
+            if (t === 0xD0 || t === 0xA0) return true;
+            if ((t === 0x90 || t === 0x80) && d[1] < 10) return true;
+            return false;
+        }
     `,
     '/data/UserData/schwung/shared/screen_reader.mjs': `
         export function announce(){}
@@ -413,10 +422,38 @@ async function testEveryWrittenKeyIsAccepted() {
           `UI read keys the engine does not serve: ${[...ctx.unknownReads].join(', ')}`);
 }
 
+
+/* The same garbage that flooded the overtake build reaches the chain UI too —
+ * it is the same MIDI_IN ring. Captured from the device 2026-07-29. */
+async function testGarbageMidiIsIgnored() {
+    console.log('sysex, clock and misaligned bytes never reach the surface');
+    const ctx = await loadUI();
+    ctx.host.init();
+    settle(ctx, 40);
+    ctx.writes.length = 0;
+
+    const garbage = [
+        [178, 0, 77], [240, 0, 33], [29, 1, 1], [58, 0, 77], [0, 247, 0],
+        [0xF8, 0, 0], [0xD0, 64, 0], [0xA0, 60, 100], [0x90, 3, 100]
+    ];
+    for (let i = 0; i < 200; i++) {
+        for (const g of garbage) ctx.host.onMidiMessageInternal(g);
+        ctx.host.onMidiMessageInternal([0, 0, 0]);
+    }
+    check(ctx.writes.length === 0,
+          `garbage MIDI wrote ${ctx.writes.length} parameters: ` +
+          JSON.stringify(ctx.writes.slice(0, 4)));
+
+    /* and real input still gets through */
+    ctx.host.onMidiMessageInternal(cc(KNOB1, 1));
+    check(ctx.writes.length > 0, 'the filter swallowed a real knob turn');
+}
+
 /* ---------------------------------------------------------------- runner */
 
 const TESTS = [
     testInitIsCheapAndHonest,
+    testGarbageMidiIsIgnored,
     testKnobHandlerNeverReads,
     testSteadyStateIsQuiet,
     testPageFillsInPromptly,
