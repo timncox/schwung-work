@@ -54,8 +54,8 @@ int main(void) {
 
     /* A representative engine state: two machines loaded, a pattern with
      * trigs, locks, a condition and micro timing. */
-    work_set_param(w, "machine1", "1");       /* Chrono Pitch */
-    work_set_param(w, "machine2", "18");      /* Supervoid Reverb */
+    work_set_param(w, "machine1", "1");       /* Clock Pitch */
+    work_set_param(w, "machine2", "18");      /* Voidspace Reverb */
     work_set_param(w, "seq_on", "1");
     work_set_param(w, "seq_len", "32");
     work_set_param(w, "step0", "1:0:0:0");

@@ -3,7 +3,7 @@
   "name": "Work In",
   "abbrev": "WKIN",
   "version": "0.7.0",
-  "description": "Twenty-one Tonverk-inspired FX machines on the live input, as a chain slot source",
+  "description": "Twenty-one FX machines on the live input, as a chain slot source",
   "dsp": "dsp.so",
   "ui_chain": "ui_chain.js",
   "api_version": 2,

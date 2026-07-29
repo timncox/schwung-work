@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Work &amp; Overwork — operation manual</title>
-<meta name="description" content="Operation manual for Work and Overwork: twenty-six Tonverk-inspired machines for the Ableton Move &mdash; twenty-one FX and five sample sources &mdash; as a Schwung module.">
+<meta name="description" content="Operation manual for Work and Overwork: twenty-six machines for the Ableton Move &mdash; twenty-one FX and five sample sources &mdash; as a Schwung module.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:ital,wght@0,400..700;1,400..700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -175,7 +175,7 @@ footer a{color:var(--rust)}
   <div class="titleblock">
     <div class="tb-main">
       <h1>Work <span class="amp">&amp;</span><span class="over">Overwork</span></h1>
-      <p class="tagline">Twenty-six machines for the Ableton Move &mdash; twenty-one effects and five sample sources &mdash; in two insert slots with two FX LFOs. Overwork adds the whole surface and an Elektron-style step sequencer that parameter-locks them.</p>
+      <p class="tagline">Twenty-six machines for the Ableton Move &mdash; twenty-one effects and five sample sources &mdash; in two insert slots with two FX LFOs. Overwork adds the whole surface and a 64-step sequencer that parameter-locks them.</p>
       <span class="stamp">Playing on hardware</span>
     </div>
     <div class="tb-side">
@@ -208,15 +208,15 @@ footer a{color:var(--rust)}
   <p class="lede"><strong>Overwork</strong> is the <code>overtake</code> build. It takes over Move&rsquo;s whole surface and runs the same twenty-six machines on the live input &mdash; mic, line, or USB-C &mdash; with a step sequencer driving parameter locks.</p>
 
   <h3>Why the surface maps so cleanly</h3>
-  <p>Tonverk is an eight-encoder-per-page instrument with sixteen trig keys. Move has eight knobs and sixteen dedicated step buttons. The mapping isn&rsquo;t an approximation &mdash; it&rsquo;s the same instrument shape, so the gesture that defines Elektron sequencing survives intact.</p>
+  <p>The gesture that defines hardware step sequencing &mdash; hold a step, turn an encoder, and that step remembers the value &mdash; needs eight encoders and a row of trig keys under your fingers at once. Move has eight knobs and sixteen dedicated step buttons, so it is a 1:1 map rather than an approximation.</p>
 
   <table>
     <caption>Correspondence</caption>
-    <thead><tr><th scope="col">Tonverk</th><th scope="col">Move</th></tr></thead>
+    <thead><tr><th scope="col">What it needs</th><th scope="col">Move</th></tr></thead>
     <tbody>
       <tr><td>8 rotary encoders</td><td>the 8 knobs</td></tr>
-      <tr><td>16 <code>[TRIG]</code> keys</td><td>the 16 step buttons</td></tr>
-      <tr><td><code>LEVEL/DATA</code></td><td>the jog wheel</td></tr>
+      <tr><td>16 trig keys</td><td>the 16 step buttons</td></tr>
+      <tr><td>a data encoder</td><td>the jog wheel</td></tr>
       <tr><td>hold trig + turn encoder</td><td><strong>hold step + turn knob</strong></td></tr>
     </tbody>
   </table>
@@ -293,7 +293,7 @@ footer a{color:var(--rust)}
 
   <div class="demo">
     <div class="demo-head">
-      <span>Interactive &mdash; FX 1 : Chrono Pitch</span>
+      <span>Interactive &mdash; FX 1 : Clock Pitch</span>
       <span style="margin-left:auto">hold a step, then drag a knob</span>
     </div>
     <div class="demo-body">
@@ -376,7 +376,7 @@ footer a{color:var(--rust)}
 
 <section id="samples">
   <div class="sechead"><span class="secnum">06</span><h2>Samples</h2><span class="note">8 seconds &middot; stereo</span></div>
-  <p class="lede">Five machines read a sample rather than the slot&rsquo;s input. One sample is loaded at a time and every source machine shares it, so switching between Single Player, Subtracks and Wavefinder auditions the same audio three ways.</p>
+  <p class="lede">Five machines read a sample rather than the slot&rsquo;s input. One sample is loaded at a time and every source machine shares it, so switching between One Shot, Slicer and Wavescan auditions the same audio three ways.</p>
 
   <div class="grid2">
     <div>
@@ -398,26 +398,26 @@ footer a{color:var(--rust)}
     </div>
     <div>
       <h3>What a source machine is</h3>
-      <p>Every machine before Single Player treats what arrives at the slot. A source machine <em>replaces</em> it. Put one in FX&nbsp;1 and the slot stops being an insert and starts being an instrument, with FX&nbsp;2 still processing what it makes.</p>
+      <p>Every machine before One Shot treats what arrives at the slot. A source machine <em>replaces</em> it. Put one in FX&nbsp;1 and the slot stops being an insert and starts being an instrument, with FX&nbsp;2 still processing what it makes.</p>
       <p>With no sample loaded a source machine is silent rather than noisy &mdash; an empty slot makes no sound, it does not pass its input through.</p>
       <h3>Triggering</h3>
-      <p>A full trig fires the voice; a <em>lock</em> trig deliberately does not, matching Elektron&rsquo;s trigless lock. An incoming note fires it too, so the machines are playable from a keyboard or Move&rsquo;s pads with the sequencer stopped.</p>
+      <p>A full trig fires the voice; a <em>lock</em> trig deliberately does not &mdash; that is what makes it a lock trig. An incoming note fires it too, so the machines are playable from a keyboard or Move&rsquo;s pads with the sequencer stopped.</p>
       <p>Notes set pitch, with <strong>note 60 as unity</strong> &mdash; C3 plays the sample as recorded and everything else transposes from there.</p>
       <table>
         <caption>Voices</caption>
         <thead><tr><th scope="col">Machine</th><th scope="col">Voices</th></tr></thead>
         <tbody>
-          <tr><td>Single Player</td><td>one</td></tr>
-          <tr><td>Multi Player, Subtracks</td><td>eight, oldest stolen first</td></tr>
-          <tr><td>Wavefinder</td><td>free-running, needs no trig</td></tr>
+          <tr><td>One Shot</td><td>one</td></tr>
+          <tr><td>Polysample, Slicer</td><td>eight, oldest stolen first</td></tr>
+          <tr><td>Wavescan</td><td>free-running, needs no trig</td></tr>
           <tr><td>Shape</td><td>none &mdash; it makes no sound of its own</td></tr>
         </tbody>
       </table>
     </div>
   </div>
 
-  <h3>What Tonverk does that this does not</h3>
-  <p>Three of the five are adaptations, and the machine pages above say which. <strong>Multi Player</strong> has no multi-sampled instruments &mdash; there is one buffer, so every note plays it transposed. <strong>Subtracks</strong> has the playback controls but not the eight sequencer subtracks and supertrack that give it its name; Work is a two-slot chain, not an eight-track sampler. <strong>Wavefinder</strong> has no SD card and no wavetable slots, so the loaded sample <em>is</em> the wavetable, read as a series of 2048-frame waves. <strong>Shape</strong> alone needed no adaptation, because a Work slot is exactly the bus insert the manual puts it on.</p>
+  <h3>Where the source machines stop</h3>
+  <p>All five read the one loaded sample, and that single buffer is the limit worth knowing about. <strong>Polysample</strong> is polyphonic and has real vibrato, but there are no multi-sampled instruments &mdash; every note plays the same buffer transposed. <strong>Slicer</strong> gives you the playback controls, not eight sample tracks; Work is a two-slot chain, not a multitrack sampler. <strong>Wavescan</strong> has no wavetable library, so the loaded sample <em>is</em> the wavetable, read as a series of 2048-frame waves &mdash; load a wavetable file and it behaves as one, load a drum loop and you get something else. <strong>Tilt</strong> is the one with nothing missing: it wants a bus insert, and a Work slot is exactly that.</p>
 </section>
 
 <section id="sequencer">
@@ -455,7 +455,7 @@ footer a{color:var(--rust)}
       <p>Sixteen slot parameters &mdash; eight per slot &mdash; plus both machine selects and the global dry/wet. Locking a machine select swaps the machine for that step.</p>
       <div class="callout">
         <strong>Retrig, precisely</strong>
-        Retrig restarts the FX LFOs and the filter envelope. It does <em>not</em> stutter the audio &mdash; the Degrader&rsquo;s <code>FREZ</code> parameter is the machine for that.
+        Retrig restarts the FX LFOs and the filter envelope. It does <em>not</em> stutter the audio &mdash; the Decimator&rsquo;s <code>FREZ</code> parameter is the machine for that.
       </div>
     </div>
   </div>
@@ -471,7 +471,7 @@ footer a{color:var(--rust)}
   <p>Pad 81 undoes the last destructive edit and Shift+tap redoes it; pad 82 recalls on a tap and memorizes on a hold. Every transform, clear and recall takes a snapshot first.</p>
 
   <h3>Trig types</h3>
-  <p>A <strong>full</strong> trig applies its locks and restarts the LFOs and modulation envelope. A <strong>lock</strong> trig applies its locks and nothing else &mdash; Elektron&rsquo;s trigless lock. With no voices to place notes for, that is the distinction that carries over.</p>
+  <p>A <strong>full</strong> trig applies its locks and restarts the LFOs and modulation envelope. A <strong>lock</strong> trig applies its locks and nothing else. With no voices to place notes for, that is the distinction that carries over.</p>
 
   <h3>Live recording</h3>
   <p><strong>Shift + Play</strong> arms it. With the sequencer running, turning a knob writes a parameter lock onto whichever step is playing and arms a trig there — the same path a MIDI CC takes, so an external controller records locks too. The play pad turns red while armed.</p>
@@ -523,7 +523,7 @@ footer a{color:var(--rust)}
 <footer>
   <p><strong>Work &amp; Overwork</strong> v0.7.0 &mdash; a module for <a href="https://github.com/charlesvestal/schwung">Schwung</a> on the Ableton Move. MIT licensed.<br>
   Source and tests: <a href="https://github.com/timncox/schwung-work">timncox/schwung-work</a> &middot; distribution: <a href="https://github.com/timncox/schwung-overwork">timncox/schwung-overwork</a> &middot; <a href="https://timncox.github.io/schwung/">all modules</a></p>
-  <p>Inspired by the Elektron Tonverk and written from its published user manual &mdash; documented parameter names, ranges and descriptions only. No Elektron code or factory content, and not an emulation: the DSP is our own. Not affiliated with or endorsed by Elektron. Tonverk is Elektron&rsquo;s trademark.</p>
+  <p>Every machine is an original DSP implementation, written from published descriptions of the effect it is named for rather than from anyone&rsquo;s source. No third-party code or factory content. Not affiliated with or endorsed by any hardware manufacturer.</p>
 </footer>
 
 </div>
@@ -549,31 +549,31 @@ footer a{color:var(--rust)}
 
   var MACHINES = [
     {n:"Bypass", f:"none", d:"Passes the slot through untouched.", p:[]},
-    {n:"Chrono Pitch", f:"pitch", d:"Granular pitch shifter with feedback, so held notes climb or fall in steps rather than sitting at one interval.", p:["TUNE","WIN","FDBK","DEP","HPF","LPF","SPD","MIX"]},
-    {n:"Comb ± Filter", f:"filt", d:"Tuned stereo comb. FREQ is bipolar and its sign flips the comb’s polarity — positive feedback plucks like a string, negative sounds hollow and tube-like.", p:["SPD","DEP","SPH","DTUN","FREQ","FDBK","LPF","MIX"]},
+    {n:"Clock Pitch", f:"pitch", d:"Granular pitch shifter with feedback, so held notes climb or fall in steps rather than sitting at one interval.", p:["TUNE","WIN","FDBK","DEP","HPF","LPF","SPD","MIX"]},
+    {n:"Comb Filter", f:"filt", d:"Tuned stereo comb. FREQ is bipolar and its sign flips the comb’s polarity — positive feedback plucks like a string, negative sounds hollow and tube-like.", p:["SPD","DEP","SPH","DTUN","FREQ","FDBK","LPF","MIX"]},
     {n:"Compressor", f:"dyn", d:"Feed-forward peak compressor, eight ratios from 1.5 to 20. SCF is bipolar: low-pass left for pumping, high-pass right to avoid it.", p:["THR","ATK","REL","MUP","RAT","SCS","SCF","MIX"]},
-    {n:"Daisy Delay", f:"delay", d:"Delay with saturated input, stereo width on input and feedback, SKEW pulling the channels into a rhythmic relationship, and a tilt filter.", p:["DRV","TIME","FDBK","WIDH","MOD","SKEW","FILT","MIX"]},
-    {n:"Degrader", f:"dest", d:"The lo-fi collection: bit reduction, overdrive, sample-rate redux, random drop-outs, ring modulation and random freezes.", p:["BR","OVER","SRR","DROP","RATE","DEP","FREZ","F.TIM"]},
-    {n:"Dirtshaper", f:"dest", d:"Drive into a rectifier, with noise ring-modulated against the distorted signal. HPF is bipolar and chooses where the filter sits — before the drive, or after the rectifier.", p:["DRV","RECT","HPF","LPF","NOIS","N.FRQ","N.RES","MIX"]},
-    {n:"Filter Folder", f:"filt", d:"High-pass, then a wavefolder, then a morphing multimode filter, then distortion. Adds overtones rather than removing them.", p:["ILEV","HP","FOLD","OLEV","FREQ","RESO","TYPE","DIST"]},
+    {n:"Chain Delay", f:"delay", d:"Delay with saturated input, stereo width on input and feedback, SKEW pulling the channels into a rhythmic relationship, and a tilt filter.", p:["DRV","TIME","FDBK","WIDH","MOD","SKEW","FILT","MIX"]},
+    {n:"Decimator", f:"dest", d:"The lo-fi collection: bit reduction, overdrive, sample-rate redux, random drop-outs, ring modulation and random freezes.", p:["BR","OVER","SRR","DROP","RATE","DEP","FREZ","F.TIM"]},
+    {n:"Gritshaper", f:"dest", d:"Drive into a rectifier, with noise ring-modulated against the distorted signal. HPF is bipolar and chooses where the filter sits — before the drive, or after the rectifier.", p:["DRV","RECT","HPF","LPF","NOIS","N.FRQ","N.RES","MIX"]},
+    {n:"Fold Filter", f:"filt", d:"High-pass, then a wavefolder, then a morphing multimode filter, then distortion. Adds overtones rather than removing them.", p:["ILEV","HP","FOLD","OLEV","FREQ","RESO","TYPE","DIST"]},
     {n:"Filterbank", f:"filt", d:"Eight fixed bands — a low-pass at 90 Hz, six band-passes, a high-pass at 4 kHz — each with its own gain.", p:["90Hz","122Hz","225Hz","418Hz","777Hz","1k4","2k7","4k+"]},
-    {n:"Frequency Warper", f:"pitch", d:"A true single-sideband frequency shifter, not a pitch shifter, so intervals go inharmonic. SBND blends the two sidebands.", p:["SPD","DEP","SPH","LAG","SHFT","SPRD","SBND","MIX"]},
-    {n:"Infinite Flanger", f:"mod", d:"Barber-pole motion: three crossfaded taps, so the sweep appears to rise or fall forever without ever turning around. SPD at centre holds still.", p:["SPD","DEP","TUNE","FDBK","LPF"]},
+    {n:"Spectrum Bender", f:"pitch", d:"A true single-sideband frequency shifter, not a pitch shifter, so intervals go inharmonic. SBND blends the two sidebands.", p:["SPD","DEP","SPH","LAG","SHFT","SPRD","SBND","MIX"]},
+    {n:"Endless Flanger", f:"mod", d:"Barber-pole motion: three crossfaded taps, so the sweep appears to rise or fall forever without ever turning around. SPD at centre holds still.", p:["SPD","DEP","TUNE","FDBK","LPF"]},
     {n:"Low-Pass Filter", f:"filt", d:"Four poles, 24 dB per octave, with a tempo-synced LFO and stereo spread offsetting cutoff between the channels.", p:["SPD","DEP","SPH","LAG","FREQ","RESO","SPRD"]},
     {n:"Multimode Filter", f:"filt", d:"Morphs low-pass to band-pass to high-pass, with an ADSR envelope modulating cutoff by a bipolar depth.", p:["ATK","DEC","SUS","REL","FREQ","RESO","TYPE","ENV"]},
-    {n:"Panoramic Chorus", f:"mod", d:"Three-voice chorus for widening, with a high-pass on the input and a stereo width control.", p:["DEP","SPD","HPF","WDTH","MIX"]},
-    {n:"Phase 98", f:"mod", d:"Six allpass stages; STG blends the tap after four with the tap after six. SHP morphs the LFO from a falling ramp through triangle to a rising one.", p:["SPD","DEP","SHP","LAG","FREQ","FDBK","STG","MIX"]},
-    {n:"Rumsklang Reverb", f:"space", d:"Large-space voicing with an explicit early-reflection bank in front of the tank.", p:["PRE","EARLY","DAMP","SIZE","LOWC","HIGHC"]},
-    {n:"Saturator Delay", f:"delay", d:"Delay on a 128th-note grid with ping-pong, and saturation in the feedback path so repeats degrade as they decay.", p:["TIME","PPONG","WID","FDBK","HPF","LPF","MIX"]},
-    {n:"Steel Box Reverb", f:"space", d:"Plate character: heavy input diffusion, a bright tank, deliberately wide parameter ranges.", p:["SIZE","FDBK","BRIT","PRE","WDTH","DIFF","LOWC","MIX"]},
-    {n:"Supervoid Reverb", f:"space", d:"Room to huge. FREQ and GAIN form a feedback shelving filter — at full GAIN the treble stays in the tail, lowering it damps progressively.", p:["PRE","DEC","FREQ","GAIN","HPF","LPF","MIX"]},
-    {n:"Warble", f:"tape", d:"Tape wobble with a band-shaped signal and added noise. SPEED at zero makes the modulator a random walk. The noise deliberately sits outside the mix law.", p:["SPEED","DEPTH","BASE","WIDTH","N.LEV","N.HPF","STEREO","MIX"]},
-    {n:"Grainer", f:"gran", d:"Granulates the last two seconds of live input. POS is where in that buffer grains start, SCAN moves that point and wraps, SPRD scatters it, SIZE is grain length and AMNT how many sound at once. With a sample loaded the grains read THAT instead of the live input, which is what makes it an SRC machine; clear the sample and it granulates the input again. Tonverk\u2019s Grainer spans 24 parameters; this one has eight and a fixed Hann window.", p:["TUNE","DENS","SIZE","POS","SCAN","SPRD","AMNT","MIX"]},
-    {n:"Single Player", f:"src", d:"The first SRC machine: one shot of the loaded sample per trig. TUNE is \u00b1two octaves, STRT and LEN scan a window into the sample, LOOP holds that window instead of stopping at its end, ATK and DEC shape an AD envelope, LEV and PAN place the result. Unlike every machine above it this is a SOURCE \u2014 it replaces its input rather than processing it, which is what lets a Work slot originate audio. Silent until a sample is loaded.", p:["TUNE","STRT","LEN","LOOP","ATK","DEC","LEV","PAN"]},
-    {n:"Multi Player", f:"src", d:"Eight-voice polyphonic playback of the loaded sample, pitched by incoming notes with note 60 as unity. VIBR, SPD and FADE are the documented vibrato: depth, speed, and the time it takes to fade in. Tonverk loads multi-sampled INSTRUMENTS from its SD card and maps them across the keyboard; Work has one sample buffer, so every note plays that one sample transposed. The polyphony and the vibrato are real, the multisampling is not.", p:["TUNE","VIBR","SPD","FADE","STRT","LEN","LEV","PAN"]},
-    {n:"Subtracks", f:"src", d:"The playback half of Tonverk\u2019s Subtracks: MODE chooses forward, reverse, forward loop or reverse loop, STRT and LEN set the window, and L.ST is the point a loop returns to. Reverse and a separate loop point are both things Single Player cannot do. What is NOT here is the machine\u2019s defining feature \u2014 eight samples on eight sequencer subtracks with their own pages, plus a supertrack. Work is a two-slot FX chain, not an eight-track sampler.", p:["TUNE","MODE","STRT","LEN","L.ST","ATK","DEC","LEV"]},
-    {n:"Wavefinder", f:"src", d:"Two wavetable oscillators blended together, with POS selecting the wave, ANIM an internal modulator that animates it (eleven envelope and LFO shapes), A.POS its depth, SPD its rate and DTUN the detune between the two. Movement through the table is interpolated, which is what makes it wavetable synthesis rather than switching. Tonverk browses wavetables on an SD card into 127 numbered slots; here the loaded SAMPLE is the wavetable, read as a series of 2048-frame waves.", p:["TUNE","POS","A.POS","ANIM","SPD","DTUN","LEV","MIX"]},
-    {n:"Shape", f:"src", d:"A low shelf and a high shelf, each with frequency and gain, where 64 turns the shelf into a full pass \u2014 the manual\u2019s Shape makes no sound of its own, it shapes what is on the bus. This is the one Phase 3 machine that needed no adaptation at all, because a Work slot IS a bus insert. WDTH is mid/side width and DRV a little saturation.", p:["LO.G","LO.F","HI.F","HI.G","WDTH","DRV","LEV","MIX"]}
+    {n:"Wide Chorus", f:"mod", d:"Three-voice chorus for widening, with a high-pass on the input and a stereo width control.", p:["DEP","SPD","HPF","WDTH","MIX"]},
+    {n:"Phase Array", f:"mod", d:"Six allpass stages; STG blends the tap after four with the tap after six. SHP morphs the LFO from a falling ramp through triangle to a rising one.", p:["SPD","DEP","SHP","LAG","FREQ","FDBK","STG","MIX"]},
+    {n:"Roomtone Reverb", f:"space", d:"Large-space voicing with an explicit early-reflection bank in front of the tank.", p:["PRE","EARLY","DAMP","SIZE","LOWC","HIGHC"]},
+    {n:"Drive Delay", f:"delay", d:"Delay on a 128th-note grid with ping-pong, and saturation in the feedback path so repeats degrade as they decay.", p:["TIME","PPONG","WID","FDBK","HPF","LPF","MIX"]},
+    {n:"Iron Room Reverb", f:"space", d:"Plate character: heavy input diffusion, a bright tank, deliberately wide parameter ranges.", p:["SIZE","FDBK","BRIT","PRE","WDTH","DIFF","LOWC","MIX"]},
+    {n:"Voidspace Reverb", f:"space", d:"Room to huge. FREQ and GAIN form a feedback shelving filter — at full GAIN the treble stays in the tail, lowering it damps progressively.", p:["PRE","DEC","FREQ","GAIN","HPF","LPF","MIX"]},
+    {n:"Flutter", f:"tape", d:"Tape wobble with a band-shaped signal and added noise. SPEED at zero makes the modulator a random walk. The noise deliberately sits outside the mix law.", p:["SPEED","DEPTH","BASE","WIDTH","N.LEV","N.HPF","STEREO","MIX"]},
+    {n:"Granulator", f:"gran", d:"Granulates the last two seconds of live input. POS is where in that buffer grains start, SCAN moves that point and wraps, SPRD scatters it, SIZE is grain length and AMNT how many sound at once. With a sample loaded the grains read THAT instead of the live input, which is what makes it an SRC machine; clear the sample and it granulates the input again. Eight knobs and a fixed Hann window, rather than the three pages of grain controls a dedicated granulator would give you.", p:["TUNE","DENS","SIZE","POS","SCAN","SPRD","AMNT","MIX"]},
+    {n:"One Shot", f:"src", d:"The first SRC machine: one shot of the loaded sample per trig. TUNE is \u00b1two octaves, STRT and LEN scan a window into the sample, LOOP holds that window instead of stopping at its end, ATK and DEC shape an AD envelope, LEV and PAN place the result. Unlike every machine above it this is a SOURCE \u2014 it replaces its input rather than processing it, which is what lets a Work slot originate audio. Silent until a sample is loaded.", p:["TUNE","STRT","LEN","LOOP","ATK","DEC","LEV","PAN"]},
+    {n:"Polysample", f:"src", d:"Eight-voice polyphonic playback of the loaded sample, pitched by incoming notes with note 60 as unity. VIBR, SPD and FADE are the documented vibrato: depth, speed, and the time it takes to fade in. Work has one sample buffer, so every note plays that one sample transposed &mdash; the polyphony and the vibrato are real, multi-sampled instruments are not on offer.", p:["TUNE","VIBR","SPD","FADE","STRT","LEN","LEV","PAN"]},
+    {n:"Slicer", f:"src", d:"Windowed sample playback with a separate loop point: MODE chooses forward, reverse, forward loop or reverse loop, STRT and LEN set the window, and L.ST is the point a loop returns to. Reverse and a separate loop point are both things One Shot cannot do. What it is not is a multitrack sampler \u2014 one buffer, one window, no per-slice tracks of its own. Work is a two-slot FX chain.", p:["TUNE","MODE","STRT","LEN","L.ST","ATK","DEC","LEV"]},
+    {n:"Wavescan", f:"src", d:"Two wavetable oscillators blended together, with POS selecting the wave, ANIM an internal modulator that animates it (eleven envelope and LFO shapes), A.POS its depth, SPD its rate and DTUN the detune between the two. Movement through the table is interpolated, which is what makes it wavetable synthesis rather than switching. There is no wavetable library here: the loaded SAMPLE is the wavetable, read as a series of 2048-frame waves.", p:["TUNE","POS","A.POS","ANIM","SPD","DTUN","LEV","MIX"]},
+    {n:"Tilt", f:"src", d:"A low shelf and a high shelf, each with frequency and gain, where 64 turns the shelf into a full pass \u2014 the manual\u2019s Shape makes no sound of its own, it shapes what is on the bus. This is the one Phase 3 machine that needed no adaptation at all, because a Work slot IS a bus insert. WDTH is mid/side width and DRV a little saturation.", p:["LO.G","LO.F","HI.F","HI.G","WDTH","DRV","LEV","MIX"]}
   ];
 
   /* ---------------- machine reference ---------------- */
@@ -780,9 +780,9 @@ footer a{color:var(--rust)}
           label: m.n.replace(" ± Filter"," ±").replace(" Reverb","").replace(" Filter"," Flt")
                     .replace("Frequency ","Freq ").replace("Infinite ","Inf ")
                     .replace("Panoramic ","Pan ").replace("Multimode","Multi")
-                    .replace("Low-Pass Filter","LPF").replace("Saturator ","Sat ")
-                    .replace("Single Player","Single").replace("Multi Player","Multi P")
-                    .replace("Wavefinder","WaveFnd"),
+                    .replace("Low-Pass Filter","LPF").replace("Drive ","Sat ")
+                    .replace("One Shot","Single").replace("Polysample","Multi P")
+                    .replace("Wavescan","WaveFnd"),
           desc: "<b>Palette — " + m.n + "</b>. " +
                 (shiftView ? "Hold Shift and tap" : "Tap") +
                 " to load it into the focused slot. " + m.d,

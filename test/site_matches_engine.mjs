@@ -1,7 +1,7 @@
 /*
  * The manual site carries its own copy of the machine table, because it is a
  * standalone HTML file with no build step. A second copy is a copy that
- * drifts — and it did: a careless edit silently swapped Warble's N.LEV and
+ * drifts — and it did: a careless edit silently swapped Flutter's N.LEV and
  * N.HPF and the page would have shipped teaching the wrong knob.
  *
  * So the site is checked against the ENGINE's table, dumped by
@@ -31,7 +31,7 @@ function slug(name) {
     return name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
 
-/* The C string table is ASCII, so "Comb +/- Filter"; the page is typeset and
+/* The C string table is ASCII, so "Comb Filter"; the page is typeset and
  * says "Comb ± Filter". That one substitution is a deliberate display choice
  * — everything else must match character for character. */
 function norm(s) { return s.replace(/±/g, '+/-'); }
@@ -136,7 +136,7 @@ if (m) {
 
 /* The surface map is a second copy of the pad layout, and it drifted badly:
  * it still showed pads 80-83 as COND/MICRO/RTRG/LOCKS, which was the layout
- * BEFORE Grainer needed row 3 for the palette. It also had no SHIFT layer at
+ * BEFORE Granulator needed row 3 for the palette. It also had no SHIFT layer at
  * all, while five machines — every sample player — are reachable only that
  * way. Both were invisible because nothing compared the map to the UI. */
 const paletteOrder = html.match(/var PALETTE_ORDER = \[([\s\S]*?)\];/);

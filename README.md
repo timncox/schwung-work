@@ -1,45 +1,44 @@
 # Work
 
-**Twenty-one FX machines for the Ableton Move**, as a [Schwung](https://github.com/charlesvestal/schwung)
-module. Two insert slots in series, each loaded with one machine, plus two FX
-LFOs that can modulate any slot parameter.
+**Twenty-six machines for the Ableton Move** — twenty-one effects and five
+sample sources — as a [Schwung](https://github.com/charlesvestal/schwung)
+module. Two insert slots in series, each loaded with one machine, plus three FX
+LFOs and a modulation envelope that can modulate any slot parameter.
 
-Inspired by the FX section of the Elektron Tonverk. *Tonverk* is Swedish for
-"tone works" — hence **Work**.
-
-> Clean-room: every machine here is written from Elektron's **published user
-> manual**, from the documented parameter names, ranges and descriptions. This
-> project contains no Elektron code and no Elektron factory content, and is not
-> a bit-exact emulation. See [docs/REFERENCE.md](docs/REFERENCE.md).
+> Clean-room: every machine is an original DSP implementation, written from
+> published descriptions of the effect it is named for — documented parameter
+> names, ranges and behaviour — rather than from anyone's source. No
+> third-party code and no factory content, and not a bit-exact emulation of
+> anything. See [docs/REFERENCE.md](docs/REFERENCE.md).
 
 ## The machines
 
 | | | | |
 |---|---|---|---|
-| Bypass | Degrader | Infinite Flanger | Rumsklang Reverb |
-| Chrono Pitch | Dirtshaper | Low-Pass Filter | Saturator Delay |
-| Comb ± Filter | Filter Folder | Multimode Filter | Steel Box Reverb |
-| Compressor | Filterbank | Panoramic Chorus | Supervoid Reverb |
-| Daisy Delay | Frequency Warper | Phase 98 | Warble |
-| | | | Grainer |
+| Bypass | Decimator | Endless Flanger | Roomtone Reverb |
+| Clock Pitch | Gritshaper | Low-Pass Filter | Drive Delay |
+| Comb ± Filter | Fold Filter | Multimode Filter | Iron Room Reverb |
+| Compressor | Filterbank | Wide Chorus | Voidspace Reverb |
+| Chain Delay | Spectrum Bender | Phase Array | Flutter |
+| | | | Granulator |
 
 A few of the less obvious ones:
 
-- **Chrono Pitch** — granular pitch shifter with feedback, so held notes climb
+- **Clock Pitch** — granular pitch shifter with feedback, so held notes climb
   or fall in steps rather than sitting at one interval.
 - **Comb ± Filter** — the FREQ knob is bipolar and its *sign* flips the comb's
   polarity: positive feedback sounds like a plucked string, negative like a
   stopped pipe.
-- **Frequency Warper** — a true single-sideband frequency shifter (Hilbert
+- **Spectrum Bender** — a true single-sideband frequency shifter (Hilbert
   pair), not a pitch shifter. Intervals go inharmonic. SBND blends the two
   sidebands.
-- **Infinite Flanger** — barber-pole motion: three crossfaded taps so the sweep
+- **Endless Flanger** — barber-pole motion: three crossfaded taps so the sweep
   appears to rise or fall forever without turning around.
-- **Filter Folder** — high-pass, then a wavefolder, then a morphing multimode
+- **Fold Filter** — high-pass, then a wavefolder, then a morphing multimode
   filter, then distortion. Adds overtones rather than removing them.
-- **Grainer** — granulates the last two seconds of live input. Tonverk's is an
-  SRC machine that granulates a *sample* across 24 parameters; this one has no
-  sample slot and a fixed window, and works on what you play into it.
+- **Granulator** — granulates the last two seconds of live input, or the loaded
+  sample when there is one. Eight knobs and a fixed Hann window, rather than the
+  three pages of grain controls a dedicated granulator would give you.
 - **The three reverbs are three algorithms** — a Schroeder comb bank with early
   reflections, a Dattorro plate, and a Householder feedback delay network.
 
@@ -49,26 +48,27 @@ A few of the less obvious ones:
 Master FX slot and processes whatever is upstream.
 
 **Overwork** is the `overtake` build. It takes over Move's whole surface and
-runs the same FX on the live input (mic / line / USB-C), with an Elektron-style
-step sequencer driving parameter locks, and a preset browser.
+runs the same machines on the live input (mic / line / USB-C), with a 64-step
+sequencer driving parameter locks, and a preset browser.
 
 ## Why the surface maps so cleanly
 
-Tonverk is an eight-encoder-per-page instrument with sixteen `[TRIG]` keys.
-Move has eight knobs and sixteen dedicated step buttons. So the mapping isn't
-an approximation — it's the same instrument shape:
+The gesture that defines hardware step sequencing — hold a step, turn an
+encoder, and that step remembers the value — needs eight encoders and a row of
+trig keys under your fingers at once. Move has both, so this is a 1:1 map
+rather than an approximation:
 
-| Tonverk | Move |
+| What it needs | Move |
 |---|---|
 | 8 rotary encoders | the 8 knobs |
-| 16 `[TRIG]` keys | the 16 step buttons |
-| `LEVEL/DATA` | the jog wheel |
+| 16 trig keys | the 16 step buttons |
+| a data encoder | the jog wheel |
 | hold trig + turn encoder = p-lock | **hold step + turn knob = p-lock** |
 
 That last row is the whole point. The gesture survives intact.
 
-In Overwork the 32 pads are free for what Tonverk uses menus for: rows 1–3 are
-a 21-machine palette (tap to load one into the focused slot), and row 4 is
+In Overwork the 32 pads are free for what a hardware sequencer spends menus on:
+rows 1–3 are a machine palette (tap to load one into the focused slot), and row 4 is
 transport, pattern pages, copy/paste and clear — with Shift turning its last
 four into the step-attribute modes.
 
@@ -106,8 +106,8 @@ Deployed to hardware, but **nothing has been verified by ear yet**.
 1. ~~**The FX machines** — `audio_fx` build: Signal Chain and Master FX slots.~~ done
 2. ~~**Overwork** — the `overtake` build: step buttons as trig keys, machine
    palette, hold-step-and-turn parameter locks, trig conditions, micro-timing.~~ done
-3. ~~**Presets**, three distinct reverb algorithms, and **Grainer**.~~ done (v0.2.0)
-4. **The remaining SRC machines** — Single/Multi Player, Subtracks, Wavefinder,
+3. ~~**Presets**, three distinct reverb algorithms, and **Granulator**.~~ done (v0.2.0)
+4. **The remaining SRC machines** — Single/Polysample, Slicer, Wavescan,
    Shape. Gated on sample loading: the DSP has no filesystem access, so samples
    must arrive through the UI in chunks under the 16 KB `set_param` ceiling.
 

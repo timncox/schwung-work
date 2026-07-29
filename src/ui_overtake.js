@@ -1,9 +1,10 @@
 /*
  * Overwork — full-surface UI.
  *
- * Move's sixteen dedicated STEP buttons stand in for Tonverk's [TRIG] keys,
+ * Move's sixteen dedicated STEP buttons stand in for a hardware sequencer's
+ * trig keys,
  * the eight knobs for its eight encoders, and the jog for LEVEL/DATA. That is
- * a real 1:1 map, not an approximation — which is why the Elektron gesture
+ * a real 1:1 map, not an approximation — which is why the hold-step gesture
  * survives intact: HOLD A STEP AND TURN A KNOB TO PARAMETER-LOCK IT.
  *
  * Surface (pad rows numbered from the TOP, matching the docs convention):
@@ -76,8 +77,8 @@ const STEP_COUNT = 16;
 const PAGE_STEPS = 16;
 const MAX_STEPS  = 64;
 /* The machine count comes from the ENGINE's own list, never a constant. A
- * hardcoded 19 here is what made Grainer unreachable when the 21st machine
- * landed, and a hardcoded 21 did the same to Single Player. The fallback only
+ * hardcoded 19 here is what made Granulator unreachable when the 21st machine
+ * landed, and a hardcoded 21 did the same to One Shot. The fallback only
  * covers the window before the first fetchAll answers. */
 function nMachines() { return machineList.length || 21; }
 /* palette slots past the last machine are free for functions */
@@ -93,7 +94,7 @@ const PALETTE_PADS = [
 ];
 
 /* The step-attribute modes moved to SHIFT + row 4 in v0.2.0, when a 21st
- * machine (Grainer) needed the whole of row 3 for the palette. */
+ * machine (Granulator) needed the whole of row 3 for the palette. */
 const PAD_MODE_COND   = 72;   /* shift + edit-page  */
 const PAD_MODE_MICRO  = 73;   /* shift + copy       */
 const PAD_MODE_RETRIG = 74;   /* shift + paste      */
@@ -142,30 +143,30 @@ const HOLD_MS = 600;
  * table is the same length as the engine's machine list. */
 const MACHINE_COLOR = [
     DarkGrey,      /* 0  Bypass            */
-    Purple,        /* 1  Chrono Pitch      pitch family */
-    Green,         /* 2  Comb +/- Filter   filter family */
+    Purple,        /* 1  Clock Pitch      pitch family */
+    Green,         /* 2  Comb Filter   filter family */
     Blue,          /* 3  Compressor        dynamics */
-    BurntOrange,   /* 4  Daisy Delay       delay family */
-    Lime,          /* 5  Degrader          destruction */
-    Lime,          /* 6  Dirtshaper        destruction */
-    Green,         /* 7  Filter Folder     filter */
+    BurntOrange,   /* 4  Chain Delay       delay family */
+    Lime,          /* 5  Decimator          destruction */
+    Lime,          /* 6  Gritshaper        destruction */
+    Green,         /* 7  Fold Filter     filter */
     Green,         /* 8  Filterbank        filter */
-    Purple,        /* 9  Frequency Warper  pitch */
-    Cyan,          /* 10 Infinite Flanger  modulation */
+    Purple,        /* 9  Spectrum Bender  pitch */
+    Cyan,          /* 10 Endless Flanger  modulation */
     Green,         /* 11 Low-Pass Filter   filter */
     Green,         /* 12 Multimode Filter  filter */
-    Cyan,          /* 13 Panoramic Chorus  modulation */
-    Cyan,          /* 14 Phase 98          modulation */
-    SkyBlue,       /* 15 Rumsklang Reverb  space */
-    BurntOrange,   /* 16 Saturator Delay   delay */
-    SkyBlue,       /* 17 Steel Box Reverb  space */
-    SkyBlue,       /* 18 Supervoid Reverb  space */
-    TealGreen,     /* 19 Warble            tape */
-    Rose,          /* 20 Grainer           granular */
-    White,         /* 21 Single Player     source */
-    White,         /* 22 Multi Player      source */
-    White,         /* 23 Subtracks         source */
-    YellowGreen,   /* 24 Wavefinder        source, wavetable */
+    Cyan,          /* 13 Wide Chorus  modulation */
+    Cyan,          /* 14 Phase Array          modulation */
+    SkyBlue,       /* 15 Roomtone Reverb  space */
+    BurntOrange,   /* 16 Drive Delay   delay */
+    SkyBlue,       /* 17 Iron Room Reverb  space */
+    SkyBlue,       /* 18 Voidspace Reverb  space */
+    TealGreen,     /* 19 Flutter            tape */
+    Rose,          /* 20 Granulator           granular */
+    White,         /* 21 One Shot     source */
+    White,         /* 22 Polysample      source */
+    White,         /* 23 Slicer         source */
+    YellowGreen,   /* 24 Wavescan        source, wavetable */
     Blue           /* 25 Shape             not a source — shelving EQ */
 ];
 
@@ -203,7 +204,7 @@ function paletteMachine(pad, shift) {
  * held across 495 consecutive events while the shim's control block said 0.
  * And latched Shift does not look like one bug, it looks like several
  * unrelated ones — a knob edits the base value instead of writing a parameter
- * lock, a palette pad loads machine+21 so Compressor arrives as Wavefinder,
+ * lock, a palette pad loads machine+21 so Compressor arrives as Wavescan,
  * and the slot pad opens the sample browser rather than switching slots. Every
  * one of those was reported separately from hardware and chased separately.
  *

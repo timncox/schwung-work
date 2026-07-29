@@ -42,31 +42,31 @@
       "title": "Machines 1",
       "lines": [
         "Bypass",
-        "Chrono Pitch",
-        "Comb +/- Filter",
+        "Clock Pitch",
+        "Comb Filter",
         "Compressor",
-        "Daisy Delay",
-        "Degrader",
-        "Dirtshaper",
-        "Filter Folder",
+        "Chain Delay",
+        "Decimator",
+        "Gritshaper",
+        "Fold Filter",
         "Filterbank",
-        "Frequency Warper"
+        "Spectrum Bender"
       ]
     },
     {
       "title": "Machines 2",
       "lines": [
-        "Infinite Flanger",
+        "Endless Flanger",
         "Low-Pass Filter",
         "Multimode Filter",
-        "Panoramic Chorus",
-        "Phase 98",
-        "Rumsklang Reverb",
-        "Saturator Delay",
-        "Steel Box Reverb",
-        "Supervoid Reverb",
-        "Warble",
-        "Grainer"
+        "Wide Chorus",
+        "Phase Array",
+        "Roomtone Reverb",
+        "Drive Delay",
+        "Iron Room Reverb",
+        "Voidspace Reverb",
+        "Flutter",
+        "Granulator"
       ]
     },
     {
@@ -95,7 +95,7 @@
       ]
     },
     {
-      "title": "Grainer",
+      "title": "Granulator",
       "lines": [
         "Granulates the last",
         "2 s of input audio.",

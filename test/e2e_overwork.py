@@ -157,13 +157,13 @@ def test_engine_answers_its_identity(overwork):
 def test_machine_list_matches_the_build(overwork):
     """The count the DSP reports is what the UI derives its ranges from.
 
-    A hardcoded copy of this number in the UI is what made Grainer, and then
-    Single Player, unreachable."""
+    A hardcoded copy of this number in the UI is what made Granulator, and then
+    One Shot, unreachable."""
     machines = _machines(overwork)
     assert len(machines) >= 26, machines
     assert machines[0] == "Bypass"
-    assert "Single Player" in machines
-    assert "Shape" in machines
+    assert "One Shot" in machines
+    assert "Tilt" in machines
 
 
 # -------------------------------------------------------------- step buttons
@@ -303,7 +303,7 @@ def test_source_machine_silences_the_live_input(overwork):
     if int(_param(bus, "sample_frames") or 0) == 0:
         pytest.skip("load a sample first")
     machines = _machines(bus)
-    single = machines.index("Single Player")
+    single = machines.index("One Shot")
 
     bus.set_param("machine1", str(single))
     bus.set_param("monitor", "1")

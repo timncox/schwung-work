@@ -665,7 +665,7 @@ async function testKnobResponseCurve() {
           `a 25-detent event moved machine1 to ${w && w.val} — expected ${5 + cap}: ` +
           `neither an end stop nor a single step`);
 
-    /* the top of the list must be REACHABLE — Grainer was excluded when this
+    /* the top of the list must be REACHABLE — Granulator was excluded when this
      * range was a hardcoded constant */
     ctx = await atGlobalWith({ machine1: `${nMachines - 2}` });
     ctx.host.onMidiMessageInternal(cc(KNOB1, 40));
@@ -1111,7 +1111,7 @@ async function testGarbageFileIsRejected() {
 
 /* MACHINE_COLOR is indexed by machine but hand-maintained in JS while the
  * machine list lives in C — the same shape as the N_MACHINES constant that
- * made Grainer and then Single Player unreachable. A colour cannot be derived
+ * made Granulator and then One Shot unreachable. A colour cannot be derived
  * from the engine, so the drift is caught here instead of on hardware. */
 async function testMachineColorTableCoversEveryMachine() {
     console.log('every machine the engine lists has a palette colour');
@@ -1409,7 +1409,7 @@ async function testLoadClosesTheBrowserAndPadsWorkAgain() {
     const loaded = ctx.writes.find((w) => /^machine[12]$/.test(w.key));
     check(loaded && parseInt(`${loaded.val}`, 10) === 21,
           `Shift + first palette pad loaded ${loaded && loaded.val}, expected 21 ` +
-          `(Single Player) — the pads are still locked out`);
+          `(One Shot) — the pads are still locked out`);
 }
 
 /* A FAILED load must keep the browser open: the next thing you want is

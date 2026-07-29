@@ -2,6 +2,6 @@
   "version": "0.7.0",
   "download_url": "https://github.com/timncox/schwung-work/releases/download/v0.7.0/work-module.tar.gz",
   "name": "Work",
-  "description": "Twenty-six Tonverk-inspired machines in two insert slots \u2014 twenty-one effects and five sample sources \u2014 with three FX LFOs, a modulation envelope and MIDI CC/NRPN",
+  "description": "Twenty-six machines in two insert slots — twenty-one effects and five sample sources — with three FX LFOs, a modulation envelope and MIDI CC/NRPN",
   "repo_url": "https://github.com/timncox/schwung-work"
 }

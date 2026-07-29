@@ -1,5 +1,5 @@
 /*
- * Work — clean-room FX engine inspired by the Elektron Tonverk's FX machines.
+ * Work — a clean-room FX engine for the Ableton Move. See work_core.h.
  * See work_core.h for the architecture and the clean-room statement.
  *
  * Layout of this file:
@@ -34,7 +34,7 @@ static int iclamp(int v, int lo, int hi) {
 /* Parameter 0..127 -> 0..1 */
 static float p01(uint8_t v) { return (float)v / 127.0f; }
 
-/* Parameter 0..127 -> -1..+1 with an exact zero at 64 (Elektron bipolar) */
+/* Parameter 0..127 -> -1..+1 with an exact zero at 64 (bipolar knob law) */
 static float pbi(uint8_t v) {
     return v >= 64 ? (float)(v - 64) / 63.0f : (float)(v - 64) / 64.0f;
 }
@@ -203,14 +203,14 @@ typedef struct {
     float *pre;
     int    pw;
 
-    /* Rumsklang: Schroeder comb + allpass tank */
+    /* Roomtone: Schroeder comb + allpass tank */
     float *comb;                 /* [WORK_TANK_COMBS][2][WORK_TANK_LEN] */
     float *ap;                   /* [WORK_TANK_APS][2][WORK_AP_LEN]     */
     int    comb_w[WORK_TANK_COMBS][2];
     int    ap_w[WORK_TANK_APS][2];
     op_t   comb_damp[WORK_TANK_COMBS][2];
 
-    /* Steel Box: Dattorro plate */
+    /* Iron Room: Dattorro plate */
     float *pl_diff;              /* [WORK_PLATE_DIFF][WORK_PLATE_DLEN]  */
     float *pl_ap;                /* [WORK_PLATE_APS][WORK_PLATE_APLEN]  */
     float *pl_del;               /* [WORK_PLATE_DELS][WORK_PLATE_DELEN] */
@@ -221,7 +221,7 @@ typedef struct {
     float  pl_lfo;
     op_t   pl_damp[2], pl_bw;
 
-    /* Grainer: grains in flight over the rolling input buffer */
+    /* Granulator: grains in flight over the rolling input buffer */
     struct {
         int   on;
         float pos;      /* read offset behind the write head, in frames */
@@ -233,7 +233,7 @@ typedef struct {
     float gr_next;      /* samples until the next grain is launched     */
     float gr_scan;      /* base playhead, driven by SCAN                */
 
-    /* Supervoid: feedback delay network */
+    /* Voidspace: feedback delay network */
     float *fdn;                  /* [WORK_FDN_LINES][WORK_FDN_LEN]      */
     int    fdn_w[WORK_FDN_LINES];
     op_t   fdn_shelf[WORK_FDN_LINES];
@@ -251,27 +251,27 @@ typedef struct {
     float  env, env_stage;       /* Multimode Filter ADSR                 */
     float  gr;                   /* compressor gain reduction, dB, for UI */
     float  comp_env;
-    float  grain_ph;             /* Chrono Pitch grain cursor             */
-    float  warp_ph;              /* Frequency Warper carrier phase        */
-    float  drift;                /* Warble random walk                    */
-    float  hold[2];              /* Degrader sample-and-hold              */
+    float  grain_ph;             /* Clock Pitch grain cursor             */
+    float  warp_ph;              /* Spectrum Bender carrier phase        */
+    float  drift;                /* Flutter random walk                    */
+    float  hold[2];              /* Decimator sample-and-hold              */
     float  hold_ph;
     int    drop_ctr, frez_ctr, frez_len;
     float  frez_pos;
     uint32_t rng;
 
-    /* Single Player voice. One-shot playback of the loaded sample, retriggered
+    /* One Shot voice. One-shot playback of the loaded sample, retriggered
      * by a sequencer trig or an incoming note. `pos` is a fractional read
      * cursor in frames; -1 means idle. */
     double sp_pos;
     float  sp_env;               /* AD envelope level                     */
     int    sp_stage;             /* 0 idle, 1 attack, 2 decay             */
 
-    /* Polyphonic voices for Multi Player and Subtracks. */
+    /* Polyphonic voices for Polysample and Slicer. */
     work_voice_t voice[WORK_VOICES];
     uint32_t     voice_clock;    /* monotonic, for oldest-first stealing  */
 
-    /* Wavefinder: two oscillator phases and their animation phases. */
+    /* Wavescan: two oscillator phases and their animation phases. */
     double wf_ph[2];
     float  wf_anim[2];
     float  wf_sh[2];             /* sample-and-hold value per oscillator  */
@@ -293,7 +293,8 @@ struct work {
 
     /* Effective values, recomputed per block as
      *   base (cfg) -> parameter locks from the current step -> FX LFOs
-     * which is Elektron's order: a lock sets the value, the LFO moves around
+     * which is the order that makes locks predictable: a lock sets the value,
+     * and the LFO then moves around
      * whatever the lock set. */
     uint8_t              eff[WORK_SLOTS][WORK_PARAMS];
     uint8_t              eff_machine[WORK_SLOTS];
@@ -324,7 +325,7 @@ struct work {
     uint64_t             cc_last_frames;
     uint64_t             cc_frames;
 
-    /* NRPN assembly. Tonverk's own release notes record repeated bugs where
+    /* NRPN assembly. Hardware sequencers have shipped repeated bugs where
      * NRPN could not reach a parameter's full range, so this resolves the
      * 14-bit value and scales it across the destination's real range rather
      * than truncating to 7 bits. */
@@ -369,7 +370,7 @@ struct work {
     int                  note_vel;
     uint32_t             rng;           /* LFO random wave; kept separate from
                                          * the slots' so an LFO cannot shift a
-                                         * Degrader's dropout sequence */
+                                         * Decimator's dropout sequence */
 
     /* ------------------------------------------------------ sample memory
      *
@@ -397,45 +398,45 @@ struct work {
 /* ---------------------------------------------------------- machine names */
 
 static const char *MACHINE_NAME[WORK_FX_COUNT] = {
-    "Bypass", "Chrono Pitch", "Comb +/- Filter", "Compressor", "Daisy Delay",
-    "Degrader", "Dirtshaper", "Filter Folder", "Filterbank", "Frequency Warper",
-    "Infinite Flanger", "Low-Pass Filter", "Multimode Filter", "Panoramic Chorus",
-    "Phase 98", "Rumsklang Reverb", "Saturator Delay", "Steel Box Reverb",
-    "Supervoid Reverb", "Warble", "Grainer", "Single Player",
-    "Multi Player", "Subtracks", "Wavefinder", "Shape"
+    "Bypass", "Clock Pitch", "Comb Filter", "Compressor", "Chain Delay",
+    "Decimator", "Gritshaper", "Fold Filter", "Filterbank", "Spectrum Bender",
+    "Endless Flanger", "Low-Pass Filter", "Multimode Filter", "Wide Chorus",
+    "Phase Array", "Roomtone Reverb", "Drive Delay", "Iron Room Reverb",
+    "Voidspace Reverb", "Flutter", "Granulator", "One Shot",
+    "Polysample", "Slicer", "Wavescan", "Tilt"
 };
 
-/* Knob labels A-H per machine, matching the Tonverk manual's abbreviations.
+/* Knob labels A-H per machine, using the reference material's abbreviations.
  * An empty string means the machine leaves that knob unused. */
 static const char *PARAM_NAME[WORK_FX_COUNT][WORK_PARAMS] = {
-/* Bypass    */ {"","","","","","","",""},
-/* Chrono    */ {"TUNE","WIN","FDBK","DEP","HPF","LPF","SPD","MIX"},
-/* Comb      */ {"SPD","DEP","SPH","DTUN","FREQ","FDBK","LPF","MIX"},
-/* Comp      */ {"THR","ATK","REL","MUP","RAT","SCS","SCF","MIX"},
-/* Daisy     */ {"DRV","TIME","FDBK","WIDH","MOD","SKEW","FILT","MIX"},
-/* Degrader  */ {"BR","OVER","SRR","DROP","RATE","DEP","FREZ","F.TIM"},
-/* Dirt      */ {"DRV","RECT","HPF","LPF","NOIS","N.FRQ","N.RES","MIX"},
-/* Folder    */ {"ILEV","HP","FOLD","OLEV","FREQ","RESO","TYPE","DIST"},
+/* Bypass     */ {"","","","","","","",""},
+/* Clock      */ {"TUNE","WIN","FDBK","DEP","HPF","LPF","SPD","MIX"},
+/* Comb       */ {"SPD","DEP","SPH","DTUN","FREQ","FDBK","LPF","MIX"},
+/* Comp       */ {"THR","ATK","REL","MUP","RAT","SCS","SCF","MIX"},
+/* Chain      */ {"DRV","TIME","FDBK","WIDH","MOD","SKEW","FILT","MIX"},
+/* Decimator  */ {"BR","OVER","SRR","DROP","RATE","DEP","FREZ","F.TIM"},
+/* Grit       */ {"DRV","RECT","HPF","LPF","NOIS","N.FRQ","N.RES","MIX"},
+/* Fold       */ {"ILEV","HP","FOLD","OLEV","FREQ","RESO","TYPE","DIST"},
 /* Filterbank — the manual calls these Gain A..H, but the band each one
  * controls is the useful thing to know, so the label IS the frequency. */
-/* Filterbank*/ {"90Hz","122Hz","225Hz","418Hz","777Hz","1k4","2k7","4k+"},
-/* Warper    */ {"SPD","DEP","SPH","LAG","SHFT","SPRD","SBND","MIX"},
-/* Flanger   */ {"SPD","DEP","TUNE","FDBK","LPF","","",""},
-/* LPF       */ {"SPD","DEP","SPH","LAG","FREQ","RESO","SPRD",""},
-/* MMF       */ {"ATK","DEC","SUS","REL","FREQ","RESO","TYPE","ENV"},
-/* Chorus    */ {"DEP","SPD","HPF","WDTH","MIX","","",""},
-/* Phase98   */ {"SPD","DEP","SHP","LAG","FREQ","FDBK","STG","MIX"},
-/* Rumsklang */ {"PRE","EARLY","DAMP","SIZE","LOWC","HIGHC","",""},
-/* SatDelay  */ {"TIME","PPONG","WID","FDBK","HPF","LPF","MIX",""},
-/* SteelBox  */ {"SIZE","FDBK","BRIT","PRE","WDTH","DIFF","LOWC","MIX"},
-/* Supervoid */ {"PRE","DEC","FREQ","GAIN","HPF","LPF","MIX",""},
-/* Warble    */ {"SPEED","DEPTH","BASE","WIDTH","N.LEV","N.HPF","STEREO","MIX"},
-/* Grainer   */ {"TUNE","DENS","SIZE","POS","SCAN","SPRD","AMNT","MIX"},
-/* Single    */ {"TUNE","STRT","LEN","LOOP","ATK","DEC","LEV","PAN"},
-/* Multi     */ {"TUNE","VIBR","SPD","FADE","STRT","LEN","LEV","PAN"},
-/* Subtracks */ {"TUNE","MODE","STRT","LEN","L.ST","ATK","DEC","LEV"},
-/* Wavefindr */ {"TUNE","POS","A.POS","ANIM","SPD","DTUN","LEV","MIX"},
-/* Shape     */ {"LO.G","LO.F","HI.F","HI.G","WDTH","DRV","LEV","MIX"},
+/* Filterbank */ {"90Hz","122Hz","225Hz","418Hz","777Hz","1k4","2k7","4k+"},
+/* Bender     */ {"SPD","DEP","SPH","LAG","SHFT","SPRD","SBND","MIX"},
+/* Flanger    */ {"SPD","DEP","TUNE","FDBK","LPF","","",""},
+/* LPF        */ {"SPD","DEP","SPH","LAG","FREQ","RESO","SPRD",""},
+/* MMF        */ {"ATK","DEC","SUS","REL","FREQ","RESO","TYPE","ENV"},
+/* Chorus     */ {"DEP","SPD","HPF","WDTH","MIX","","",""},
+/* PhsArray   */ {"SPD","DEP","SHP","LAG","FREQ","FDBK","STG","MIX"},
+/* Roomtone   */ {"PRE","EARLY","DAMP","SIZE","LOWC","HIGHC","",""},
+/* DrvDelay   */ {"TIME","PPONG","WID","FDBK","HPF","LPF","MIX",""},
+/* IronRoom   */ {"SIZE","FDBK","BRIT","PRE","WDTH","DIFF","LOWC","MIX"},
+/* Voidspace  */ {"PRE","DEC","FREQ","GAIN","HPF","LPF","MIX",""},
+/* Flutter    */ {"SPEED","DEPTH","BASE","WIDTH","N.LEV","N.HPF","STEREO","MIX"},
+/* Granulator */ {"TUNE","DENS","SIZE","POS","SCAN","SPRD","AMNT","MIX"},
+/* OneShot    */ {"TUNE","STRT","LEN","LOOP","ATK","DEC","LEV","PAN"},
+/* Polysamp   */ {"TUNE","VIBR","SPD","FADE","STRT","LEN","LEV","PAN"},
+/* Slicer     */ {"TUNE","MODE","STRT","LEN","L.ST","ATK","DEC","LEV"},
+/* Wavescan   */ {"TUNE","POS","A.POS","ANIM","SPD","DTUN","LEV","MIX"},
+/* Tilt       */ {"LO.G","LO.F","HI.F","HI.G","WDTH","DRV","LEV","MIX"},
 };
 
 const char *work_machine_name(int code) {
@@ -489,32 +490,32 @@ int work_lock_label(work_t *w, int index, char *buf, int buf_len) {
  * touching nothing produces something musical rather than silence or a
  * screaming feedback path. */
 static const uint8_t PARAM_DEFAULT[WORK_FX_COUNT][WORK_PARAMS] = {
-/* Bypass    */ {0,0,0,0,0,0,0,0},
-/* Chrono    */ {76,48,32,0,0,127,32,64},
-/* Comb      */ {32,0,0,64,80,80,96,64},
-/* Comp      */ {80,24,64,64,32,0,64,127},
-/* Daisy     */ {32,32,48,64,16,64,64,48},
-/* Degrader  */ {127,32,127,0,32,0,0,32},
-/* Dirt      */ {48,0,64,110,0,64,32,80},
-/* Folder    */ {64,16,40,64,90,32,8,24},
-/* Filterbank*/ {64,64,64,64,64,64,64,64},
-/* Warper    */ {24,0,0,64,64,64,0,64},
-/* Flanger   */ {70,72,32,64,96,0,0,0},
-/* LPF       */ {32,0,0,64,96,32,64,0},
-/* MMF       */ {0,48,64,40,90,40,0,64},
-/* Chorus    */ {48,40,16,80,64,0,0,0},
-/* Phase98   */ {36,64,64,72,56,48,64,64},
-/* Rumsklang */ {16,48,64,72,24,16,0,0},
-/* SatDelay  */ {32,0,64,56,16,96,48,0},
-/* SteelBox  */ {64,72,72,16,80,64,24,48},
-/* Supervoid */ {16,72,72,64,16,110,48,0},
-/* Warble    */ {40,40,48,72,16,64,64,64},
-/* Grainer   */ {64,72,40,24,68,24,80,80},
-/* Single    */ {  64,    0,  127,    0,    0,  127,  100,   64},
-/* Multi     */ {  64,    0,   40,   40,    0,  127,  100,   64},
-/* Subtracks */ {  64,    0,    0,  127,    0,    0,  127,  100},
-/* Wavefindr */ {  64,   32,   64,    0,   40,   68,  100,  127},
-/* Shape     */ {  64,   40,   80,   64,   64,    0,  100,  127},
+/* Bypass     */ {0,0,0,0,0,0,0,0},
+/* Clock      */ {76,48,32,0,0,127,32,64},
+/* Comb       */ {32,0,0,64,80,80,96,64},
+/* Comp       */ {80,24,64,64,32,0,64,127},
+/* Chain      */ {32,32,48,64,16,64,64,48},
+/* Decimator  */ {127,32,127,0,32,0,0,32},
+/* Grit       */ {48,0,64,110,0,64,32,80},
+/* Fold       */ {64,16,40,64,90,32,8,24},
+/* Filterbank */ {64,64,64,64,64,64,64,64},
+/* Bender     */ {24,0,0,64,64,64,0,64},
+/* Flanger    */ {70,72,32,64,96,0,0,0},
+/* LPF        */ {32,0,0,64,96,32,64,0},
+/* MMF        */ {0,48,64,40,90,40,0,64},
+/* Chorus     */ {48,40,16,80,64,0,0,0},
+/* PhsArray   */ {36,64,64,72,56,48,64,64},
+/* Roomtone   */ {16,48,64,72,24,16,0,0},
+/* DrvDelay   */ {32,0,64,56,16,96,48,0},
+/* IronRoom   */ {64,72,72,16,80,64,24,48},
+/* Voidspace  */ {16,72,72,64,16,110,48,0},
+/* Flutter    */ {40,40,48,72,16,64,64,64},
+/* Granulator */ {64,72,40,24,68,24,80,80},
+/* OneShot    */ {  64,    0,  127,    0,    0,  127,  100,   64},
+/* Polysamp   */ {  64,    0,   40,   40,    0,  127,  100,   64},
+/* Slicer     */ {  64,    0,    0,  127,    0,    0,  127,  100},
+/* Wavescan   */ {  64,   32,   64,    0,   40,   68,  100,  127},
+/* Tilt       */ {  64,   40,   80,   64,   64,    0,  100,  127},
 };
 
 /* ------------------------------------------------- transport / tempo helpers */
@@ -595,7 +596,7 @@ static void predelay(work_slot_t *s, float l, float r, float back,
     s->pw = (s->pw + 1) % WORK_PRE_LEN;
 }
 
-/* --- A.3.2 Chrono Pitch ---------------------------------------------------
+/* --- A.3.2 Clock Pitch ---------------------------------------------------
  * Granular pitch shifter: the read head drifts against the write head at
  * (1 - rate), and two taps a half-window apart are crossfaded with a raised
  * sine so the wrap is inaudible. Feedback re-injects the shifted signal, so
@@ -643,7 +644,7 @@ static void m_chrono(mctx_t *m, float *l, float *r) {
     *r = *r * (1.0f - mix) + wr * mix;
 }
 
-/* --- A.3.3 Comb +/- Filter ------------------------------------------------
+/* --- A.3.3 Comb Filter ------------------------------------------------
  * FREQ is bipolar: it tunes the comb, and its sign selects positive feedback
  * (string-like) or negative (hollow, tube-like), per the manual. */
 static void m_comb(mctx_t *m, float *l, float *r) {
@@ -737,7 +738,7 @@ static void m_comp(mctx_t *m, float *l, float *r) {
     *r = *r * (1.0f - mix) + (*r * g) * mix;
 }
 
-/* --- A.3.5 Daisy Delay ----------------------------------------------------
+/* --- A.3.5 Chain Delay ----------------------------------------------------
  * Drive into the line, tempo-synced base time, SKEW pulling the two channels
  * into a rhythmic relationship, and a tilt filter that low-passes to the left
  * and high-passes to the right. */
@@ -784,7 +785,7 @@ static void m_daisy(mctx_t *m, float *l, float *r) {
     *r = *r * (1.0f - mix) + wr * mix;
 }
 
-/* --- A.3.6 Degrader -------------------------------------------------------
+/* --- A.3.6 Decimator -------------------------------------------------------
  * The lo-fi collection: bit reduction, overdrive, sample-rate redux, random
  * drop-outs, sine ring modulation, and random freezes whose length is either
  * a step division or, at the RAND setting, re-rolled each time. */
@@ -867,7 +868,7 @@ static void m_degrader(mctx_t *m, float *l, float *r) {
     *r = x[1];
 }
 
-/* --- A.3.7 Dirtshaper -----------------------------------------------------
+/* --- A.3.7 Gritshaper -----------------------------------------------------
  * HPF is bipolar and selects WHERE the filter sits: to the left it filters
  * before the distortion, to the right after the rectifier. */
 static void m_dirt(mctx_t *m, float *l, float *r) {
@@ -912,7 +913,7 @@ static void m_dirt(mctx_t *m, float *l, float *r) {
     *r = *r * (1.0f - mix) + x[1] * mix;
 }
 
-/* --- A.3.8 Filter Folder --------------------------------------------------
+/* --- A.3.8 Fold Filter --------------------------------------------------
  * The manual gives the chain explicitly:
  *   Input level > High-pass > Wavefolder > Multimode filter > Dist > Output */
 static void m_folder(mctx_t *m, float *l, float *r) {
@@ -991,7 +992,7 @@ static void m_fbank(mctx_t *m, float *l, float *r) {
     *r = x[1];
 }
 
-/* --- A.3.10 Frequency Warper ----------------------------------------------
+/* --- A.3.10 Spectrum Bender ----------------------------------------------
  * True single-sideband frequency shifting via a Hilbert pair. SBND blends the
  * up-shifted and down-shifted outputs, which is the "alternate output signal
  * with different characteristics" the manual describes. */
@@ -1038,7 +1039,7 @@ static void m_warper(mctx_t *m, float *l, float *r) {
     *r = *r * (1.0f - mix) + x[1] * mix;
 }
 
-/* --- A.3.11 Infinite Flanger ----------------------------------------------
+/* --- A.3.11 Endless Flanger ----------------------------------------------
  * Barber-pole motion: three delay taps whose lengths ramp continuously and
  * are crossfaded by their own position, so the pitch appears to rise or fall
  * forever without ever turning around. SPD is bipolar; 0 holds still. */
@@ -1165,7 +1166,7 @@ static void m_mmf(mctx_t *m, float *l, float *r) {
     *r = x[1];
 }
 
-/* --- A.3.14 Panoramic Chorus ---------------------------------------------- */
+/* --- A.3.14 Wide Chorus ---------------------------------------------- */
 static void m_chorus(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
     const uint8_t *p = m->p;
@@ -1208,7 +1209,7 @@ static void m_chorus(mctx_t *m, float *l, float *r) {
     *r = *r * (1.0f - mix) + wr * mix;
 }
 
-/* --- A.3.15 Phase 98 ------------------------------------------------------
+/* --- A.3.15 Phase Array ------------------------------------------------------
  * Six allpass stages; STG blends the tap after four with the tap after six.
  * SHP morphs the LFO from a descending ramp through triangle to ascending. */
 static void m_phase98(mctx_t *m, float *l, float *r) {
@@ -1255,7 +1256,7 @@ static void m_phase98(mctx_t *m, float *l, float *r) {
     *r = *r * (1.0f - mix) + x[1] * mix;
 }
 
-/* --- A.3.16 Rumsklang Reverb ----------------------------------------------
+/* --- A.3.16 Roomtone Reverb ----------------------------------------------
  * Large-space voicing: an explicit early-reflection tap bank in front of the
  * tank, with lowcut/highcut shaping the tail. */
 static const float ER_TAP[6]  = {0.0043f, 0.0215f, 0.0268f, 0.0362f, 0.0498f, 0.0677f};
@@ -1299,9 +1300,9 @@ static void m_rumsklang(mctx_t *m, float *l, float *r) {
     *r = tr;
 }
 
-/* --- A.3.18 Steel Box Reverb ----------------------------------------------
+/* --- A.3.18 Iron Room Reverb ----------------------------------------------
  * A Dattorro figure-of-eight plate, which is a genuinely different animal from
- * Rumsklang's comb tank: input diffusion into a single loop that crosses over
+ * Roomtone's comb tank: input diffusion into a single loop that crosses over
  * between two branches, with a modulated allpass in each to break up the
  * metallic ringing a static plate develops. Output is tapped from several
  * points inside the loop rather than from the loop output, which is what gives
@@ -1441,7 +1442,7 @@ static void m_steelbox(mctx_t *m, float *l, float *r) {
     *r = *r * (1.0f - mix) + wr * mix;
 }
 
-/* --- A.3.17 Saturator Delay -----------------------------------------------
+/* --- A.3.17 Drive Delay -----------------------------------------------
  * TIME is measured in 128th notes, using the documented divide table. The
  * saturation lives in the feedback path, so repeats degrade as they decay. */
 static const float SATDLY_DIV[16] = {
@@ -1493,7 +1494,7 @@ static void m_satdelay(mctx_t *m, float *l, float *r) {
     *r = *r * (1.0f - mix) + tr * gr * mix;
 }
 
-/* --- A.3.19 Supervoid Reverb ----------------------------------------------
+/* --- A.3.19 Voidspace Reverb ----------------------------------------------
  * A Householder feedback delay network. Eight mutually-prime delay lines are
  * mixed by an orthogonal matrix every sample, which builds echo density far
  * faster than a comb bank and is why this one goes from small room to huge
@@ -1563,7 +1564,7 @@ static void m_supervoid(mctx_t *m, float *l, float *r) {
     *r = *r * (1.0f - mix) + wr * mix;
 }
 
-/* --- A.3.20 Warble --------------------------------------------------------
+/* --- A.3.20 Flutter --------------------------------------------------------
  * Tape wobble. SPEED 0 means random, per the manual, so at that setting the
  * modulator becomes a smoothed random walk instead of a sine. The added noise
  * is deliberately outside the MIX law, again per the manual. */
@@ -1618,10 +1619,10 @@ static void m_warble(mctx_t *m, float *l, float *r) {
     *r = or_;
 }
 
-/* --- Grainer (A.2.4, adapted) ---------------------------------------------
- * Tonverk's Grainer is an SRC machine: it granulates a loaded sample. Work has
- * no sample loading, so this granulates the rolling buffer of whatever is
- * coming in — the last two seconds of live audio stand in for the sample.
+/* --- Granulator (A.2.4, adapted) ---------------------------------------------
+ * The reference design granulates a LOADED SAMPLE. Work granulates the rolling
+ * buffer of whatever is coming in instead — the last two seconds of live audio
+ * stand in for the sample when no sample is loaded.
  *
  * Everything else follows the manual's semantics: POS is where in the buffer
  * grains start, SCAN moves that point forward or backward (and wraps), SPRD
@@ -1706,7 +1707,7 @@ static void m_grainer(mctx_t *m, float *l, float *r) {
         float t = s->grain[g].age / s->grain[g].len;
         if (t >= 1.0f) { s->grain[g].on = 0; continue; }
 
-        /* Hann window — the smooth end of Tonverk's FADE/SHAPE pair */
+        /* Hann window — the smooth end of the described fade/shape pair */
         float win = 0.5f - 0.5f * cosf(t * 2.0f * (float)M_PI);
 
         /* Read behind the write head. The grain's own advance is (step - 1)
@@ -1776,9 +1777,9 @@ static void slot_reset(work_slot_t *s) {
 
 /* ----------------------------------------------------------- voice helpers
  *
- * Tonverk's Multi Player, Subtracks and Grainer are all documented as
- * eight-voice polyphonic. A voice here is a read cursor plus an envelope, so
- * eight of them cost almost nothing next to the FX machines.
+ * The sample machines are eight-voice polyphonic. A voice here is a read
+ * cursor plus an envelope, so eight of them cost almost nothing next to the
+ * FX machines.
  *
  * Voice allocation is oldest-first: with every voice busy, the one that has
  * been sounding longest is taken. That is the least surprising rule for a
@@ -1820,14 +1821,14 @@ static void pan_gains(uint8_t p, float *gl, float *gr) {
     *gr = sinf(a) * 1.41421356f;
 }
 
-/* ------------------------------------------------------------ Multi Player
+/* ------------------------------------------------------------ Polysample
  *
- * The manual describes Multi Player as an eight-voice polyphonic player of
+ * The manual describes Polysample as an eight-voice polyphonic player of
  * multi-sampled instruments, with TUNE, VIBR (vibrato depth), SPD (vibrato
  * speed) and FADE (vibrato fade-in).
  *
- * Not carried across: multi-sampled INSTRUMENTS. Tonverk loads a set of
- * samples mapped across the keyboard from its SD card; Work has one sample
+ * Not carried across: multi-sampled INSTRUMENTS. The reference design maps a
+ * set of samples across the keyboard from a memory card; Work has one sample
  * buffer, so every note plays that one sample transposed. The polyphony,
  * the vibrato and the parameter set are real; the multisampling is not, and
  * calling that out matters more than pretending otherwise.
@@ -1886,9 +1887,9 @@ static void m_multi(mctx_t *m, float *l, float *r) {
     *r = orr * lev * gr;
 }
 
-/* -------------------------------------------------------------- Subtracks
+/* -------------------------------------------------------------- Slicer
  *
- * The manual's Subtracks machine loads eight samples onto eight sequencer
+ * The manual's Slicer machine loads eight samples onto eight sequencer
  * subtracks, each with its own SRC/FLTR/AMP/MOD pages, plus a supertrack for
  * the shared FX parameters.
  *
@@ -1898,8 +1899,8 @@ static void m_multi(mctx_t *m, float *l, float *r) {
  * part that makes a sound: TUNE, PLAY MODE (forward / reverse / forward loop /
  * reverse loop), STRT, LEN and L.ST (loop start).
  *
- * That is a real gain over Single Player — reverse playback and a separate
- * loop point are both things Single Player cannot do — so the machine earns
+ * That is a real gain over One Shot — reverse playback and a separate
+ * loop point are both things One Shot cannot do — so the machine earns
  * its slot even without the routing. The docs say so in as many words rather
  * than letting the name imply the rest.
  */
@@ -1963,7 +1964,7 @@ static void m_subtracks(mctx_t *m, float *l, float *r) {
     *r = orr * lev;
 }
 
-/* ------------------------------------------------------------- Wavefinder
+/* ------------------------------------------------------------- Wavescan
  *
  * Two wavetable oscillators blended together, each with a position into the
  * table (POS), an internal modulator that animates that position (ANIM, SPD,
@@ -1971,9 +1972,10 @@ static void m_subtracks(mctx_t *m, float *l, float *r) {
  * interpolated, which is what makes it sound like wavetable synthesis rather
  * than switching.
  *
- * WHERE THE TABLE COMES FROM is the departure. Tonverk browses wavetables on
- * an SD card and holds up to 127 per project in numbered SLOTs. Work has no
- * card and no slot store — but it does have a loaded sample, so the sample IS
+ * WHERE THE TABLE COMES FROM is the departure. The reference design browses
+ * wavetable files on a memory card and holds 127 per project in numbered
+ * slots. Work has no card and no slot store — but it has a loaded sample,
+ * so the sample IS
  * the wavetable: it is read as a series of WF_WAVE-frame waves and POS selects
  * between them, interpolating across the boundary. Load a wavetable file and
  * it behaves as one; load a drum loop and you get something else entirely,
@@ -2161,9 +2163,9 @@ static void m_shape(mctx_t *m, float *l, float *r) {
     *r = *r * (1.0f - mix) + out[1] * lev * mix;
 }
 
-/* ---------------------------------------------------------- Single Player
+/* ---------------------------------------------------------- One Shot
  *
- * The first of Tonverk's SRC machines: one shot of the loaded sample per trig.
+ * The simplest of the source machines: one shot of the sample per trig.
  * TUNE is +/- two octaves around 64, STRT and LEN scan a window into the
  * sample, LOOP holds the window instead of stopping at its end, ATK and DEC
  * shape an AD envelope, LEV is output level and PAN places it.
@@ -2245,31 +2247,31 @@ static void m_single(mctx_t *m, float *l, float *r) {
 
 static void run_machine(mctx_t *m, int machine, float *l, float *r) {
     switch (machine) {
-        case WORK_FX_CHRONO:    m_chrono(m, l, r);    break;
+        case WORK_FX_CLOCK:    m_chrono(m, l, r);    break;
         case WORK_FX_COMB:      m_comb(m, l, r);      break;
         case WORK_FX_COMP:      m_comp(m, l, r);      break;
-        case WORK_FX_DAISY:     m_daisy(m, l, r);     break;
-        case WORK_FX_DEGRADER:  m_degrader(m, l, r);  break;
-        case WORK_FX_DIRT:      m_dirt(m, l, r);      break;
-        case WORK_FX_FOLDER:    m_folder(m, l, r);    break;
+        case WORK_FX_CHAIN:     m_daisy(m, l, r);     break;
+        case WORK_FX_DECIMATOR:  m_degrader(m, l, r);  break;
+        case WORK_FX_GRIT:      m_dirt(m, l, r);      break;
+        case WORK_FX_FOLD:    m_folder(m, l, r);    break;
         case WORK_FX_FBANK:     m_fbank(m, l, r);     break;
-        case WORK_FX_WARPER:    m_warper(m, l, r);    break;
+        case WORK_FX_BENDER:    m_warper(m, l, r);    break;
         case WORK_FX_FLANGER:   m_flanger(m, l, r);   break;
         case WORK_FX_LPF:       m_lpf(m, l, r);       break;
         case WORK_FX_MMF:       m_mmf(m, l, r);       break;
         case WORK_FX_CHORUS:    m_chorus(m, l, r);    break;
-        case WORK_FX_PHASE98:   m_phase98(m, l, r);   break;
-        case WORK_FX_RUMSKLANG: m_rumsklang(m, l, r); break;
-        case WORK_FX_SATDELAY:  m_satdelay(m, l, r);  break;
-        case WORK_FX_STEELBOX:  m_steelbox(m, l, r);  break;
-        case WORK_FX_SUPERVOID: m_supervoid(m, l, r); break;
-        case WORK_FX_WARBLE:    m_warble(m, l, r);    break;
-        case WORK_FX_GRAINER:   m_grainer(m, l, r);   break;
-        case WORK_FX_SINGLE:    m_single(m, l, r);    break;
-        case WORK_FX_MULTI:     m_multi(m, l, r);     break;
-        case WORK_FX_SUBTRACKS: m_subtracks(m, l, r); break;
-        case WORK_FX_WAVEFINDER:m_wavefinder(m, l, r);break;
-        case WORK_FX_SHAPE:     m_shape(m, l, r);     break;
+        case WORK_FX_PHASEARRAY:   m_phase98(m, l, r);   break;
+        case WORK_FX_ROOMTONE: m_rumsklang(m, l, r); break;
+        case WORK_FX_DRIVEDELAY:  m_satdelay(m, l, r);  break;
+        case WORK_FX_IRONROOM:  m_steelbox(m, l, r);  break;
+        case WORK_FX_VOIDSPACE: m_supervoid(m, l, r); break;
+        case WORK_FX_FLUTTER:    m_warble(m, l, r);    break;
+        case WORK_FX_GRANULATOR:   m_grainer(m, l, r);   break;
+        case WORK_FX_ONESHOT:    m_single(m, l, r);    break;
+        case WORK_FX_POLYSAMPLE:     m_multi(m, l, r);     break;
+        case WORK_FX_SLICER: m_subtracks(m, l, r); break;
+        case WORK_FX_WAVESCAN:m_wavefinder(m, l, r);break;
+        case WORK_FX_TILT:     m_shape(m, l, r);     break;
         case WORK_FX_BYPASS:
         default:                                      break;
     }
@@ -2375,14 +2377,14 @@ static void work_src_trigger(work_t *w, int note, int vel) {
     for (int i = 0; i < WORK_SLOTS; ++i) {
         work_slot_t *s = &w->slot[i];
         switch (w->cfg[i].machine) {
-        case WORK_FX_SINGLE: {
+        case WORK_FX_ONESHOT: {
             int start = (int)((double)w->cfg[i].p[1] / 127.0 * (frames - 1));
             s->sp_pos   = start;
             s->sp_env   = 0.0f;
             s->sp_stage = 1;
             break;
         }
-        case WORK_FX_MULTI: {
+        case WORK_FX_POLYSAMPLE: {
             int start = (int)((double)w->cfg[i].p[4] / 127.0 * (frames - 1));
             work_voice_t *v = voice_alloc(s);
             v->pos = start; v->env = 0.0f; v->stage = 1;
@@ -2390,7 +2392,7 @@ static void work_src_trigger(work_t *w, int note, int vel) {
             v->vib_ph = 0.0f; v->vib_fade = 0.0f; v->note = note;
             break;
         }
-        case WORK_FX_SUBTRACKS: {
+        case WORK_FX_SLICER: {
             const int mode = iclamp((int)w->cfg[i].p[1] * 4 / 128, 0, 3);
             int start = (int)((double)w->cfg[i].p[2] / 127.0 * (frames - 1));
             int len   = (int)((double)w->cfg[i].p[3] / 127.0 * (frames - start));
@@ -2441,7 +2443,7 @@ static void seq_run(work_t *w, int frames) {
         w->pre_result = 0;
         return;
     }
-    /* PROB is a separate gate from the condition, as on Elektron: both must
+    /* PROB is a separate gate from the condition: both must
      * pass. 100 (the default) always passes. */
     if (st->prob < 100 && rnd_01(&w->cond_rng) * 100.0f >= (float)st->prob) {
         w->pre_result = 0;
@@ -2456,8 +2458,8 @@ static void seq_run(work_t *w, int frames) {
     for (int i = 0; i < WORK_LOCKABLE; ++i) w->held[i] = st->lock[i];
 
     /* Retrig restarts the FX LFOs and the Multimode Filter envelope. It does
-     * not stutter audio — the Degrader's FREZ is the machine for that. */
-    /* A LOCK trig applies its locks and stops there — Elektron's trigless
+     * not stutter audio — the Decimator's FREZ is the machine for that. */
+    /* A LOCK trig applies its locks and stops there — the trigless
      * lock. Only a FULL trig restarts the modulators. */
     if (st->trig_type == WORK_TRIG_FULL) {
         if (st->retrig != WORK_RETRIG_OFF) {
@@ -2468,7 +2470,7 @@ static void seq_run(work_t *w, int frames) {
         w->menv_t     = 0.0f;
         /* An SRC machine has a voice to start, unlike every FX machine before
          * it: a full trig fires the sample from its window start. A LOCK trig
-         * deliberately does not, matching Elektron's trigless lock. */
+         * deliberately does not. That is what makes it a lock trig. */
         work_src_trigger(w, 60, 0);
     }
 }
@@ -2528,7 +2530,7 @@ static void build_effective(work_t *w, int frames) {
     for (int n = 0; n < WORK_LFOS; ++n) {
         work_lfo_cfg_t *L = &w->lfo[n];
 
-        /* Multiplier scales speed; both are on the tempo grid like Tonverk */
+        /* Multiplier scales speed; both stay on the tempo grid */
         float steps = pexp(L->speed, 64.0f, 0.125f);
         float mult  = powf(2.0f, (float)(L->mult / 16) - 4.0f);
         float per   = fmaxf(steps * mult * step_frames(w), 1.0f);
@@ -2651,12 +2653,12 @@ void work_destroy(work_t *w) {
     free(w);
 }
 
-/* A SOURCE machine replaces its input instead of processing it. Grainer is
+/* A SOURCE machine replaces its input instead of processing it. Granulator is
  * deliberately NOT one: with no sample loaded it granulates the live input,
  * which is the behaviour it shipped with and which people may be relying on. */
 static int machine_is_source(int machine) {
-    return machine == WORK_FX_SINGLE || machine == WORK_FX_MULTI ||
-           machine == WORK_FX_SUBTRACKS || machine == WORK_FX_WAVEFINDER;
+    return machine == WORK_FX_ONESHOT || machine == WORK_FX_POLYSAMPLE ||
+           machine == WORK_FX_SLICER || machine == WORK_FX_WAVESCAN;
 }
 
 void work_process(work_t *w, const int16_t *in, int16_t *out, int frames) {
@@ -3187,7 +3189,7 @@ void work_set_param(work_t *w, const char *key, const char *val) {
         int v = iclamp(atoi(val), 0, 127);
         w->cfg[slot].p[idx] = (uint8_t)v;
         /* With live record armed and the sequencer running, a knob move also
-         * lays a lock on the step that is playing — the Elektron gesture,
+         * lays a lock on the step that is playing — the live-record gesture,
          * routed through the same path the UI and MIDI CC both use. */
         if (w->live_rec && w->seq_on && w->seq_pos >= 0 && w->seq_pos < WORK_STEPS) {
             work_step_t *st = &CURPAT(w)->step[w->seq_pos];
@@ -3210,7 +3212,7 @@ void work_set_param(work_t *w, const char *key, const char *val) {
         int mc = parse_machine(val);
         if (mc >= 0 && mc != w->cfg[s].machine) {
             w->cfg[s].machine = (uint8_t)mc;
-            /* Loading a machine installs its defaults, as on Tonverk */
+            /* Loading a machine installs its defaults */
             for (int i = 0; i < WORK_PARAMS; ++i)
                 w->cfg[s].p[i] = PARAM_DEFAULT[mc][i];
         }

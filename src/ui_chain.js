@@ -93,7 +93,7 @@ const FX_KNOBS = (slot) => {
 const PAGES = [
     /* `max` for the two machine selects is a placeholder — the real bound is
      * taken from the engine's own list in applyMachineRange(). A constant here
-     * is what left Grainer unreachable when the 21st machine landed. */
+     * is what left Granulator unreachable when the 21st machine landed. */
     [ { key: 'machine1', label: 'FX 1', min: 0, max: 0,   step: 1 },
       { key: 'machine2', label: 'FX 2', min: 0, max: 0,   step: 1 },
       { key: 'mix',      label: 'MIX',  min: 0, max: 127, step: 1 } ],
@@ -270,7 +270,7 @@ function drawFooter(hint) {
 }
 
 /* The machines page carries three values, so it gets full-width rows and the
- * whole machine name — "Panoramic Chorus", not "Panora". */
+ * whole machine name — "Wide Chorus", not "Panora". */
 const ROW_Y       = [14, 27, 40];
 const ROW_LABEL_W = 24;
 const ROW_VALUE_X = 28;

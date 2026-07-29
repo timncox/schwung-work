@@ -147,8 +147,8 @@ static void test_all_machines_bounded(void) {
              * loaded and no trig fired, silence is the correct output. Their
              * real coverage is test_sample_transfer / test_single_player
              * below, which load audio and fire it. */
-            const int is_src = (mc == WORK_FX_SINGLE || mc == WORK_FX_MULTI ||
-                                mc == WORK_FX_SUBTRACKS || mc == WORK_FX_WAVEFINDER);
+            const int is_src = (mc == WORK_FX_ONESHOT || mc == WORK_FX_POLYSAMPLE ||
+                                mc == WORK_FX_SLICER || mc == WORK_FX_WAVESCAN);
             if (sIdx == 1 && mc != WORK_FX_BYPASS && !is_src) {
                 CHECK(e > 0, "%s (default): output is completely silent",
                       work_machine_name(mc));
@@ -164,8 +164,8 @@ static void test_global_mix_dry(void) {
     printf("global mix=0 returns the dry signal\n");
     work_t *w = work_create(&host);
     assert(w);
-    set_slot(w, 0, WORK_FX_SUPERVOID);
-    set_slot(w, 1, WORK_FX_DEGRADER);
+    set_slot(w, 0, WORK_FX_VOIDSPACE);
+    set_slot(w, 1, WORK_FX_DECIMATOR);
     work_set_param(w, "mix", "0");
 
     int16_t in[BLOCK * 2], out[BLOCK * 2];
@@ -190,8 +190,8 @@ static void test_state_roundtrip(void) {
     work_t *b = work_create(&host);
     assert(a && b);
 
-    set_slot(a, 0, WORK_FX_PHASE98);
-    set_slot(a, 1, WORK_FX_STEELBOX);
+    set_slot(a, 0, WORK_FX_PHASEARRAY);
+    set_slot(a, 1, WORK_FX_IRONROOM);
     for (int i = 0; i < WORK_PARAMS; ++i) {
         char key[16], val[8];
         snprintf(key, sizeof(key), "fx1_p%d", i + 1);
@@ -229,8 +229,8 @@ static void test_get_param_tiny_buffers(void) {
     printf("get_param never writes past a short buffer\n");
     work_t *w = work_create(&host);
     assert(w);
-    set_slot(w, 0, WORK_FX_WARBLE);
-    set_slot(w, 1, WORK_FX_RUMSKLANG);
+    set_slot(w, 0, WORK_FX_FLUTTER);
+    set_slot(w, 1, WORK_FX_ROOMTONE);
     set_all_params(w, 0, 127);
     set_all_params(w, 1, 127);
     work_set_param(w, "lfo1_dest", "15");
@@ -320,7 +320,7 @@ static void test_machine_change_resets(void) {
     work_t *w = work_create(&host);
     assert(w);
 
-    set_slot(w, 0, WORK_FX_SUPERVOID);
+    set_slot(w, 0, WORK_FX_VOIDSPACE);
     work_set_param(w, "fx1_p7", "127");         /* fully wet */
     int dummy;
     run_blocks(w, 100, &dummy);                 /* build a long tail */
@@ -371,13 +371,13 @@ static void test_two_slot_series(void) {
     printf("slot 2 processes the output of slot 1\n");
 
     work_t *a = work_create(&host);
-    set_slot(a, 0, WORK_FX_DIRT);
+    set_slot(a, 0, WORK_FX_GRIT);
     int dummy;
     int64_t e1 = run_blocks(a, 60, &dummy);
     work_destroy(a);
 
     work_t *b = work_create(&host);
-    set_slot(b, 0, WORK_FX_DIRT);
+    set_slot(b, 0, WORK_FX_GRIT);
     set_slot(b, 1, WORK_FX_FBANK);
     set_all_params(b, 1, 0);                     /* a wall in slot 2 */
     int64_t e2 = run_blocks(b, 60, &dummy);
@@ -396,7 +396,7 @@ static void test_machine_load_installs_defaults(void) {
     assert(w);
 
     set_all_params(w, 0, 0);
-    set_slot(w, 0, WORK_FX_SATDELAY);
+    set_slot(w, 0, WORK_FX_DRIVEDELAY);
 
     int nonzero = 0;
     for (int i = 0; i < WORK_PARAMS; ++i) {
@@ -405,7 +405,7 @@ static void test_machine_load_installs_defaults(void) {
         work_get_param(w, key, buf, sizeof(buf));
         if (atoi(buf) != 0) nonzero++;
     }
-    CHECK(nonzero > 0, "Saturator Delay loaded with all parameters at zero");
+    CHECK(nonzero > 0, "Drive Delay loaded with all parameters at zero");
     work_destroy(w);
 }
 
@@ -601,7 +601,7 @@ static void test_machine_lock(void) {
     work_set_param(w, "step0", "1:0:0:0");
     work_set_param(w, "step1", "1:0:0:0");
     char v[8];
-    snprintf(v, sizeof(v), "%d", WORK_FX_DEGRADER);
+    snprintf(v, sizeof(v), "%d", WORK_FX_DECIMATOR);
     work_set_param(w, "lock1_16", v);          /* lock 16 = slot 1 machine */
     work_set_param(w, "seq_on", "1");
 
@@ -612,7 +612,7 @@ static void test_machine_lock(void) {
 
     idle(w, blocks_per_step());
     work_get_param(w, "effm", m, sizeof(m));
-    CHECK(atoi(m) == WORK_FX_DEGRADER, "step 1 should lock Degrader, effm=%s", m);
+    CHECK(atoi(m) == WORK_FX_DECIMATOR, "step 1 should lock Decimator, effm=%s", m);
 
     work_destroy(w);
 }
@@ -779,11 +779,11 @@ static void test_lock_labels(void) {
     printf("lock labels follow the loaded machine\n");
     work_t *w = work_create(&host);
     assert(w);
-    set_slot(w, 0, WORK_FX_CHRONO);
+    set_slot(w, 0, WORK_FX_CLOCK);
 
     char s[64];
     work_get_param(w, "locklabel0", s, sizeof(s));
-    CHECK(strcmp(s, "1:TUNE") == 0, "slot 1 knob A under Chrono Pitch reads %s", s);
+    CHECK(strcmp(s, "1:TUNE") == 0, "slot 1 knob A under Clock Pitch reads %s", s);
 
     /* Filterbank's knobs are Gain A..H in the manual, but the label here is
      * the band's frequency — a knob called "A" tells you nothing. */
@@ -838,7 +838,7 @@ static void test_ui_hierarchy_not_served(void) {
     printf("ui_hierarchy is not served, so the host reaches our chain UI\n");
     work_t *w = work_create(&host);
     assert(w);
-    set_slot(w, 0, WORK_FX_CHRONO);
+    set_slot(w, 0, WORK_FX_CLOCK);
 
     char buf[65536];
     memset(buf, 0x5A, sizeof(buf));
@@ -901,26 +901,26 @@ static void test_reverbs_are_distinct(void) {
     enum { N = 22050 };                       /* half a second */
     static float rum[N], steel[N], svoid[N];
 
-    capture_ir(WORK_FX_RUMSKLANG, rum, N);
-    capture_ir(WORK_FX_STEELBOX, steel, N);
-    capture_ir(WORK_FX_SUPERVOID, svoid, N);
+    capture_ir(WORK_FX_ROOMTONE, rum, N);
+    capture_ir(WORK_FX_IRONROOM, steel, N);
+    capture_ir(WORK_FX_VOIDSPACE, svoid, N);
 
     /* each must actually produce a tail */
     double e_rum = 0, e_steel = 0, e_void = 0;
     for (int i = 2000; i < N; ++i) {
         e_rum += fabs(rum[i]); e_steel += fabs(steel[i]); e_void += fabs(svoid[i]);
     }
-    CHECK(e_rum   > 0.5, "Rumsklang produced no tail (energy %.3f)", e_rum);
-    CHECK(e_steel > 0.5, "Steel Box produced no tail (energy %.3f)", e_steel);
-    CHECK(e_void  > 0.5, "Supervoid produced no tail (energy %.3f)", e_void);
+    CHECK(e_rum   > 0.5, "Roomtone produced no tail (energy %.3f)", e_rum);
+    CHECK(e_steel > 0.5, "Iron Room produced no tail (energy %.3f)", e_steel);
+    CHECK(e_void  > 0.5, "Voidspace produced no tail (energy %.3f)", e_void);
 
     double c_rs = ir_correlation(rum, steel, N);
     double c_rv = ir_correlation(rum, svoid, N);
     double c_sv = ir_correlation(steel, svoid, N);
 
-    CHECK(c_rs < 0.35, "Rumsklang and Steel Box correlate at %.2f — too alike", c_rs);
-    CHECK(c_rv < 0.35, "Rumsklang and Supervoid correlate at %.2f — too alike", c_rv);
-    CHECK(c_sv < 0.35, "Steel Box and Supervoid correlate at %.2f — too alike", c_sv);
+    CHECK(c_rs < 0.35, "Roomtone and Iron Room correlate at %.2f — too alike", c_rs);
+    CHECK(c_rv < 0.35, "Roomtone and Voidspace correlate at %.2f — too alike", c_rv);
+    CHECK(c_sv < 0.35, "Iron Room and Voidspace correlate at %.2f — too alike", c_sv);
 
     /* Echo density: a plate and an FDN build density much faster than a comb
      * bank, so count zero crossings in the first 100 ms as a proxy. */
@@ -936,20 +936,20 @@ static void test_reverbs_are_distinct(void) {
     printf("      early density %d / %d / %d crossings\n", zc[0], zc[1], zc[2]);
 }
 
-/* Grainer must actually granulate: rearrange the input rather than pass it,
+/* Granulator must actually granulate: rearrange the input rather than pass it,
  * and follow TUNE. */
 static void test_grainer(void) {
-    printf("Grainer granulates the input buffer and tracks TUNE\n");
+    printf("Granulator granulates the input buffer and tracks TUNE\n");
 
     /* fully wet, pitch centred */
     work_t *w = work_create(&host);
     assert(w);
-    set_slot(w, 0, WORK_FX_GRAINER);
+    set_slot(w, 0, WORK_FX_GRANULATOR);
     work_set_param(w, "fx1_p8", "127");        /* MIX wet */
     int railed = 0;
     int64_t e = run_blocks(w, 300, &railed);
-    CHECK(e > 0, "Grainer produced silence");
-    CHECK(railed == 0, "Grainer railed %d samples", railed);
+    CHECK(e > 0, "Granulator produced silence");
+    CHECK(railed == 0, "Granulator railed %d samples", railed);
 
     /* it must not simply reproduce the input */
     int16_t in[BLOCK * 2], out[BLOCK * 2];
@@ -959,14 +959,14 @@ static void test_grainer(void) {
     work_process(w, out, out, BLOCK);
     int same = 0;
     for (int i = 0; i < BLOCK * 2; ++i) if (out[i] == in[i]) same++;
-    CHECK(same < BLOCK * 2 - 8, "Grainer output is identical to its input");
+    CHECK(same < BLOCK * 2 - 8, "Granulator output is identical to its input");
     work_destroy(w);
 
     /* TUNE up an octave must shift energy relative to TUNE down an octave */
     int64_t hi = 0, lo = 0;
     for (int k = 0; k < 2; ++k) {
         work_t *g = work_create(&host);
-        set_slot(g, 0, WORK_FX_GRAINER);
+        set_slot(g, 0, WORK_FX_GRANULATOR);
         work_set_param(g, "fx1_p8", "127");
         work_set_param(g, "fx1_p1", k ? "96" : "32");   /* TUNE up / down */
         int dummy;
@@ -977,13 +977,13 @@ static void test_grainer(void) {
     CHECK(hi != lo, "TUNE made no difference to the output (%lld vs %lld)",
           (long long)hi, (long long)lo);
 
-    /* a Grainer with no grains allowed still must not blow up */
+    /* a Granulator with no grains allowed still must not blow up */
     work_t *q = work_create(&host);
-    set_slot(q, 0, WORK_FX_GRAINER);
+    set_slot(q, 0, WORK_FX_GRANULATOR);
     set_all_params(q, 0, 0);
     int r2 = 0;
     run_blocks(q, 120, &r2);
-    CHECK(r2 == 0, "Grainer at all-min railed %d samples", r2);
+    CHECK(r2 == 0, "Granulator at all-min railed %d samples", r2);
     work_destroy(q);
 }
 
@@ -1406,7 +1406,7 @@ static void test_nrpn(void) {
     char s[32];
 
     /* NRPN 24 = FX 1 machine. At full scale it must select the LAST machine —
-     * the range bug Tonverk's own release notes kept reporting. */
+     * the range bug hardware sequencers keep shipping. */
     uint8_t msb[3]  = {0xB0, 99, 0};
     uint8_t lsb[3]  = {0xB0, 98, 24};
     uint8_t dmsb[3] = {0xB0, 6, 127};
@@ -1447,7 +1447,7 @@ static void test_feedback_monitor(void) {
     CHECK(atoi(s) == 1, "monitor should default to on, got %s", s);
 
     /* a reverb, so there is a tail to check */
-    set_slot(w, 0, WORK_FX_SUPERVOID);
+    set_slot(w, 0, WORK_FX_VOIDSPACE);
     work_set_param(w, "fx1_p7", "127");
     int dummy;
     int64_t live = run_blocks(w, 60, &dummy);
@@ -1658,7 +1658,7 @@ static void test_sample_bounds(void) {
 }
 
 static void test_single_player(void) {
-    printf("Single Player fires on a trig and honours its window\n");
+    printf("One Shot fires on a trig and honours its window\n");
     work_t *w = work_create(&host);
 
     const int frames = 4000;
@@ -1684,7 +1684,7 @@ static void test_single_player(void) {
     work_process(w, in, out, BLOCK);
     int64_t idle = 0;
     for (int i = 0; i < BLOCK * 2; ++i) idle += llabs(out[i]);
-    CHECK(idle == 0, "Single Player made sound with no trig (energy %lld)",
+    CHECK(idle == 0, "One Shot made sound with no trig (energy %lld)",
           (long long)idle);
 
     /* A sequencer trig starts it. */
@@ -1740,10 +1740,10 @@ static void test_single_player(void) {
 
 
 static void test_grainer_reads_the_sample(void) {
-    printf("Grainer granulates the loaded sample, and live input without one\n");
+    printf("Granulator granulates the loaded sample, and live input without one\n");
     work_t *w = work_create(&host);
 
-    work_set_param(w, "machine1", "20");     /* Grainer */
+    work_set_param(w, "machine1", "20");     /* Granulator */
     work_set_param(w, "machine2", "0");
     work_set_param(w, "mix", "127");
 
@@ -1754,7 +1754,7 @@ static void test_grainer_reads_the_sample(void) {
         work_process(w, in, out, BLOCK);
         for (int i = 0; i < BLOCK * 2; ++i) silent += llabs(out[i]);
     }
-    CHECK(silent == 0, "Grainer made sound from silence with no sample (%lld)",
+    CHECK(silent == 0, "Granulator made sound from silence with no sample (%lld)",
           (long long)silent);
 
     /* Load one. Now the same silent input must produce grains — that is the
@@ -1769,7 +1769,7 @@ static void test_grainer_reads_the_sample(void) {
         work_process(w, in, out, BLOCK);
         for (int i = 0; i < BLOCK * 2; ++i) grained += llabs(out[i]);
     }
-    CHECK(grained > 0, "Grainer stayed silent with a sample loaded");
+    CHECK(grained > 0, "Granulator stayed silent with a sample loaded");
 
     /* Clearing it returns to live granulation. */
     work_set_param(w, "sample_clear", "1");
@@ -1779,7 +1779,7 @@ static void test_grainer_reads_the_sample(void) {
         for (int i = 0; i < BLOCK * 2; ++i) after += llabs(out[i]);
     }
     CHECK(after < grained / 4,
-          "clearing the sample left Grainer sounding (%lld vs %lld)",
+          "clearing the sample left Granulator sounding (%lld vs %lld)",
           (long long)after, (long long)grained);
 
     work_destroy(w);
@@ -1816,7 +1816,7 @@ static int64_t src_energy(int machine, int note, int blocks,
 }
 
 static void test_multi_player_is_polyphonic(void) {
-    printf("Multi Player is polyphonic and tracks note pitch\n");
+    printf("Polysample is polyphonic and tracks note pitch\n");
 
     work_t *w = work_create(&host);
     const int frames = 6000;
@@ -1889,7 +1889,7 @@ static void set_reverse(work_t *w)  { work_set_param(w, "fx1_p2", "40");  }
 static void set_fwd_loop(work_t *w) { work_set_param(w, "fx1_p2", "80");  }
 
 static void test_subtracks_play_modes(void) {
-    printf("Subtracks plays forward, reverse and loops\n");
+    printf("Slicer plays forward, reverse and loops\n");
 
     int64_t fwd = src_energy(23, 60, 60, NULL);
     CHECK(fwd > 0, "forward mode made no sound");
@@ -1925,7 +1925,7 @@ static void test_subtracks_play_modes(void) {
 }
 
 static void test_wavefinder_needs_a_wavetable(void) {
-    printf("Wavefinder oscillates from the sample, and is silent without one\n");
+    printf("Wavescan oscillates from the sample, and is silent without one\n");
 
     /* Too short to hold two 2048-frame waves: silent rather than reading junk. */
     work_t *w = work_create(&host);
@@ -1938,7 +1938,7 @@ static void test_wavefinder_needs_a_wavetable(void) {
         work_process(w, in, out, BLOCK);
         for (int i = 0; i < BLOCK * 2; ++i) empty += llabs(out[i]);
     }
-    CHECK(empty == 0, "Wavefinder made sound with no wavetable loaded");
+    CHECK(empty == 0, "Wavescan made sound with no wavetable loaded");
     work_destroy(w);
 
     /* Long enough for several waves: it should oscillate continuously, with
@@ -1956,7 +1956,7 @@ static void test_wavefinder_needs_a_wavetable(void) {
         work_process(w, in, out, BLOCK);
         for (int i = 0; i < BLOCK * 2; ++i) e += llabs(out[i]);
     }
-    CHECK(e > 0, "Wavefinder was silent with a wavetable loaded");
+    CHECK(e > 0, "Wavescan was silent with a wavetable loaded");
     work_destroy(w);
 }
 

@@ -251,7 +251,7 @@ async function testKnobResponseCurve() {
 }
 
 /* The machine select's bound must come from the engine's own list. A constant
- * here is what left Grainer — the 21st machine — unreachable. */
+ * here is what left Granulator — the 21st machine — unreachable. */
 async function testMachineRangeFollowsTheEngine() {
     console.log('every machine the engine lists is reachable');
     const ctx = await loadUI({ machine1: `${MACHINES.length - 2}` });
@@ -358,18 +358,26 @@ async function testLayoutNeverCollides() {
  * six characters, so every reverb read "Rumskl". */
 async function testMachineNamesAreNotTruncatedToSixChars() {
     console.log('the machines page shows a readable machine name');
-    const idx = MACHINES.indexOf('Panoramic Chorus');
-    check(idx > 0, 'the engine no longer lists Panoramic Chorus — update this test');
+    /* Take the LONGEST name the engine reports rather than naming one here.
+     * This test used to hardcode a prefix of the machine it wanted, so it
+     * failed the moment the machine was renamed — and a test that breaks on a
+     * rename is testing the name, not the truncation it exists to catch. */
+    const longest = MACHINES.reduce((a, b) => (b.length > a.length ? b : a), '');
+    const idx = MACHINES.indexOf(longest);
+    check(longest.length > 12,
+          `no machine name is long enough to catch truncation (longest is ` +
+          `"${longest}") — this test can no longer fail`);
+
     const ctx = await loadUI({ machine1: `${idx}` });
     ctx.host.init();
     settle(ctx, 80);
 
     const shown = ctx.screen.map((s) => s.text);
-    const name = shown.find((t) => t.startsWith('Panoram'));
+    const name = shown.find((t) => longest.startsWith(t.slice(0, 8)) && t.length > 4);
     check(!!name, `no machine name on screen; got ${JSON.stringify(shown)}`);
-    check(name && name.length > 12,
-          `machine name was cut to "${name}" — the old six-character slice made ` +
-          `every long name unreadable`);
+    check(name === longest,
+          `machine name was cut to "${name}", expected "${longest}" — the old ` +
+          `six-character slice made every long name unreadable`);
 }
 
 /* Changing a machine reloads that slot's defaults in the DSP, so the knob
@@ -381,7 +389,7 @@ async function testMachineChangeRefreshesLabels() {
     ctx.host.init();
     settle(ctx, 80);
 
-    const target = MACHINES.indexOf('Warble');
+    const target = MACHINES.indexOf('Flutter');
     ctx.store.machine1 = `${target}`;
     ctx.store.labels1 = contract.get.labels1;
 

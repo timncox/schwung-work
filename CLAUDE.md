@@ -5,10 +5,10 @@ last_touched: 2026-07-28
 
 # Work
 
-Schwung module for the Ableton Move: **twenty-one FX machines in two insert slots**,
-inspired by the Elektron Tonverk's FX section. Two FX LFOs modulate any slot
-parameter. Named Work because Tonverk is Swedish for "tone works" — the same
-naming move as Mono for the Monomachine.
+Schwung module for the Ableton Move: **twenty-six machines in two insert
+slots** — twenty-one effects and five sample sources — inspired by the FX
+section of the Elektron Tonverk. Three FX LFOs and a modulation envelope
+modulate any slot parameter.
 
 ## Clean-room statement — read before touching the DSP
 
@@ -27,15 +27,22 @@ Practical consequences:
 
 - Do not port, decompile, or transcribe anything from a Tonverk OS image.
 - Do not ship Elektron preset or wavetable content.
-- The module is called **Work**, not Tonverk. Keep Elektron's product name out
-  of the module id, repo name and UI strings; describing the machines by their
-  documented names inside the manual reference is fine.
+- **Every machine name here is ours** (2026-07-29). The machines used to carry
+  Elektron's documented names — Rumsklang, Supervoid, Dirtshaper, Grainer,
+  Single/Multi Player, Subtracks, Wavefinder, Shape, Phase 98, Warble — and
+  they were all renamed. Generic audio terms (Compressor, Filterbank,
+  Multimode Filter, Low-Pass Filter) stayed, because nobody owns those. Do not
+  reintroduce the old names, in code, comments, tests or docs.
+- Keep "Elektron" and "Tonverk" out of everything a user sees: the manual page,
+  README, module.json and release.json descriptions, on-device help, and UI
+  strings. `mono` is the calibration — its docs page names no one. The
+  provenance belongs here and in `docs/REFERENCE.md`, nowhere else.
 
 ## Architecture
 
-Tonverk is an 8-encoder-per-page device and Move has 8 knobs, so parameter
-pages map 1:1. A track's FX section is two insert slots in series, each holding
-one machine with up to 8 parameters — that is exactly what this engine models.
+The reference device is 8 encoders per page and Move has 8 knobs, so parameter
+pages map 1:1. Two insert slots in series, each holding one machine with up to
+8 parameters — that is what this engine models.
 
 ```
 src/work_core.{c,h}   the engine: 21 machines, 2 slots, 2 FX LFOs, sequencer
@@ -79,7 +86,7 @@ wrapper turns it on at create.
 - Micro-timing resolves at one block (~2.9 ms), finer than 1/24 of a step at any
   sane tempo but **not sample-accurate**.
 - Retrig restarts the FX LFOs and the filter envelope. It does **not** stutter
-  audio — the Degrader's FREZ is the machine for that.
+  audio — the Decimator's FREZ is the machine for that.
 
 Worst-case `state` blob (64 steps, every lock set) is **7570 bytes** against the
 device host's 16 KB read buffer. Re-measure if the format grows.
@@ -91,21 +98,21 @@ renumbers every saved preset.
 
 | # | Machine | # | Machine |
 |---|---|---|---|
-| 0 | Bypass | 10 | Infinite Flanger |
-| 1 | Chrono Pitch | 11 | Low-Pass Filter |
+| 0 | Bypass | 10 | Endless Flanger |
+| 1 | Clock Pitch | 11 | Low-Pass Filter |
 | 2 | Comb ± Filter | 12 | Multimode Filter |
-| 3 | Compressor | 13 | Panoramic Chorus |
-| 4 | Daisy Delay | 14 | Phase 98 |
-| 5 | Degrader | 15 | Rumsklang Reverb |
-| 6 | Dirtshaper | 16 | Saturator Delay |
-| 7 | Filter Folder | 17 | Steel Box Reverb |
-| 8 | Filterbank | 18 | Supervoid Reverb |
-| 9 | Frequency Warper | 19 | Warble |
-| | | 20 | Grainer |
-| | | 21 | Single Player |
-| | | 22 | Multi Player |
-| | | 23 | Subtracks |
-| | | 24 | Wavefinder |
+| 3 | Compressor | 13 | Wide Chorus |
+| 4 | Chain Delay | 14 | Phase Array |
+| 5 | Decimator | 15 | Roomtone Reverb |
+| 6 | Gritshaper | 16 | Drive Delay |
+| 7 | Fold Filter | 17 | Iron Room Reverb |
+| 8 | Filterbank | 18 | Voidspace Reverb |
+| 9 | Spectrum Bender | 19 | Flutter |
+| | | 20 | Granulator |
+| | | 21 | One Shot |
+| | | 22 | Polysample |
+| | | 23 | Slicer |
+| | | 24 | Wavescan |
 | | | 25 | Shape |
 
 Knob labels live in `PARAM_NAME[][]` in `work_core.c` and are served to the UI
@@ -155,7 +162,7 @@ things stop it, and they are different in kind:
   nothing to blend with and is pure liability, so it is zeroed regardless of
   monitor state. This does not depend on detecting anything.
 
-Grainer is deliberately NOT a source for this purpose: with no sample loaded it
+Granulator is deliberately NOT a source for this purpose: with no sample loaded it
 granulates the live input, which is what it shipped with.
 
 If feedback persists with a source machine loaded and "INPUT MUTED" showing,
@@ -217,7 +224,7 @@ toggling, the Shift escape, the machine palette, transport pads, jog behaviour,
 copy/paste/clear, resume repaints, presets end to end, and that the UI never
 reads or writes a key the engine does not handle. The third checks the manual
 site's copy of the machine table against the engine's — it exists because a
-careless edit silently swapped Warble's N.LEV and N.HPF, and the page would
+careless edit silently swapped Flutter's N.LEV and N.HPF, and the page would
 have shipped teaching the wrong knob.
 
 **Never mock `os.*` from the code under test.** `test/ui_overtake.mjs` carries
@@ -231,15 +238,15 @@ mock cannot quietly become too forgiving to catch the bug that broke Mono.
 
 - FX machine selection through the whole 26-machine list (the knob-response fix).
 - The sample path end to end: browser, WAV parse, chunked transfer across the
-  param channel, and **Single Player firing from a sequencer trig**. Audio out
+  param channel, and **One Shot firing from a sequencer trig**. Audio out
   of the Move.
 
-**Still NOT verified by ear:** Multi Player, Subtracks, Wavefinder and Shape;
+**Still NOT verified by ear:** Polysample, Slicer, Wavescan and Shape;
 polyphony and voice stealing; note-to-pitch tracking; anything about how the
 machines actually SOUND as opposed to producing signal.
 
 **CPU is still unmeasured on the A53.** `make bench` on a Mac puts the heaviest
-machine (Rumsklang Reverb) at ~164x realtime and two of them at ~93x. Belt
+machine (Roomtone Reverb) at ~164x realtime and two of them at ~93x. Belt
 benched 65x and was *extrapolated* to ~10-15% of an A53 core, so this looks
 affordable — but that is an extrapolation from a different module, not a
 measurement. A source machine in slot 1 with a reverb in slot 2 is the
@@ -253,23 +260,23 @@ Phase 2 (**done**) — `overwork`: the overtake build. Step buttons as Tonverk's
 trig conditions, micro-timing, retrig, pattern pages, copy/paste.
 Phase 3 (**machines done**, v0.7.0) — the SRC machines.
 
-All six now exist: **Single Player**, **Multi Player**, **Subtracks**,
-**Grainer** (reading the loaded sample), **Wavefinder** and **Shape**, on top of
+All six now exist: **One Shot**, **Polysample**, **Slicer**,
+**Granulator** (reading the loaded sample), **Wavescan** and **Shape**, on top of
 the sample memory and transfer below. Twenty-six machines total.
 
 Three needed adaptation, and the docs say so rather than letting the names
 imply otherwise:
 
-- **Multi Player** is eight-voice polyphonic with the documented vibrato, but
+- **Polysample** is eight-voice polyphonic with the documented vibrato, but
   Tonverk plays multi-sampled INSTRUMENTS mapped across the keyboard from its
   SD card. Work has one sample buffer, so every note plays that sample
   transposed. The polyphony and vibrato are real; the multisampling is not.
-- **Subtracks** implements the documented PLAYBACK set — play mode (forward,
+- **Slicer** implements the documented PLAYBACK set — play mode (forward,
   reverse, and both loops), STRT, LEN, L.ST. Its defining feature, eight
   samples on eight sequencer subtracks plus a supertrack, is NOT here and
   cannot be: Work is a two-slot FX chain, not an eight-track sampler. Reverse
-  and a separate loop point still make it a real gain over Single Player.
-- **Wavefinder** has no SD card and no 127-slot wavetable store, so the loaded
+  and a separate loop point still make it a real gain over One Shot.
+- **Wavescan** has no SD card and no 127-slot wavetable store, so the loaded
   sample IS the wavetable, read as a series of 2048-frame waves with POS
   interpolating across them. SLOT is replaced by MIX.
 
@@ -295,7 +302,7 @@ transfer leaves the previous sample playing rather than half of a new one.
 Budget is `WORK_SAMPLE_SECONDS` (8) of stereo int16 = 1.35 MB per instance.
 
 Voices: `WORK_VOICES` is 8, matching what the manual documents for Multi
-Player, Subtracks and Grainer. A voice is a read cursor plus an envelope, so
+Player, Slicer and Granulator. A voice is a read cursor plus an envelope, so
 eight cost almost nothing next to the FX machines. Allocation is oldest-first.
 Notes pitch the voice with 60 as unity, the sampler convention.
 

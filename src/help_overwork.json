@@ -141,7 +141,7 @@
         "LFOs and the filter",
         "envelope, it does",
         "not stutter audio.",
-        "Use Degrader FREZ",
+        "Use Decimator FREZ",
         "for that.",
         "Start/continue",
         "restarts pattern."
@@ -163,7 +163,7 @@
       ]
     },
     {
-      "title": "Grainer",
+      "title": "Granulator",
       "lines": [
         "Granulates the last",
         "2 s of live input.",
@@ -184,10 +184,10 @@
         "algorithms, not one",
         "with three presets:",
         "",
-        "Rumsklang: room",
+        "Roomtone: room",
         "with early refl.",
-        "Steel Box: plate",
-        "Supervoid: FDN,",
+        "Iron Room: plate",
+        "Voidspace: FDN,",
         "smoothest decay."
       ]
     },
@@ -284,7 +284,7 @@
         "",
         "A lock trig applies",
         "locks only —",
-        "Elektron's trigless",
+        "the classic trigless",
         "lock."
       ]
     }

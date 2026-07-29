@@ -1,20 +1,18 @@
 /*
- * Work — a clean-room FX engine for the Ableton Move, inspired by the
- * Elektron Tonverk's FX machines.
+ * Work — a clean-room FX engine for the Ableton Move.
  *
- * Clean-room: every machine here is written from the published Tonverk user
- * manual's parameter descriptions (OS 1.3.3, docs/tonverk-manual-1.3.3.txt).
- * No Elektron code or factory content is used. These are our own DSP
- * implementations that aim for the described character, not bit-exact clones.
+ * Every machine is an original DSP implementation, written from published
+ * descriptions of the effect it is named for rather than from anyone's
+ * source. They aim for the described character, not for bit-exact copies.
+ * See CLAUDE.md for the reference material and the clean-room boundary.
  *
  * Shared engine used by both builds:
  *   - work_fx.c        audio_fx_api_v2 wrapper (chain slots + Master FX slots)
  *   - work_overtake.c  plugin_api_v2 wrapper (full-surface overtake)  [phase 2]
  *
- * Architecture mirrors a Tonverk track's FX section: TWO insert FX slots in
- * series, each loaded with one of 20 machines, each machine exposing up to 8
- * parameters (Tonverk has 8 encoders per page; Move has 8 knobs — a 1:1 map).
- * Two FX LFOs modulate any FX-slot parameter, as on Tonverk's MOD pages 4/5.
+ * Architecture: TWO insert FX slots in series, each loaded with one of 26
+ * machines, each exposing up to 8 parameters — one per Move knob, a 1:1 map.
+ * Three FX LFOs and a modulation envelope reach any FX-slot parameter.
  *
  * Realtime rules (schwung docs/REALTIME_SAFETY.md): the render path never
  * allocates, never blocks, never logs. All buffers come from work_create().
@@ -27,20 +25,20 @@
 
 #define WORK_SR          44100
 #define WORK_SLOTS       2      /* insert FX 1 and 2, in series */
-#define WORK_PARAMS      8      /* Tonverk encoders A-H */
+#define WORK_PARAMS      8      /* knob A-H, one per Move encoder */
 #define WORK_LFOS        3      /* FX LFO 1, 2 and 3 (3 added in v0.3.0) */
 
 /* Longest delay line any machine can ask for: 2 s covers a 1/2 note at 60 BPM
- * and a whole note at 120 BPM. Saturator Delay clamps its division to this. */
+ * and a whole note at 120 BPM. Drive Delay clamps its division to this. */
 #define WORK_DLY_LEN     (WORK_SR * 2)
 
 /* The three reverbs are three DIFFERENT algorithms, not one tank with three
  * parameter sets — which is what they were until v0.2.0, and the single
  * biggest sonic simplification in the project:
  *
- *   Rumsklang  early reflections + a Schroeder comb/allpass tank  (large room)
- *   Steel Box  Dattorro figure-of-eight plate, modulated          (plate)
- *   Supervoid  Householder feedback delay network, shelved loop   (room->huge)
+ *   Roomtone  early reflections + a Schroeder comb/allpass tank  (large room)
+ *   Iron Room  Dattorro figure-of-eight plate, modulated          (plate)
+ *   Voidspace  Householder feedback delay network, shelved loop   (room->huge)
  *
  * Predelay is shared and capped at 500 ms.
  */
@@ -60,8 +58,8 @@
 #define WORK_FDN_LINES   8
 #define WORK_FDN_LEN     8192
 
-/* Grainer: concurrent grains in flight. Tonverk allows 8 per voice across 8
- * voices; Work is monotimbral, so 8 is the whole budget. */
+/* Granulator: concurrent grains in flight. Work is monotimbral, so this is
+ * the whole grain budget rather than a per-voice allowance. */
 #define WORK_GRAINS      8
 
 /* ------------------------------------------------------------- sample RAM
@@ -78,9 +76,8 @@
  * I/O in set_param would block the audio callback. Instead the UI reads the
  * WAV with the host's file bindings and pushes it through in chunks, and the
  * engine does nothing but a bounded memcpy per chunk. */
-/* Polyphony. Tonverk's Multi Player, Subtracks and Grainer are all documented
- * as eight-voice; matching that is cheap here because a voice is a read cursor
- * and an envelope, not a synth. Voices live in the slot struct, so they are
+/* Polyphony. Eight voices is cheap here because a voice is a read cursor and
+ * an envelope, not a synth. Voices live in the slot struct, so they are
  * allocated with it and the render path still never allocates. */
 #define WORK_VOICES 8
 
@@ -95,43 +92,42 @@
  * APPEND ONLY — inserting a machine renumbers saved presets. */
 typedef enum {
     WORK_FX_BYPASS = 0,
-    WORK_FX_CHRONO,      /* Chrono Pitch      granular pitch shift + fb + LFO  */
-    WORK_FX_COMB,        /* Comb +/- Filter   bipolar tuned comb, tempo LFO    */
-    WORK_FX_COMP,        /* Compressor        8 ratios, sidechain src + filter */
-    WORK_FX_DAISY,       /* Daisy Delay       drive/width/skew/tilt delay      */
-    WORK_FX_DEGRADER,    /* Degrader          bits/SRR/dropouts/ringmod/freeze */
-    WORK_FX_DIRT,        /* Dirtshaper        drive + rectify + noise ringmod  */
-    WORK_FX_FOLDER,      /* Filter Folder     HP > wavefolder > multimode > dist */
-    WORK_FX_FBANK,       /* Filterbank        8 fixed bands, 90 Hz - 4 kHz     */
-    WORK_FX_WARPER,      /* Frequency Warper  frequency shifter + sideband     */
-    WORK_FX_FLANGER,     /* Infinite Flanger  barber-pole, never reverses      */
-    WORK_FX_LPF,         /* Low-Pass Filter   4-pole 24 dB/oct + LFO + spread  */
-    WORK_FX_MMF,         /* Multimode Filter  LP-BP-HP morph + ADSR envelope   */
-    WORK_FX_CHORUS,      /* Panoramic Chorus  widening chorus w/ HP + width    */
-    WORK_FX_PHASE98,     /* Phase 98          4-to-6 stage blendable phaser    */
-    WORK_FX_RUMSKLANG,   /* Rumsklang Reverb  large-space reverb, early refl.  */
-    WORK_FX_SATDELAY,    /* Saturator Delay   128th-note grid, ping-pong       */
-    WORK_FX_STEELBOX,    /* Steel Box Reverb  90s plate character              */
-    WORK_FX_SUPERVOID,   /* Supervoid Reverb  shelved-feedback room-to-huge    */
-    WORK_FX_WARBLE,      /* Warble            tape pitch warble + noise        */
-    /* v0.2.0. Tonverk's Grainer is an SRC machine that granulates a SAMPLE,
-     * across 24 parameters on three pages. Work has no sample loading and one
-     * 8-knob page per machine, so this granulates the ROLLING INPUT BUFFER
-     * instead, with the eight parameters that most change the sound. What that
-     * costs, stated plainly: no sample slot, no AMNT/DIR/MODE/PAN pages, and a
-     * fixed Hann window in place of FADE + SHAPE. */
-    WORK_FX_GRAINER,     /* Grainer           live granular                   */
-    WORK_FX_SINGLE,      /* Single Player     one-shot sample voice            */
-    WORK_FX_MULTI,       /* Multi Player      polyphonic sample voice          */
-    WORK_FX_SUBTRACKS,   /* Subtracks         play modes + loop points         */
-    WORK_FX_WAVEFINDER,  /* Wavefinder        two wavetable oscillators        */
-    WORK_FX_SHAPE,       /* Shape             shelving EQ + width, no source   */
+    WORK_FX_CLOCK,      /* Clock Pitch       granular pitch shift + fb + LFO */
+    WORK_FX_COMB,       /* Comb Filter       bipolar tuned comb, tempo LFO */
+    WORK_FX_COMP,       /* Compressor        8 ratios, sidechain src + filter */
+    WORK_FX_CHAIN,      /* Chain Delay       drive/width/skew/tilt delay */
+    WORK_FX_DECIMATOR,  /* Decimator         bits/SRR/dropouts/ringmod/freeze */
+    WORK_FX_GRIT,       /* Gritshaper        drive + rectify + noise ringmod */
+    WORK_FX_FOLD,       /* Fold Filter       HP > wavefolder > multimode > dist */
+    WORK_FX_FBANK,      /* Filterbank        8 fixed bands, 90 Hz - 4 kHz */
+    WORK_FX_BENDER,     /* Spectrum Bender   frequency shifter + sideband */
+    WORK_FX_FLANGER,    /* Endless Flanger   barber-pole, never reverses */
+    WORK_FX_LPF,        /* Low-Pass Filter   4-pole 24 dB/oct + LFO + spread */
+    WORK_FX_MMF,        /* Multimode Filter  LP-BP-HP morph + ADSR envelope */
+    WORK_FX_CHORUS,     /* Wide Chorus       widening chorus w/ HP + width */
+    WORK_FX_PHASEARRAY, /* Phase Array       4-to-6 stage blendable phaser */
+    WORK_FX_ROOMTONE,   /* Roomtone Reverb   large-space reverb, early refl. */
+    WORK_FX_DRIVEDELAY, /* Drive Delay       128th-note grid, ping-pong */
+    WORK_FX_IRONROOM,   /* Iron Room Reverb  90s plate character */
+    WORK_FX_VOIDSPACE,  /* Voidspace Reverb  shelved-feedback room-to-huge */
+    WORK_FX_FLUTTER,    /* Flutter           tape pitch warble + noise */
+    /* v0.2.0. With no sample loaded this granulates the ROLLING INPUT BUFFER,
+     * which is what lets it granulate live audio. One 8-knob page holds the
+     * eight parameters that most change the sound; the reference design spends
+     * 24 across three pages, so no direction/mode/pan controls and a fixed
+     * Hann window in place of a fade/shape pair. */
+    WORK_FX_GRANULATOR, /* Granulator        live granular */
+    WORK_FX_ONESHOT,    /* One Shot          one-shot sample voice */
+    WORK_FX_POLYSAMPLE, /* Polysample        polyphonic sample voice */
+    WORK_FX_SLICER,     /* Slicer            play modes + loop points */
+    WORK_FX_WAVESCAN,   /* Wavescan          two wavetable oscillators */
+    WORK_FX_TILT,       /* Tilt              shelving EQ + width, no source */
     WORK_FX_COUNT
 } work_fx_t;
 
-/* Sidechain sources the Compressor can analyse. On Tonverk this spans
- * MAIN/TRK1-8/BUS1-4/IN A/IN B/IN AB; a Move FX slot only ever sees its own
- * input and the host mix, so we expose the reachable subset. */
+/* Sidechain sources the Compressor can analyse. A Move FX slot only ever sees
+ * its own input and the host mix, so those are the two that can be offered —
+ * per-track and per-bus taps have nothing to read here. */
 typedef enum {
     WORK_SC_INPUT = 0,   /* this slot's own input (classic insert comp)  */
     WORK_SC_MAIN,        /* the signal arriving at the slot pre-FX1      */
@@ -155,8 +151,9 @@ typedef enum {
  * Append only — the index is part of the pattern format. */
 #define WORK_LOCKABLE   19
 
-/* Trig conditions, following Elektron's set. NEI (neighbour track) has no
- * meaning for a single FX chain and is deliberately absent. */
+/* Trig conditions — the fill/previous/first/ratio set that step sequencers
+ * have converged on. A neighbour-track condition has no meaning for a single
+ * FX chain and is deliberately absent. */
 typedef enum {
     WORK_COND_OFF = 0,
     WORK_COND_FILL,      WORK_COND_NOT_FILL,
@@ -169,11 +166,9 @@ typedef enum {
     WORK_COND_COUNT
 } work_cond_t;
 
-/* Trig types. Tonverk distinguishes note trigs, lock trigs and trigless trigs;
- * a module with no voices has no note to place, so the distinction that
+/* Trig types. With no voices to place a note for, the distinction that
  * survives is whether the trig also RESTARTS the modulators. A LOCK trig
- * applies its parameter locks and nothing else, which is exactly Elektron's
- * trigless-lock behaviour. */
+ * applies its parameter locks and stops there. */
 typedef enum {
     WORK_TRIG_FULL = 0,   /* applies locks AND restarts envelope + LFOs */
     WORK_TRIG_LOCK,       /* applies locks only                         */
@@ -195,9 +190,8 @@ typedef struct {
     uint8_t  cond;                    /* work_cond_t                        */
     int8_t   micro;                   /* -23..+23, in 1/24ths of a step     */
     uint8_t  retrig;                  /* work_retrig_t                      */
-    /* Elektron's PROB is a per-step parameter separate from the trig
-     * condition, so it is one here too: 1..100, and 100 means always. Both
-     * gates must pass for the trig to fire. */
+    /* Probability is a per-step parameter separate from the trig condition:
+     * 1..100, where 100 means always. Both gates must pass to fire. */
     uint8_t  prob;
     uint8_t  trig_type;               /* work_trigtype_t                    */
     uint32_t lock_mask;               /* bit i set = parameter i is locked  */
@@ -221,16 +215,15 @@ typedef struct {
     uint8_t len;                      /* 0 = use the pattern's own length   */
 } work_song_row_t;
 
-/* Modulation envelope. Tonverk gives a track two voice LFOs, a mod envelope
- * and two FX LFOs; Work had only the FX LFOs until v0.3.0. AHD rather than
- * ADSR because there is no note to sustain against — it fires on each trig. */
+/* Modulation envelope, added in v0.3.0 alongside LFO 3. AHD rather than ADSR
+ * because there is no note to sustain against — it fires on each trig. */
 typedef struct {
     int8_t  dest;                     /* -1 = off, else a slot parameter    */
     uint8_t attack, hold, decay;
     uint8_t depth;                    /* bipolar around 64                  */
 } work_modenv_cfg_t;
 
-/* One sample voice. Multi Player and Subtracks are polyphonic, so a voice owns
+/* One sample voice. Polysample and Slicer are polyphonic, so a voice owns
  * everything that differs per note: where it is reading, how fast, its envelope
  * and its vibrato phase. */
 typedef struct {
@@ -246,14 +239,14 @@ typedef struct {
     uint32_t age;        /* for voice stealing: oldest goes first         */
 } work_voice_t;
 
-/* One insert slot: machine code + 8 parameters, each 0..127 like Elektron. */
+/* One insert slot: machine code + 8 parameters, each 0..127. */
 typedef struct {
     uint8_t machine;
     uint8_t p[WORK_PARAMS];
 } work_slot_cfg_t;
 
 /* FX LFO. Destination addresses a slot parameter as slot*8 + param, or -1 for
- * off. Tonverk's FX LFOs only reach FX-page parameters; same restriction here. */
+ * off. FX LFOs reach FX-slot parameters only. */
 typedef struct {
     int8_t  dest;        /* -1 = off, else 0..(WORK_SLOTS*WORK_PARAMS-1) */
     uint8_t speed;
@@ -334,11 +327,11 @@ const char *work_machine_name(int code);
 const char *work_cond_name(int cond);
 
 /* Label for a lockable parameter index, e.g. "1:TUNE" for slot 1 knob A when
- * slot 1 holds Chrono Pitch. Machine-dependent, so it takes the engine. */
+ * slot 1 holds Clock Pitch. Machine-dependent, so it takes the engine. */
 int work_lock_label(work_t *w, int index, char *buf, int buf_len);
 
 /* Parameter labels for a machine, index 0..7. Returns "" for unused knobs
- * (Bypass has none, Infinite Flanger has five). */
+ * (Bypass has none, Endless Flanger has five). */
 const char *work_param_name(int machine, int idx);
 
 #endif /* WORK_CORE_H */
