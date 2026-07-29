@@ -47,7 +47,8 @@ import {
     Cyan, Purple, SkyBlue, Lime, OrangeRed, BurntOrange, YellowGreen, TealGreen, Rose
 } from '/data/UserData/schwung/shared/constants.mjs';
 
-import { decodeDelta, setLED } from '/data/UserData/schwung/shared/input_filter.mjs';
+import { decodeDelta, setLED, shouldFilterMessage }
+    from '/data/UserData/schwung/shared/input_filter.mjs';
 
 import {
     announce, announceParameter, announceView
@@ -1475,6 +1476,25 @@ function handlePadRelease(note) {
 }
 
 function onMidiMessageInternal(data) {
+    /* Drop what is not ours before touching any state.
+     *
+     * This module ran without the house filter, and hardware showed why: a
+     * sysex dump streaming through the MIDI_IN ring arrives as a burst of
+     * bytes reinterpreted as three-byte messages — status 240, then 29, 58,
+     * 178, then 247 — and once the ring misaligns the stream degrades to an
+     * endless run of status=0 d1=0 d2=0. Thousands of them reached this
+     * handler.
+     *
+     * shouldFilterMessage() drops clock, sysex, aftertouch and the
+     * capacitive knob-touch notes. It does NOT catch the garbage BETWEEN the
+     * sysex markers, so the validity check is separate: a real MIDI status
+     * byte always has its high bit set, and anything without one is not a
+     * message at all. */
+    if (!data || data.length < 3) return;
+    if ((data[0] & 0x80) === 0) return;
+    if (shouldFilterMessage(data)) return;
+
+
     const status = data[0] & 0xF0;
     const d1 = data[1];
     const d2 = data[2];

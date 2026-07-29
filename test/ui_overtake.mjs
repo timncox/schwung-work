@@ -258,6 +258,11 @@ const STUBS = {
     `,
     '/data/UserData/schwung/shared/input_filter.mjs': `
         export function decodeDelta(v){ if(v===0) return 0; if(v>=1&&v<=63) return v; if(v>=65&&v<=127) return -(128-v); return 0; }
+        export function shouldFilterMessage(d){ const st=d[0], t=st&0xF0;
+            if(st===0xF8||st===0xF0||st===0xF7) return true;
+            if(t===0xD0||t===0xA0) return true;
+            if((t===0x90||t===0x80)&&d[1]<10) return true;
+            return false; }
         export function setLED(n,c,f){ globalThis.setLED(n,c,f); }
         export function setButtonLED(n,c,f){ globalThis.setButtonLED(n,c,f); }
     `,
@@ -1402,6 +1407,55 @@ async function testFailedLoadKeepsTheBrowserOpen() {
           `the browser closed on a failed load; screen was "${screen}"`);
 }
 
+
+/* Hardware, 2026-07-29: a sysex dump streamed through the MIDI_IN ring and
+ * reached this handler as a burst of bytes reinterpreted as three-byte
+ * messages — status 240, then 29, 58, 178, then 247 — after which the stream
+ * degraded to an endless run of status=0 d1=0 d2=0. Thousands arrived. The
+ * module ran without the house noise filter, so all of it was processed. */
+async function testGarbageMidiIsIgnored() {
+    console.log('sysex, clock and misaligned bytes never reach the surface');
+    const ctx = await loadUI();
+    ctx.host.init();
+    ctx.host.tick();
+    const before = ctx.screen.map((x) => x.text).join(' ');
+    ctx.writes.length = 0;
+
+    /* the exact stream captured from the device */
+    const garbage = [
+        [178, 0, 77], [240, 0, 33], [29, 1, 1], [58, 0, 77], [0, 247, 0],
+        [0xF8, 0, 0], [0xD0, 64, 0], [0xA0, 60, 100], [0x90, 3, 100]
+    ];
+    for (let i = 0; i < 200; i++) {
+        for (const g of garbage) ctx.host.onMidiMessageInternal(g);
+        ctx.host.onMidiMessageInternal([0, 0, 0]);
+    }
+    ctx.host.tick();
+
+    check(ctx.writes.length === 0,
+          `garbage MIDI wrote ${ctx.writes.length} parameters: ` +
+          JSON.stringify(ctx.writes.slice(0, 4)));
+    check(ctx.screen.map((x) => x.text).join(' ') === before,
+          'garbage MIDI changed what is on screen');
+}
+
+/* ...and real input must still get through the new guard. */
+async function testRealInputStillWorksThroughTheFilter() {
+    console.log('real pad and knob input survives the noise filter');
+    const ctx = await loadUI();
+    ctx.host.init();
+    await gotoGlobalPage(ctx);
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(KNOB1, 1));
+    check(ctx.writes.some((w) => w.key === 'machine1'),
+          'the filter swallowed a real knob turn');
+
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(noteOn(76));
+    ctx.host.onMidiMessageInternal(noteOff(76));
+    check(ctx.writes.length > 0, 'the filter swallowed a real pad press');
+}
+
 /* ------------------------------------------------------------------ run */
 
 const tests = [
@@ -1416,6 +1470,8 @@ const tests = [
     testCopyPasteClear,
     testNoUnknownWritesAnywhere,
     testResumeForcesRepaints,
+    testGarbageMidiIsIgnored,
+    testRealInputStillWorksThroughTheFilter,
     testMachineColorTableCoversEveryMachine,
     testPaletteNeverShadowsTheFunctionPads,
     testEveryMachineIsReachableFromThePalette,
