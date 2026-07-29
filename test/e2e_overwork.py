@@ -27,27 +27,20 @@ SETUP
     ssh -fN -L 47777:localhost:47777 ableton@move.local
     .venv-e2e/bin/pytest test/e2e_overwork.py -v
 
-WHAT WORKS AND WHAT DOES NOT (measured on the device, 2026-07-29)
-----------------------------------------------------------------
-READING works and is genuinely useful: `get_param` reaches the running overtake
-DSP, `snapshot_pad_leds` returns real LED state, `state()` reports the shim's
-view of the world. Those tests below are real.
+FULLY UNATTENDED, since schwung branch `agent/testbus-inject-overtake`
+-----------------------------------------------------------------------
+Two gaps in schwung blocked this and both are fixed there:
 
-MIDI INJECTION DOES NOT REACH AN OVERTAKE MODULE. `press_pad`, `press_step` and
-`inject_midi` write to the `/schwung-midi-inject` SHM, but with an overtake
-module active the injected events never arrive: pressing a palette pad leaves
-`machine1` unchanged and not one of the 32 pad LEDs moves, and the device log
-shows no corresponding OVERTAKE MIDI line. Verified by pressing pad 93 and
-diffing both the parameter and the full LED snapshot.
+  * injected MIDI never reached an overtake module. The module is fed from the
+    raw HARDWARE buffer while `shadow_drain_midi_inject` writes into Move's
+    MAILBOX for the firmware — the two never met. The shim now drains the ring
+    onto the overtake route instead while overtake_mode is set, and the mailbox
+    drain yields so the ring keeps its single consumer.
+  * `set_open_tool` answered "tool not found" for overtake modules, because its
+    lookup searched `scanForToolModules()` only. It now falls back to
+    `scanForOvertakeModules()`.
 
-So the input-driven tests are marked xfail rather than deleted — they are the
-ones worth having, and they document exactly what needs fixing in schwung's
-inject path before this suite can replace a human at the surface.
-
-Launching is a second gap: `set_open_tool` writes the command and shadow_ui
-reads it, but answers "tool not found: overwork" because its open_tool path
-searches `scanForToolModules()` while overtake modules come from
-`scanForOvertakeModules()`. Overwork must already be open.
+The fixture launches Overwork itself. No one needs to touch the Move.
 """
 import time
 
@@ -90,8 +83,54 @@ def overwork(bus):
     return bus
 
 
+def _param(bus, key, tries=6):
+    """get_param with a retry.
+
+    The param channel is a single shared-memory slot serviced once per SPI
+    frame; under contention a read comes back EMPTY rather than failing. A test
+    that takes that at face value reports a value of '' as a real change, which
+    is how `test_function_pads` claimed a function pad had loaded a machine."""
+    for _ in range(tries):
+        v = bus.get_param(key)
+        if v != "":
+            return v
+        bus.wait_frame(3)
+    return ""
+
+
 def _machines(bus):
-    return bus.get_param("machines").split(",")
+    return _param(bus, "machines").split(",")
+
+
+def _shift_latched_on_device(bus):
+    """Is the SHIM holding Shift down, regardless of what we inject?
+
+    Found on the device 2026-07-29: every one of 495 consecutive events logged
+    `hostShift=true` while the test bus reported `shift_held=0`. With Shift
+    latched, a knob turn edits the base value instead of writing a parameter
+    lock, a palette pad loads machine+21, and the slot pad opens the sample
+    browser — so a whole session looks broken in unrelated ways. No injected
+    shift-off can clear it: the hardware keeps asserting it."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["ssh", "-o", "ConnectTimeout=4", "ableton@move.local",
+             "tail -c 40000 /data/UserData/schwung/debug.log | "
+             "grep 'OVERTAKE MIDI' | grep -c hostShift=true"],
+            capture_output=True, text=True, timeout=20).stdout.strip()
+        return int(out or 0) > 0
+    except Exception:
+        return False
+
+
+def _release_modifiers(bus):
+    """Never assume the device's modifier state.
+
+    Shift was found latched on from earlier use, so an unshifted palette press
+    loaded machine 24 instead of 3 — the test read as a palette bug when the
+    surface was simply holding Shift. Tests establish what they depend on."""
+    bus.inject_midi(bytes([0x0B, 0xB0, 49, 0]))
+    bus.wait_frame(3)
 
 
 # ----------------------------------------------------------------- contract
@@ -121,14 +160,14 @@ def test_step_button_toggles_a_trig_and_does_not_fire_the_sample(overwork):
     """The bug that cost the most: steps arrive as NOTES, and the unhandled
     note fell through to the engine and triggered playback."""
     bus = overwork
-    before = bus.get_param("step0")
+    before = _param(bus, "step0")
 
     bus.press_step(STEP_FIRST)
     bus.wait_frame(4)
     bus.release_step(STEP_FIRST)
     bus.wait_frame(8)
 
-    after = bus.get_param("step0")
+    after = _param(bus, "step0")
     assert after != before, (
         f"pressing step 1 left step0 at {after!r} — the trig did not toggle"
     )
@@ -139,14 +178,16 @@ def test_step_button_toggles_a_trig_and_does_not_fire_the_sample(overwork):
     bus.wait_frame(4)
     bus.release_step(STEP_FIRST)
     bus.wait_frame(8)
-    assert bus.get_param("step0").split(":")[0] == "0"
+    assert _param(bus, "step0").split(":")[0] == "0"
 
 
-@pytest.mark.xfail(reason="injected MIDI does not reach an overtake module",
-                   strict=False)
 def test_hold_step_plus_knob_writes_a_parameter_lock(overwork):
     """THE gesture. Hold a step, turn a knob, that step remembers the value."""
     bus = overwork
+    if _shift_latched_on_device(bus):
+        pytest.skip("the device is holding SHIFT down — Shift deliberately "
+                    "escapes this gesture and edits the base value instead. "
+                    "Check the physical Shift button.")
     bus.set_param("machine1", "1")           # a machine with real parameters
     bus.wait_frame(8)
     bus.set_param("locks0", "")              # clear any locks on step 1
@@ -159,7 +200,7 @@ def test_hold_step_plus_knob_writes_a_parameter_lock(overwork):
     bus.release_step(STEP_FIRST)
     bus.wait_frame(8)
 
-    locks = bus.get_param("locks0")
+    locks = _param(bus, "locks0")
     assert locks, "hold-step + knob left no lock on step 1"
 
     bus.set_param("locks0", "")
@@ -167,13 +208,12 @@ def test_hold_step_plus_knob_writes_a_parameter_lock(overwork):
 
 # ------------------------------------------------------------------ palette
 
-@pytest.mark.xfail(reason="injected MIDI does not reach an overtake module",
-                   strict=False)
 @pytest.mark.parametrize("shift,offset", [(False, 0), (True, 21)])
 def test_palette_pads_load_machines(overwork, shift, offset):
     """Unshifted pads reach machines 0-20, Shift reaches 21 and up. The Shift
     bank exists because 26 machines do not fit 21 palette slots."""
     bus = overwork
+    _release_modifiers(bus)
     machines = _machines(bus)
     target = offset + 3
     if target >= len(machines):
@@ -186,11 +226,9 @@ def test_palette_pads_load_machines(overwork, shift, offset):
     bus.wait_frame(4)
     bus.release_pad(PALETTE_ROW1 + 3)
     bus.wait_frame(10)
-    if shift:
-        bus.inject_midi(bytes([0x0B, 0xB0, 49, 0]))
-        bus.wait_frame(2)
+    _release_modifiers(bus)
 
-    got = int(bus.get_param("machine1"))
+    got = int(_param(bus, "machine1"))
     assert got == target, (
         f"palette pad 4 {'with' if shift else 'without'} Shift loaded machine "
         f"{got} ({machines[got]}), expected {target} ({machines[target]})"
@@ -202,13 +240,14 @@ def test_function_pads_are_not_swallowed_by_the_palette(overwork):
     pad index straight to machine index made pressing Undo load a machine once
     the count passed 21."""
     bus = overwork
-    before = bus.get_param("machine1")
+    _release_modifiers(bus)
+    before = _param(bus, "machine1")
     for pad in (81, 82, 83):
         bus.press_pad(pad)
         bus.wait_frame(3)
         bus.release_pad(pad)
         bus.wait_frame(6)
-    assert bus.get_param("machine1") == before, (
+    assert _param(bus, "machine1") == before, (
         "a function pad changed the loaded machine"
     )
 
@@ -219,14 +258,14 @@ def test_sample_state_is_readable(overwork):
     """The UI reports load success from these, not from its own send finishing
     — the sample crosses shared memory and only the far end knows it landed."""
     bus = overwork
-    raw = bus.get_param("sample_max")
+    raw = _param(bus, "sample_max")
     if raw == "":
         pytest.skip("param channel contended — the read came back empty")
     assert int(raw) > 0
-    frames = int(bus.get_param("sample_frames"))
+    frames = int(_param(bus, "sample_frames") or 0)
     assert frames >= 0
     if frames:
-        assert bus.get_param("sample_name")
+        assert _param(bus, "sample_name")
 
 
 def test_source_machine_silences_the_live_input(overwork):
@@ -234,7 +273,7 @@ def test_source_machine_silences_the_live_input(overwork):
     mic with, so the input is removed from the path outright rather than
     waiting for the guard to detect risk."""
     bus = overwork
-    if int(bus.get_param("sample_frames")) == 0:
+    if int(_param(bus, "sample_frames") or 0) == 0:
         pytest.skip("load a sample first")
     machines = _machines(bus)
     single = machines.index("Single Player")
@@ -242,7 +281,7 @@ def test_source_machine_silences_the_live_input(overwork):
     bus.set_param("machine1", str(single))
     bus.set_param("monitor", "1")
     bus.wait_frame(10)
-    assert bus.get_param("machine1") == str(single)
+    assert _param(bus, "machine1") == str(single)
 
 
 # ---------------------------------------------------------------------- LEDs
