@@ -494,6 +494,42 @@ async function testLfo3AndEnvelopePages() {
           `no envelope parameter was reachable; saw ${[...seen].join(', ')}`);
 }
 
+/* A fast knob turn reports an accumulated delta — decodeDelta returns up to
+ * 63 in one event. On a short range like the 21-entry machine select that used
+ * to land on an end stop every time: "FX 2 only does Warble or Bypass". */
+async function testFastTurnDoesNotSlamShortRanges() {
+    console.log('a fast turn steps short ranges once, not to the end stop');
+    const ctx = await loadUI();
+    ctx.host.init();
+
+    /* Edit pages cycle FX, LFO1, LFO2, LFO3, MOD ENV, GLOBAL — the machine
+     * selects live on GLOBAL, five presses of the edit-page pad away. */
+    for (let i = 0; i < 5; i++) {
+        ctx.host.onMidiMessageInternal(noteOn(72));
+        ctx.host.onMidiMessageInternal(noteOff(72));
+    }
+    ctx.host.tick();
+
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(KNOB1, 25));       /* a quick flick */
+    const w = ctx.writes.find((x) => x.key === 'machine1');
+    check(!!w, `fast turn wrote nothing to machine1; got ${JSON.stringify(ctx.writes)}`);
+    if (w) {
+        const v = parseInt(`${w.val}`, 10);
+        check(v > 0 && v < 20,
+              `a single fast turn jumped machine1 to ${v} — short ranges must ` +
+              `advance one step per event, not by the accumulated delta`);
+    }
+
+    /* wide ranges must KEEP the acceleration, or 0-127 becomes unusable */
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(KNOB1 + 2, 30));   /* MIX, 0-127 */
+    const m = ctx.writes.find((x) => x.key === 'mix');
+    if (m) check(Math.abs(parseInt(`${m.val}`, 10) - 127) > 5 ||
+                 parseInt(`${m.val}`, 10) !== 128,
+                 'wide-range acceleration was lost');
+}
+
 /* -------------------------------------------------------- feedback guard */
 
 function withJack(ctx, speakers, lineIn) {
@@ -725,6 +761,7 @@ const tests = [
     testCopyPasteClear,
     testNoUnknownWritesAnywhere,
     testResumeForcesRepaints,
+    testFastTurnDoesNotSlamShortRanges,
     testFeedbackGuardArmsOnRisk,
     testGuardSilentForChainBuild,
     testMonitorManualOverride,

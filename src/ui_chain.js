@@ -72,8 +72,8 @@ const FX_KNOBS = (slot) => {
 };
 
 const PAGES = [
-    [ { key: 'machine1', label: 'FX 1', min: 0, max: 19,  step: 1 },
-      { key: 'machine2', label: 'FX 2', min: 0, max: 19,  step: 1 },
+    [ { key: 'machine1', label: 'FX 1', min: 0, max: 20,  step: 1 },
+      { key: 'machine2', label: 'FX 2', min: 0, max: 20,  step: 1 },
       { key: 'mix', label: 'MIX',  min: 0, max: 127, step: 1 } ],
     FX_KNOBS(1),
     FX_KNOBS(2),
@@ -203,7 +203,16 @@ function adjustKnob(i, delta) {
     const k = PAGES[page][i];
     if (!k) return;
 
-    let v = (values[k.key] | 0) + delta * k.step;
+    /* decodeDelta reports the ACCUMULATED movement, which for a quick turn is
+     * easily 20+. On a short range like the 21-machine select that lands on an
+     * end stop every time — the reported symptom was "FX 2 only does Warble or
+     * Bypass". Short ranges therefore advance one step per event regardless of
+     * how fast the knob moved; wide ranges keep the acceleration, which is
+     * what makes 0-127 usable. */
+    const span = k.max - k.min;
+    const move = span <= 32 ? (delta > 0 ? 1 : -1) : delta * k.step;
+
+    let v = (values[k.key] | 0) + move;
     if (v < k.min) v = k.min;
     if (v > k.max) v = k.max;
     if (v === values[k.key]) return;

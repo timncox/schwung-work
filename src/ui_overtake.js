@@ -366,7 +366,8 @@ function lockKnob(idx, knob, delta) {
     let base = parseInt(cur, 10);
     if (!Number.isFinite(base) || cur === '') base = cfg[k.key] | 0;
 
-    let v = base + delta;
+    const span = k.max - k.min;
+    let v = base + (span <= 32 ? (delta > 0 ? 1 : -1) : delta);
     if (v < k.min) v = k.min;
     if (v > k.max) v = k.max;
     host_module_set_param(`lock${idx}_${k.lock}`, `${v}`);
@@ -418,7 +419,11 @@ function adjustKnob(knob, delta) {
     const k = pageKnobs()[knob];
     if (!k || !k.key) return;
 
-    let v = (cfg[k.key] | 0) + delta;
+    /* Short ranges advance one step per event — see the note in ui_chain.js:
+     * decodeDelta is accumulated, so a quick turn otherwise slams a 21-entry
+     * machine select straight to an end stop. */
+    const span = k.max - k.min;
+    let v = (cfg[k.key] | 0) + (span <= 32 ? (delta > 0 ? 1 : -1) : delta);
     if (v < k.min) v = k.min;
     if (v > k.max) v = k.max;
     if (v === cfg[k.key]) return;
