@@ -703,7 +703,13 @@ function loadSampleFile(path) {
         ? `Loaded ${name}, cut to ${secs}s`
         : `Loaded ${name}, ${secs}s`;
     announce(sampleStatus);
-    needsRedraw = true;
+
+    /* Close on success. Leaving the browser open after a load left every pad
+     * inert with no sign why — you had picked your sample and the surface
+     * still would not respond, which reads as "the machine palette is
+     * broken". A FAILED load keeps the browser open, because there the next
+     * thing you want is another file. */
+    closeSampleBrowser();
     return true;
 }
 
@@ -764,7 +770,7 @@ function openSampleBrowser() {
 function closeSampleBrowser() {
     sampleMode = false;
     needsRedraw = true;
-    announceView('Overwork');
+    announceView(sampleLoaded ? `Overwork, sample ${sampleLoaded}` : 'Overwork');
 }
 
 function drawSampleBrowser() {
@@ -923,6 +929,7 @@ function adjustKnob(knob, delta) {
 }
 
 function loadMachine(code) {
+    sampleStatus = '';
     setNum(`machine${focusSlot + 1}`, code);
     fetchAll();
     announce(`${machineList[code] || code} in FX ${focusSlot + 1}`);
@@ -1211,8 +1218,14 @@ function drawUI() {
     if (heldStep >= 0) {
         const st = steps[heldStep];
         foot = `S${heldStep + 1} ${condList[st.cond] || ''} u${st.micro} L${st.nlocks} ${st.prob}%`;
+    } else if (sampleStatus) {
+        /* The result of the last load, on the MAIN screen — the browser closes
+         * on success, so without this the confirmation would vanish with it and
+         * a load would once again leave no trace. Cleared by the next edit. */
+        foot = sampleStatus;
     } else {
         foot = `Pg${patPage + 1} ${MODE_NAME[attrMode]}${fillLatched ? ' FILL' : ''}${liveRec ? ' REC' : ''}`;
+        if (sampleLoaded) foot += ` ${sampleLoaded}`;
     }
     print(0, 57, foot.length > 24 ? foot.slice(0, 24) : foot, 1);
 }

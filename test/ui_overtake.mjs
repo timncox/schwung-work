@@ -1179,6 +1179,13 @@ async function testSampleBrowserIsReachableAndLoads() {
     check(!!begin, 'jog click in the browser transferred nothing');
     check(ended, 'the transfer never committed');
 
+    /* A successful load closes the browser, so reopen it to pick another —
+     * that is the intended flow, not a workaround. */
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    ctx.host.onMidiMessageInternal(noteOn(70));
+    ctx.host.onMidiMessageInternal(noteOff(70));
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+
     /* jog scrolls to the other file and loads that one instead */
     ctx.host.onMidiMessageInternal(cc(JOG, 1));
     ctx.writes.length = 0;
@@ -1336,6 +1343,65 @@ async function testLoadTrustsTheEngineNotItself() {
     check(/failed/i.test(screen), `no failure shown; screen was "${screen}"`);
 }
 
+
+/* Leaving the browser open after a successful load left every pad inert with
+ * no sign why — reported from hardware as the machine palette not working,
+ * when in fact the browser was still swallowing input. */
+async function testLoadClosesTheBrowserAndPadsWorkAgain() {
+    console.log('a successful load closes the browser and returns the pads');
+    const ctx = await loadUI();
+    ctx.host.init();
+    ctx.vfs.dirs.add('/data/UserData/UserLibrary/Samples');
+    ctx.vfs.binaries.set('/data/UserData/UserLibrary/Samples/kick.wav',
+                         makeWav({ frames: 4410 }));
+
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    ctx.host.onMidiMessageInternal(noteOn(70));
+    ctx.host.onMidiMessageInternal(noteOff(70));
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    ctx.host.onMidiMessageInternal(cc(JOG_CLICK, 127));
+    ctx.host.tick();
+
+    const screen = ctx.screen.map((x) => x.text).join(' ');
+    check(!/SAMPLES/.test(screen),
+          `the browser stayed open after loading; screen was "${screen}"`);
+    check(/Loaded/.test(screen),
+          `the confirmation vanished with the browser; screen was "${screen}"`);
+
+    /* and the palette works again — this is the reported symptom */
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    ctx.host.onMidiMessageInternal(noteOn(92));
+    ctx.host.onMidiMessageInternal(noteOff(92));
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    const loaded = ctx.writes.find((w) => /^machine[12]$/.test(w.key));
+    check(loaded && parseInt(`${loaded.val}`, 10) === 21,
+          `Shift + first palette pad loaded ${loaded && loaded.val}, expected 21 ` +
+          `(Single Player) — the pads are still locked out`);
+}
+
+/* A FAILED load must keep the browser open: the next thing you want is
+ * another file, not to be thrown back to the sequencer. */
+async function testFailedLoadKeepsTheBrowserOpen() {
+    console.log('a failed load leaves the browser open to try another file');
+    const ctx = await loadUI();
+    ctx.host.init();
+    ctx.vfs.dirs.add('/data/UserData/UserLibrary/Samples');
+    ctx.vfs.binaries.set('/data/UserData/UserLibrary/Samples/bad.wav',
+                         Buffer.from('not a wav'));
+
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    ctx.host.onMidiMessageInternal(noteOn(70));
+    ctx.host.onMidiMessageInternal(noteOff(70));
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    ctx.host.onMidiMessageInternal(cc(JOG_CLICK, 127));
+    ctx.host.tick();
+
+    const screen = ctx.screen.map((x) => x.text).join(' ');
+    check(/SAMPLES/.test(screen),
+          `the browser closed on a failed load; screen was "${screen}"`);
+}
+
 /* ------------------------------------------------------------------ run */
 
 const tests = [
@@ -1357,6 +1423,8 @@ const tests = [
     testSampleScanIsBounded,
     testSampleBrowserIsReachableAndLoads,
     testBrowserReportsWhatTheEngineHolds,
+    testLoadClosesTheBrowserAndPadsWorkAgain,
+    testFailedLoadKeepsTheBrowserOpen,
     testBrowserReportsFailure,
     testLoadTrustsTheEngineNotItself,
     testSampleBrowserClosesTheWayItOpened,
