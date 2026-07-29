@@ -39,6 +39,7 @@ build/dump_contract: src/work_core.c src/work_core.h test/dump_contract.c
 
 test-ui: build/contract.json
 	node --no-warnings --experimental-vm-modules test/ui_overtake.mjs
+	node --no-warnings --experimental-vm-modules test/ui_chain.mjs
 
 # The manual site keeps its own copy of the machine table; this proves it still
 # matches the engine's. A swapped label already slipped through once.

@@ -2,8 +2,6 @@
  * Work — Signal Chain UI
  *
  * Loads when Work's component editor is opened inside a slot's Signal Chain.
- * (The Master FX editor uses auto-generated knob pages from module.json's
- * ui_hierarchy instead.)
  *
  * Input reality for a slot editor, established on hardware during Smack
  * v0.12.2/v0.12.3: Move firmware keeps the pad grid and the Capture button,
@@ -11,14 +9,34 @@
  * Back. Everything here is therefore knob- and jog-driven — do not add pad
  * interactions to this file.
  *
+ * READING A PARAMETER IS EXPENSIVE HERE. In a chain editor schwung shims
+ * host_module_get_param onto shadow_get_param (setupModuleParamShims in
+ * shadow_ui.js), and that is a blocking shared-memory round-trip to the shim,
+ * serviced once per SPI frame — schwung's own comment above js_shadow_get_param
+ * calls it "the where-does-the-tick-time-go measurement". One read costs ~23 ms
+ * of busy-wait and gives up after 100 ms.
+ *
+ * This file used to re-read all 36 of its keys on every machine-select detent.
+ * That is ~0.8 s of stall per click (reported as "I can change fx but it's
+ * super slow"), and the resulting contention made individual reads time out —
+ * a timed-out read fell through to 0 and was written back on the next turn,
+ * snapping the slot to Bypass. Two rules, both load-bearing:
+ *
+ *   1. The knob handler NEVER reads. It updates the local mirror and writes.
+ *   2. A failed read leaves the mirror alone. Absent is not zero.
+ *
+ * Everything else is a budgeted background refresh of only the keys the
+ * visible page actually draws.
+ *
  * Controls:
  *   Jog turn            move between pages
  *   Jog click           jump back to the MACHINES page
  *   Shift + jog click   swap the module in this slot
  *   Knobs 1-8           the parameters of the current page
  *
- * Knob labels are fetched from the DSP ("labels1"/"labels2") rather than
- * duplicated here, so adding a machine in C cannot leave this file stale.
+ * Knob labels and the machine list are fetched from the DSP ("labels1",
+ * "labels2", "machines") rather than duplicated here, so adding a machine in C
+ * cannot leave this file stale.
  *
  * QuickJS loads this as an ES module, which means strict mode: every
  * identifier must be declared. An assigned-but-undeclared variable throws on
@@ -72,9 +90,12 @@ const FX_KNOBS = (slot) => {
 };
 
 const PAGES = [
-    [ { key: 'machine1', label: 'FX 1', min: 0, max: 20,  step: 1 },
-      { key: 'machine2', label: 'FX 2', min: 0, max: 20,  step: 1 },
-      { key: 'mix', label: 'MIX',  min: 0, max: 127, step: 1 } ],
+    /* `max` for the two machine selects is a placeholder — the real bound is
+     * taken from the engine's own list in applyMachineRange(). A constant here
+     * is what left Grainer unreachable when the 21st machine landed. */
+    [ { key: 'machine1', label: 'FX 1', min: 0, max: 0,   step: 1 },
+      { key: 'machine2', label: 'FX 2', min: 0, max: 0,   step: 1 },
+      { key: 'mix',      label: 'MIX',  min: 0, max: 127, step: 1 } ],
     FX_KNOBS(1),
     FX_KNOBS(2),
     LFO_KNOBS(1),
@@ -88,51 +109,117 @@ let shiftHeld   = false;
 let needsRedraw = true;
 let tickCount   = 0;
 
-let values      = {};      /* key -> number, mirrored from the DSP  */
-let machineName = ['Bypass', 'Bypass'];
+let values      = {};           /* key -> number, mirrored from the DSP    */
+let machineName = ['--', '--'];
 let fxLabels    = [[], []];
 let machineList = [];
+let labelsDirty = [true, true];
+
+/* Background-refresh budget. BURST covers a full page plus both label strings
+ * so a page or machine change fills in within a few hundred ms; the steady
+ * trickle afterwards only exists so edits made from the web editor or a preset
+ * load eventually show up here. */
+const BURST_READS    = 20;
+const REFRESH_PERIOD = 8;       /* ticks between trickle reads (~5.5/sec) */
+
+let refreshCursor = 0;
+let burst         = 0;
 
 /* ------------------------------------------------------------- DSP access */
 
-function getParam(key) {
+/* One blocking round-trip. Returns null for "no answer" — which is NOT the
+ * same as "zero", and must never be collapsed into one. */
+function readRaw(key) {
     const v = host_module_get_param(key);
-    return v === null || v === undefined ? '' : `${v}`;
+    if (v === null || v === undefined) return null;
+    const s = `${v}`;
+    return s.length ? s : null;
 }
 
-function getNum(key) {
-    const n = parseInt(getParam(key), 10);
-    return Number.isFinite(n) ? n : 0;
+/* Mirror one numeric key. Returns true if the mirrored value changed.
+ * A failed or unparseable read is a no-op: falling back to 0 here is what let
+ * a timed-out round-trip rewrite the slot to Bypass. */
+function readNum(key) {
+    const s = readRaw(key);
+    if (s === null) return false;
+    const n = parseInt(s, 10);
+    if (!Number.isFinite(n)) return false;
+    if (values[key] === n) return false;
+    values[key] = n;
+    return true;
 }
 
-function setNum(key, v) {
-    values[key] = v;
-    host_module_set_param(key, `${v}`);
+/* The machine select's range is the engine's list length, never a constant. */
+function applyMachineRange() {
+    const max = machineList.length > 0 ? machineList.length - 1 : 0;
+    PAGES[PAGE_MACHINES][0].max = max;
+    PAGES[PAGE_MACHINES][1].max = max;
 }
 
-/* Pull everything the screen shows. Called on init and periodically, so edits
- * made from the Master FX page or a preset load appear here too. */
-function fetchAll() {
-    const before = JSON.stringify(values) + machineName.join('|');
-
-    for (let p = 0; p < PAGE_COUNT; p++) {
-        for (const k of PAGES[p]) values[k.key] = getNum(k.key);
+/* Resolve both slot machine names from the mirror. Local — costs no reads. */
+function syncMachineNames() {
+    for (let s = 0; s < 2; s++) {
+        const code = values[`machine${s + 1}`];
+        if (code === undefined) machineName[s] = '--';
+        else machineName[s] = machineList[code] || `#${code}`;
     }
+}
 
-    const list = getParam('machines');
-    if (list) machineList = list.split(',');
+function readLabels(s) {
+    const lab = readRaw(`labels${s + 1}`);
+    if (lab === null) return false;
+    fxLabels[s] = lab.split(',');
+    labelsDirty[s] = false;
+    return true;
+}
+
+/* One unit of background refresh, cheapest-useful-first: the machine list
+ * (nothing can be named without it), then labels for a slot whose machine just
+ * changed, then one numeric key of the VISIBLE page in round-robin. Keys on
+ * pages that are not on screen are deliberately not read at all. */
+function refreshStep() {
+    if (machineList.length === 0) {
+        const list = readRaw('machines');
+        if (list) {
+            machineList = list.split(',');
+            applyMachineRange();
+            syncMachineNames();
+            needsRedraw = true;
+        }
+        return;
+    }
 
     for (let s = 0; s < 2; s++) {
-        const code = values[`machine${s + 1}`] | 0;
-        machineName[s] = machineList[code] || `#${code}`;
-        const lab = getParam(`labels${s + 1}`);
-        fxLabels[s] = lab ? lab.split(',') : [];
+        if (labelsDirty[s]) {
+            if (readLabels(s)) needsRedraw = true;
+            return;
+        }
     }
 
-    if (JSON.stringify(values) + machineName.join('|') !== before) needsRedraw = true;
+    const knobs = PAGES[page];
+    if (knobs.length === 0) return;
+    const k = knobs[refreshCursor % knobs.length];
+    refreshCursor++;
+    if (readNum(k.key)) {
+        if (k.key === 'machine1' || k.key === 'machine2') syncMachineNames();
+        needsRedraw = true;
+    }
 }
 
 /* --------------------------------------------------------------- rendering */
+
+const SCREEN_W = 128;
+
+/* Truncate to a MEASURED pixel width. The Move font is proportional, so the
+ * old fixed six-character slice both cut short names that would have fitted
+ * and let wide ones run into the next column — the "text is scrunched"
+ * report. text_width is local font metrics, not a round-trip; it is cheap. */
+function fit(s, maxPx) {
+    let t = `${s}`;
+    if (text_width(t) <= maxPx) return t;
+    while (t.length > 1 && text_width(t) > maxPx) t = t.slice(0, -1);
+    return t;
+}
 
 /* Label for knob `i` on the current page. FX pages defer to the DSP's table
  * so the machine's real abbreviation (TUNE, FDBK, N.FRQ...) is shown. */
@@ -147,16 +234,15 @@ function knobLabel(i) {
 }
 
 /* Display string for knob `i`: machine names, waveform names and the LFO's
- * Off/destination read better than raw numbers. */
+ * Off/destination read better than raw numbers. "--" means not yet mirrored,
+ * which is honest — it is never shown as 0. */
 function knobValue(i) {
     const k = PAGES[page][i];
     if (!k) return '';
-    const v = values[k.key] | 0;
+    const v = values[k.key];
+    if (v === undefined) return '--';
 
-    if (k.key === 'machine1' || k.key === 'machine2') {
-        const nm = machineList[v] || `#${v}`;
-        return nm.length > 6 ? nm.slice(0, 6) : nm;
-    }
+    if (k.key === 'machine1' || k.key === 'machine2') return machineList[v] || `#${v}`;
     if (k.key.endsWith('_wave')) return WAVE_NAME[v % 7];
     if (k.key.endsWith('_trig')) return v ? 'Retrig' : 'Free';
     if (k.key.endsWith('_dest')) {
@@ -166,62 +252,118 @@ function knobValue(i) {
     return `${v}`;
 }
 
+function drawHeader(left, right) {
+    print(0, 1, left, 1);
+    if (right) {
+        /* Right-aligned into whatever the title leaves, with a 4 px gap, so a
+         * long machine name shortens instead of overprinting "FX 1". */
+        const t = fit(right, SCREEN_W - text_width(left) - 4);
+        print(SCREEN_W - text_width(t), 1, t, 1);
+    }
+    fill_rect(0, 9, SCREEN_W, 1, 1);
+}
+
+function drawFooter(hint) {
+    fill_rect(0, 55, SCREEN_W, 1, 1);
+    print(0, 57, fit(hint, SCREEN_W), 1);
+}
+
+/* The machines page carries three values, so it gets full-width rows and the
+ * whole machine name — "Panoramic Chorus", not "Panora". */
+const ROW_Y       = [14, 27, 40];
+const ROW_LABEL_W = 24;
+const ROW_VALUE_X = 28;
+
+function drawMachinePage() {
+    const knobs = PAGES[PAGE_MACHINES];
+    for (let i = 0; i < knobs.length; i++) {
+        print(0, ROW_Y[i], fit(knobs[i].label, ROW_LABEL_W), 1);
+        print(ROW_VALUE_X, ROW_Y[i], fit(knobValue(i), SCREEN_W - ROW_VALUE_X), 1);
+    }
+}
+
+/* FX and LFO pages keep the 4x2 grid because it maps to the physical knobs —
+ * knob 5 sits below knob 1. Columns are 32 px with a 2 px gutter so adjacent
+ * columns cannot touch. */
+const COL_W  = 32;
+const GUTTER = 2;
+
+function drawGridPage() {
+    const knobs = PAGES[page];
+    for (let i = 0; i < knobs.length; i++) {
+        const lab = knobLabel(i);
+        if (!lab) continue;
+        const x = (i % 4) * COL_W;
+        const y = 13 + (i < 4 ? 0 : 1) * 20;
+        const w = COL_W - GUTTER;
+        print(x, y, fit(lab, w), 1);
+        print(x, y + 9, fit(knobValue(i), w), 1);
+    }
+}
+
 function drawUI() {
     clear_screen();
 
-    /* Header: page name left, the relevant machine right */
-    print(0, 1, PAGE_NAME[page], 1);
-    let right = '';
-    if (page === PAGE_FX1) right = machineName[0];
-    else if (page === PAGE_FX2) right = machineName[1];
-    else if (page === PAGE_MACHINES) right = `${page + 1}/${PAGE_COUNT}`;
-    else right = `${page + 1}/${PAGE_COUNT}`;
-    if (right.length > 18) right = right.slice(0, 18);
-    print(128 - text_width(right), 1, right, 1);
-    fill_rect(0, 9, 128, 1, 1);
-
-    /* Four columns, two rows — the eight knobs in hardware order */
-    for (let i = 0; i < PAGES[page].length; i++) {
-        const lab = knobLabel(i);
-        if (!lab) continue;
-        const col = i % 4;
-        const row = i < 4 ? 0 : 1;
-        const x   = col * 32;
-        const y   = 13 + row * 20;
-        print(x, y, lab.length > 6 ? lab.slice(0, 6) : lab, 1);
-        print(x, y + 9, knobValue(i), 1);
+    if (page === PAGE_MACHINES) {
+        drawHeader('MACHINES', `${page + 1}/${PAGE_COUNT}`);
+        drawMachinePage();
+        drawFooter('Jog: page');
+        return;
     }
 
-    fill_rect(0, 55, 128, 1, 1);
-    const hint = page === PAGE_MACHINES ? 'Jog: page' : 'Jog: page  Click: home';
-    print(0, 57, hint, 1);
+    let right = `${page + 1}/${PAGE_COUNT}`;
+    if (page === PAGE_FX1) right = machineName[0];
+    else if (page === PAGE_FX2) right = machineName[1];
+    drawHeader(PAGE_NAME[page], right);
+    drawGridPage();
+    drawFooter('Jog:page  Click:home');
 }
 
 /* ------------------------------------------------------------------ input */
+
+/* decodeDelta reports ACCUMULATED encoder movement — the shim batches ticks
+ * per SPI frame, so one brisk turn arrives as a single event carrying 20+.
+ * Applying that raw to a 21-entry machine select lands on an end stop every
+ * time ("fx 2 only does warble or bypass"); clamping it to one step per event
+ * made crossing the list take twenty separate clicks ("super slow"). Cap the
+ * magnitude at a quarter of the range instead: a single detent still moves
+ * exactly one, and the fastest possible spin crosses the whole list in four. */
+function scaledMove(k, delta) {
+    const span = k.max - k.min;
+    const cap  = span > 0 ? Math.ceil(span / 4) : 1;
+    const mag  = Math.min(Math.abs(delta), Math.max(1, cap));
+    return (delta > 0 ? mag : -mag) * k.step;
+}
 
 function adjustKnob(i, delta) {
     const k = PAGES[page][i];
     if (!k) return;
 
-    /* decodeDelta reports the ACCUMULATED movement, which for a quick turn is
-     * easily 20+. On a short range like the 21-machine select that lands on an
-     * end stop every time — the reported symptom was "FX 2 only does Warble or
-     * Bypass". Short ranges therefore advance one step per event regardless of
-     * how fast the knob moved; wide ranges keep the acceleration, which is
-     * what makes 0-127 usable. */
-    const span = k.max - k.min;
-    const move = span <= 32 ? (delta > 0 ? 1 : -1) : delta * k.step;
+    /* Never derive a written value from a base we have not actually read —
+     * that is how a timed-out read used to become a real edit. Ask for a
+     * refresh and ignore this detent instead. */
+    const cur = values[k.key];
+    if (cur === undefined) { burst = BURST_READS; return; }
 
-    let v = (values[k.key] | 0) + move;
+    let v = cur + scaledMove(k, delta);
     if (v < k.min) v = k.min;
     if (v > k.max) v = k.max;
-    if (v === values[k.key]) return;
+    if (v === cur) return;
 
-    setNum(k.key, v);
+    values[k.key] = v;
+    host_module_set_param(k.key, `${v}`);
 
-    /* Selecting a machine reloads that slot's defaults in the DSP, so the
-     * whole page has to be re-read rather than just this one knob. */
-    if (k.key === 'machine1' || k.key === 'machine2') fetchAll();
+    /* Selecting a machine installs that machine's defaults in the DSP, so the
+     * slot's eight parameters and its knob labels are now stale. Mark them for
+     * the background refresh — reading them HERE is what made scrolling the
+     * machine list unusable. */
+    if (k.key === 'machine1' || k.key === 'machine2') {
+        const s = k.key === 'machine1' ? 0 : 1;
+        labelsDirty[s] = true;
+        for (const p of PAGES[s === 0 ? PAGE_FX1 : PAGE_FX2]) delete values[p.key];
+        syncMachineNames();
+        burst = BURST_READS;
+    }
 
     announceParameter(knobLabel(i) || k.label, knobValue(i));
     needsRedraw = true;
@@ -232,7 +374,8 @@ function setPage(p) {
     if (p >= PAGE_COUNT) p = 0;
     if (p === page) return;
     page = p;
-    fetchAll();
+    refreshCursor = 0;
+    burst = BURST_READS;
     let spoken = PAGE_NAME[page];
     if (page === PAGE_FX1) spoken = `FX 1, ${machineName[0]}`;
     else if (page === PAGE_FX2) spoken = `FX 2, ${machineName[1]}`;
@@ -287,7 +430,21 @@ globalThis.init = function () {
     page = PAGE_MACHINES;
     shiftHeld = false;
     values = {};
-    fetchAll();
+    machineList = [];
+    machineName = ['--', '--'];
+    fxLabels = [[], []];
+    labelsDirty = [true, true];
+    refreshCursor = 0;
+    tickCount = 0;
+
+    /* Four reads at load — the machine list plus the three values the first
+     * page draws. Everything else fills in over the following ticks and reads
+     * "--" until it does. */
+    refreshStep();
+    for (const k of PAGES[PAGE_MACHINES]) readNum(k.key);
+    syncMachineNames();
+
+    burst = BURST_READS;
     announceView('Work');
     needsRedraw = true;
     drawUI();
@@ -295,9 +452,16 @@ globalThis.init = function () {
 
 globalThis.tick = function () {
     tickCount++;
-    /* Re-read roughly twice a second so edits from the web editor or a
-     * preset load show up here without a page change. */
-    if (tickCount % 12 === 0) fetchAll();
+
+    let budget = 0;
+    if (burst > 0) {
+        budget = burst >= 2 ? 2 : 1;
+        burst -= budget;
+    } else if (tickCount % REFRESH_PERIOD === 0) {
+        budget = 1;
+    }
+    while (budget-- > 0) refreshStep();
+
     if (needsRedraw) {
         drawUI();
         needsRedraw = false;

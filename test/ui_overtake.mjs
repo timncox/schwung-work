@@ -97,6 +97,7 @@ function makeHost() {
     const unknownWrites = new Set();
     const leds = new Map();
     const screen = [];
+    const roundTrips = [];   /* one entry per blocking read of the DSP */
 
     const vfs = makeVFS();
 
@@ -115,7 +116,11 @@ function makeHost() {
         },
         host_ensure_dir(path) { vfs.dirs.add(path); return true; },
 
+        /* Every one of these is a blocking round-trip on hardware, serviced
+         * once per SPI frame. Counting them is the point — a UI that is
+         * "correct" but takes sixty frames to redraw is broken on the Move. */
         host_module_get_param(key) {
+            roundTrips.push({ bulk: false, keys: [key] });
             reads.push(key);
             if (key in store) return store[key];
             if (familyServed(key)) {
@@ -128,6 +133,51 @@ function makeHost() {
             }
             unknownReads.add(key);
             return null;
+        },
+        /* BULK_GET, transcribed from shim_handle_param_bulk / bulk_next in
+         * schwung's src/schwung_shim.c — NOT from the code under test. The
+         * request is "<count>\n" then count records of "<len>\n<key>"; the
+         * response is the same shape carrying values, and a key the DSP does
+         * not answer comes back as a zero-length record rather than being
+         * omitted. The shim refuses more than 64 items outright. */
+        host_module_get_params(blob) {
+            const s = `${blob}`;
+            let p = 0;
+            const readLen = () => {
+                let n = 0, any = false;
+                while (p < s.length && s[p] >= '0' && s[p] <= '9') {
+                    n = n * 10 + (s.charCodeAt(p) - 48); p++; any = true;
+                }
+                if (!any || s[p] !== '\n') return -1;
+                p++;
+                return n;
+            };
+            const count = readLen();
+            if (count < 0) return null;
+            if (count > 64) return null;              /* SHADOW_BULK_MAX_ITEMS */
+            const keys = [];
+            for (let i = 0; i < count; i++) {
+                const len = readLen();
+                if (len < 0) return null;
+                keys.push(s.slice(p, p + len));
+                p += len;
+            }
+            roundTrips.push({ bulk: true, keys });
+            let out = `${keys.length}\n`;
+            for (const k of keys) {
+                reads.push(k);
+                let v = null;
+                if (k in store) v = store[k];
+                else if (familyServed(k)) {
+                    if (/^lock\d+_\d+$/.test(k)) v = '-1';
+                    else if (/^step\d+$/.test(k)) v = '0:0:0:0:0';
+                    else if (/^locks\d+$/.test(k)) v = '';
+                    else if (/^locklabel\d+$/.test(k)) v = '?';
+                }
+                if (v === null) { unknownReads.add(k); v = ''; }
+                out += `${`${v}`.length}\n${v}`;
+            }
+            return out;
         },
         host_module_set_param(key, val) {
             writes.push({ key, val });
@@ -157,7 +207,7 @@ function makeHost() {
         console
     };
     host.globalThis = host;
-    return { host, vfs, writes, reads, unknownReads, unknownWrites, leds, screen, store };
+    return { host, vfs, writes, reads, roundTrips, unknownReads, unknownWrites, leds, screen, store };
 }
 
 /* Stub the three schwung shared modules the UI imports. */
@@ -494,14 +544,15 @@ async function testLfo3AndEnvelopePages() {
           `no envelope parameter was reachable; saw ${[...seen].join(', ')}`);
 }
 
-/* A fast knob turn reports an accumulated delta — decodeDelta returns up to
- * 63 in one event. On a short range like the 21-entry machine select that used
- * to land on an end stop every time: "FX 2 only does Warble or Bypass". */
-async function testFastTurnDoesNotSlamShortRanges() {
-    console.log('a fast turn steps short ranges once, not to the end stop');
-    const ctx = await loadUI();
-    ctx.host.init();
-
+/* Knob response has now been wrong in BOTH directions on hardware, so this
+ * pins the exact numbers rather than a range.
+ *
+ * decodeDelta returns ACCUMULATED movement — up to 63 from one event. Applied
+ * raw to the 21-entry machine select it hit an end stop every time ("fx 2 only
+ * does warble or bypass"); clamped to one step per event, crossing the list
+ * took twenty separate clicks ("super slow"). The rule is a cap of a quarter
+ * of the range: one detent moves one, a full-speed spin moves ceil(span/4). */
+async function gotoGlobalPage(ctx) {
     /* Edit pages cycle FX, LFO1, LFO2, LFO3, MOD ENV, GLOBAL — the machine
      * selects live on GLOBAL, five presses of the edit-page pad away. */
     for (let i = 0; i < 5; i++) {
@@ -509,25 +560,100 @@ async function testFastTurnDoesNotSlamShortRanges() {
         ctx.host.onMidiMessageInternal(noteOff(72));
     }
     ctx.host.tick();
+}
 
+/* Start the UI with a chosen value already in the DSP, on the GLOBAL page.
+ * The value has to be in the store BEFORE init — the UI mirrors the DSP at
+ * load, and deliberately does not re-read on every knob event. */
+async function atGlobalWith(seed) {
+    const ctx = await loadUI();
+    Object.assign(ctx.store, seed);
+    ctx.host.init();
+    await gotoGlobalPage(ctx);
     ctx.writes.length = 0;
-    ctx.host.onMidiMessageInternal(cc(KNOB1, 25));       /* a quick flick */
-    const w = ctx.writes.find((x) => x.key === 'machine1');
-    check(!!w, `fast turn wrote nothing to machine1; got ${JSON.stringify(ctx.writes)}`);
-    if (w) {
-        const v = parseInt(`${w.val}`, 10);
-        check(v > 0 && v < 20,
-              `a single fast turn jumped machine1 to ${v} — short ranges must ` +
-              `advance one step per event, not by the accumulated delta`);
-    }
+    return ctx;
+}
 
-    /* wide ranges must KEEP the acceleration, or 0-127 becomes unusable */
-    ctx.writes.length = 0;
-    ctx.host.onMidiMessageInternal(cc(KNOB1 + 2, 30));   /* MIX, 0-127 */
+async function testKnobResponseCurve() {
+    console.log('knob response: one detent moves one, a fast spin moves a quarter of the range');
+
+    const nMachines = JSON.parse(
+        fs.readFileSync(path.join(root, 'build/contract.json'), 'utf8')
+    ).get.machines.split(',').length;                 /* 21, from the engine */
+    const cap = Math.ceil((nMachines - 1) / 4);
+
+    let ctx = await atGlobalWith({ machine1: '5' });
+    ctx.host.onMidiMessageInternal(cc(KNOB1, 1));     /* one detent */
+    let w = ctx.writes.find((x) => x.key === 'machine1');
+    check(w && parseInt(`${w.val}`, 10) === 6,
+          `one detent moved machine1 to ${w && w.val} — expected 6`);
+
+    ctx = await atGlobalWith({ machine1: '5' });
+    ctx.host.onMidiMessageInternal(cc(KNOB1, 25));    /* a full-speed spin */
+    w = ctx.writes.find((x) => x.key === 'machine1');
+    check(w && parseInt(`${w.val}`, 10) === 5 + cap,
+          `a 25-detent event moved machine1 to ${w && w.val} — expected ${5 + cap}: ` +
+          `neither an end stop nor a single step`);
+
+    /* the top of the list must be REACHABLE — Grainer was excluded when this
+     * range was a hardcoded constant */
+    ctx = await atGlobalWith({ machine1: `${nMachines - 2}` });
+    ctx.host.onMidiMessageInternal(cc(KNOB1, 40));
+    w = ctx.writes.find((x) => x.key === 'machine1');
+    check(w && parseInt(`${w.val}`, 10) === nMachines - 1,
+          `could not reach the last machine (${nMachines - 1}); got ${w && w.val}`);
+
+    /* wide ranges keep the acceleration, or 0-127 becomes unusable */
+    ctx = await atGlobalWith({ mix: '40' });
+    ctx.host.onMidiMessageInternal(cc(KNOB1 + 2, 20));   /* MIX, 0-127 */
     const m = ctx.writes.find((x) => x.key === 'mix');
-    if (m) check(Math.abs(parseInt(`${m.val}`, 10) - 127) > 5 ||
-                 parseInt(`${m.val}`, 10) !== 128,
-                 'wide-range acceleration was lost');
+    check(m && parseInt(`${m.val}`, 10) === 60,
+          `wide-range acceleration was lost: mix went to ${m && m.val}, expected 60`);
+}
+
+/* Every read is a blocking round-trip to the shim serviced once per SPI frame.
+ * fetchAll wants ~58 keys; one at a time that is over a second of stall, and it
+ * runs from the machine-select handler. It must use the bulk path. */
+async function testFetchAllUsesBulkReads() {
+    console.log('a full refresh costs a couple of round-trips, not sixty');
+    const ctx = await loadUI();
+    ctx.host.init();
+
+    ctx.roundTrips.length = 0;
+    ctx.host.onMidiMessageInternal(noteOn(76));      /* palette: load a machine */
+    ctx.host.onMidiMessageInternal(noteOff(76));
+
+    check(ctx.roundTrips.length > 0, 'loading a machine refreshed nothing');
+    check(ctx.roundTrips.length <= 4,
+          `a machine change cost ${ctx.roundTrips.length} round-trips — at ~23 ms ` +
+          `each that is the "super slow" stall; batch them with get_params`);
+    const bulk = ctx.roundTrips.filter((r) => r.bulk).length;
+    check(bulk > 0, 'the bulk get_params path was never used');
+}
+
+/* The bulk wire format is schwung's, not ours: "<count>\n" then count records
+ * of "<len>\n<bytes>". Decode it wrong and every value shifts by one key —
+ * which would look like working software right up until a knob edits the wrong
+ * parameter. The mock implements the format from the shim's own parser; this
+ * proves the UI reads real values back out of it, by nudging a value it could
+ * only have got from a bulk response.
+ *
+ * `machines` is variable-length and sits in the same batch, so a naive decoder
+ * that assumed fixed records would land somewhere else entirely. */
+async function testBulkDecodeIsPositionallyCorrect() {
+    console.log('bulk-read values land on the right keys');
+    const ctx = await atGlobalWith({ machine1: '13', mix: '99' });
+
+    ctx.host.onMidiMessageInternal(cc(KNOB1, 1));           /* machine1 +1 */
+    const w = ctx.writes.find((x) => x.key === 'machine1');
+    check(w && parseInt(`${w.val}`, 10) === 14,
+          `machine1 continued from the wrong base: wrote ${w && w.val}, expected 14`);
+
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(KNOB1 + 2, 1));       /* mix +1 */
+    const m = ctx.writes.find((x) => x.key === 'mix');
+    check(m && parseInt(`${m.val}`, 10) === 100,
+          `mix continued from the wrong base: wrote ${m && m.val}, expected 100`);
 }
 
 /* -------------------------------------------------------- feedback guard */
@@ -761,7 +887,9 @@ const tests = [
     testCopyPasteClear,
     testNoUnknownWritesAnywhere,
     testResumeForcesRepaints,
-    testFastTurnDoesNotSlamShortRanges,
+    testKnobResponseCurve,
+    testFetchAllUsesBulkReads,
+    testBulkDecodeIsPositionallyCorrect,
     testFeedbackGuardArmsOnRisk,
     testGuardSilentForChainBuild,
     testMonitorManualOverride,

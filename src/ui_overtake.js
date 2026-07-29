@@ -204,6 +204,12 @@ for (let i = 0; i < MAX_STEPS; i++) {
 
 /* ------------------------------------------------------------ DSP access */
 
+/* EVERY read here is a blocking round-trip to the shim, serviced once per SPI
+ * frame (~23 ms) and abandoned after 100 ms — schwung's own comment above
+ * js_shadow_get_param calls it "the where-does-the-tick-time-go measurement".
+ * fetchAll() wants ~58 keys, which one at a time is over a second of stall.
+ * schwung provides a bulk path for exactly this (host_module_get_params, the
+ * BULK_GET request the shim answers in a single frame), so use it. */
 function getParam(key) {
     const v = host_module_get_param(key);
     return v === null || v === undefined ? '' : `${v}`;
@@ -212,6 +218,61 @@ function getParam(key) {
 function getNum(key) {
     const n = parseInt(getParam(key), 10);
     return Number.isFinite(n) ? n : 0;
+}
+
+/* Wire format, from shim_handle_param_bulk: "<count>\n" then count records of
+ * "<len>\n<bytes>". The response has the same shape carrying values. The shim
+ * caps a request at 64 items, so callers chunk. */
+const BULK_MAX = 48;
+
+function encodeBulk(items) {
+    let s = `${items.length}\n`;
+    for (const it of items) s += `${it.length}\n${it}`;
+    return s;
+}
+
+function decodeBulk(blob, expected) {
+    const out = new Array(expected).fill('');
+    let p = 0;
+    const readLen = () => {
+        let n = 0, any = false;
+        while (p < blob.length && blob[p] >= '0' && blob[p] <= '9') {
+            n = n * 10 + (blob.charCodeAt(p) - 48); p++; any = true;
+        }
+        if (!any || blob[p] !== '\n') return -1;
+        p++;
+        return n;
+    };
+    const count = readLen();
+    if (count < 0) return null;
+    for (let i = 0; i < count && i < expected; i++) {
+        const len = readLen();
+        if (len < 0) return null;
+        out[i] = blob.slice(p, p + len);
+        p += len;
+    }
+    return out;
+}
+
+/* Read many keys in one round-trip. Falls back to individual reads when the
+ * host predates the bulk binding, so this is safe on any schwung. */
+function getParams(keys) {
+    const out = {};
+    if (typeof host_module_get_params !== 'function') {
+        for (const k of keys) out[k] = getParam(k);
+        return out;
+    }
+    for (let base = 0; base < keys.length; base += BULK_MAX) {
+        const chunk = keys.slice(base, base + BULK_MAX);
+        const blob = host_module_get_params(encodeBulk(chunk));
+        const vals = blob === null || blob === undefined ? null : decodeBulk(`${blob}`, chunk.length);
+        if (!vals) {
+            for (const k of chunk) out[k] = getParam(k);
+            continue;
+        }
+        for (let i = 0; i < chunk.length; i++) out[chunk[i]] = vals[i];
+    }
+    return out;
 }
 
 function setNum(key, v) {
@@ -273,49 +334,87 @@ function pageKnobs() {
     ];
 }
 
-/* Everything the screen and LEDs show, pulled in one pass. */
+/* The scalars fetchAll mirrors, in one place so the batch and the unpack
+ * cannot drift apart. */
+const SCALAR_KEYS = [
+    'mix', 'seq_len', 'seq_on', 'fill', 'live_rec', 'song_on', 'pattern',
+    'monitor', 'hw_input'
+];
+
+/* Everything the screen and LEDs show, pulled in one pass — two bulk
+ * round-trips rather than the ~58 single reads this used to cost. That
+ * mattered: fetchAll runs from the machine-select handler, and at ~23 ms a key
+ * the old version stalled the UI for over a second per detent. */
 function fetchAll() {
-    const list = getParam('machines');
-    if (list) machineList = list.split(',');
-    const conds = getParam('conds');
-    if (conds) condList = conds.split(',');
+    const keys = [];
+    /* Static tables — asked for once, then never again. */
+    if (machineList.length === 0) keys.push('machines');
+    if (condList.length === 0) keys.push('conds');
+
+    for (let s = 1; s <= 2; s++) {
+        keys.push(`machine${s}`, `labels${s}`, `eff${s}`);
+        for (let i = 1; i <= 8; i++) keys.push(`fx${s}_p${i}`);
+    }
+    for (const k of pageKnobs()) if (k.key && keys.indexOf(k.key) < 0) keys.push(k.key);
+    for (const k of SCALAR_KEYS) if (keys.indexOf(k) < 0) keys.push(k);
+    keys.push('undo_state');
+
+    const stepKeys = stepKeysForPage();
+    const v = getParams(keys.concat(stepKeys));
+
+    const num = (key, dflt) => {
+        const n = parseInt(v[key], 10);
+        return Number.isFinite(n) ? n : (dflt || 0);
+    };
+
+    if (v.machines) machineList = v.machines.split(',');
+    if (v.conds) condList = v.conds.split(',');
 
     for (let s = 0; s < 2; s++) {
-        const code = getNum(`machine${s + 1}`);
+        const code = num(`machine${s + 1}`);
         cfg[`machine${s + 1}`] = code;
         machineName[s] = machineList[code] || `#${code}`;
-        const lab = getParam(`labels${s + 1}`);
+        const lab = v[`labels${s + 1}`];
         fxLabels[s] = lab ? lab.split(',') : [];
-        const ev = getParam(`eff${s + 1}`);
+        const ev = v[`eff${s + 1}`];
         effVals[s] = ev ? ev.split(',').map((x) => parseInt(x, 10)) : [];
-        for (let i = 0; i < 8; i++) cfg[`fx${s + 1}_p${i + 1}`] = getNum(`fx${s + 1}_p${i + 1}`);
+        for (let i = 0; i < 8; i++) cfg[`fx${s + 1}_p${i + 1}`] = num(`fx${s + 1}_p${i + 1}`);
     }
 
-    for (const k of pageKnobs()) if (k.key) cfg[k.key] = getNum(k.key);
-    cfg.mix = getNum('mix');
+    for (const k of pageKnobs()) if (k.key) cfg[k.key] = num(k.key);
+    for (const k of SCALAR_KEYS) cfg[k] = num(k);
 
-    const us = getParam('undo_state');
+    const us = v.undo_state;
     undoState = us ? us.split(':').map((x) => parseInt(x, 10) || 0) : [0, 0, 0];
-    seqLen = getNum('seq_len') || 16;
-    seqOn  = getNum('seq_on');
-    fillLatched = getNum('fill') !== 0;
-    liveRec = getNum('live_rec');
-    songOn = getNum('song_on');
-    curPattern = getNum('pattern');
-    monitor = getNum('monitor');
-    hwInput = getNum('hw_input');
+    seqLen = num('seq_len') || 16;
+    seqOn  = num('seq_on');
+    fillLatched = num('fill') !== 0;
+    liveRec = num('live_rec');
+    songOn = num('song_on');
+    curPattern = num('pattern');
+    monitor = num('monitor');
+    hwInput = num('hw_input');
 
-    fetchSteps();
+    unpackSteps(v, stepKeys);
     needsRedraw = true;
 }
 
-/* Step metadata for the visible page only — sixteen reads, not sixty-four. */
-function fetchSteps() {
+/* Step metadata for the visible page only — sixteen keys, not sixty-four. */
+function stepKeysForPage() {
     const base = patPage * PAGE_STEPS;
+    const keys = [];
     for (let i = 0; i < PAGE_STEPS; i++) {
         const idx = base + i;
         if (idx >= MAX_STEPS) break;
-        const raw = getParam(`step${idx}`);
+        keys.push(`step${idx}`);
+    }
+    return keys;
+}
+
+function unpackSteps(v, keys) {
+    for (const key of keys) {
+        const idx = parseInt(key.slice(4), 10);
+        const raw = v[key];
         const f = raw ? raw.split(':') : [];
         steps[idx] = {
             active: parseInt(f[0], 10) || 0,
@@ -328,7 +427,26 @@ function fetchSteps() {
     }
 }
 
+function fetchSteps() {
+    const keys = stepKeysForPage();
+    unpackSteps(getParams(keys), keys);
+}
+
 /* --------------------------------------------------------------- editing */
+
+/* decodeDelta reports ACCUMULATED encoder movement — the shim batches ticks
+ * per SPI frame, so one brisk turn arrives as a single event carrying 20+.
+ * Applying that raw to a 21-entry machine select lands on an end stop every
+ * time ("fx 2 only does warble or bypass"); clamping it to one step per event
+ * made crossing the list take twenty separate clicks ("super slow"). Cap the
+ * magnitude at a quarter of the range instead: a single detent still moves
+ * exactly one, and the fastest possible spin crosses the whole list in four. */
+function scaledMove(k, delta) {
+    const span = k.max - k.min;
+    const cap  = span > 0 ? Math.ceil(span / 4) : 1;
+    const mag  = Math.min(Math.abs(delta), Math.max(1, cap));
+    return delta > 0 ? mag : -mag;
+}
 
 function toggleStep(idx) {
     const st = steps[idx];
@@ -366,8 +484,7 @@ function lockKnob(idx, knob, delta) {
     let base = parseInt(cur, 10);
     if (!Number.isFinite(base) || cur === '') base = cfg[k.key] | 0;
 
-    const span = k.max - k.min;
-    let v = base + (span <= 32 ? (delta > 0 ? 1 : -1) : delta);
+    let v = base + scaledMove(k, delta);
     if (v < k.min) v = k.min;
     if (v > k.max) v = k.max;
     host_module_set_param(`lock${idx}_${k.lock}`, `${v}`);
@@ -419,11 +536,7 @@ function adjustKnob(knob, delta) {
     const k = pageKnobs()[knob];
     if (!k || !k.key) return;
 
-    /* Short ranges advance one step per event — see the note in ui_chain.js:
-     * decodeDelta is accumulated, so a quick turn otherwise slams a 21-entry
-     * machine select straight to an end stop. */
-    const span = k.max - k.min;
-    let v = (cfg[k.key] | 0) + (span <= 32 ? (delta > 0 ? 1 : -1) : delta);
+    let v = (cfg[k.key] | 0) + scaledMove(k, delta);
     if (v < k.min) v = k.min;
     if (v > k.max) v = k.max;
     if (v === cfg[k.key]) return;
@@ -1109,23 +1222,29 @@ globalThis.onResume = function () {
 globalThis.tick = function () {
     tickCount++;
 
-    /* One cheap poll per tick keeps the playhead moving without hammering
-     * the DSP with a dozen get_params. */
-    const pos = getNum('seq_pos');
-    if (pos !== seqPos) {
-        seqPos = pos;
-        paintSteps(false);
-        needsRedraw = true;
+    /* The playhead and the live effective values in ONE bulk round-trip every
+     * other tick (~22/sec). A read costs a whole SPI frame, so the old
+     * one-read-per-tick playhead poll was claiming every frame the param
+     * channel had — which is what made other reads time out and return
+     * nothing. Twenty-two updates a second is still smoother than the eye. */
+    if (tickCount % 2 === 0) {
+        const v = getParams(['seq_pos', 'eff1', 'eff2']);
+        const pos = parseInt(v.seq_pos, 10);
+        if (Number.isFinite(pos) && pos !== seqPos) {
+            seqPos = pos;
+            paintSteps(false);
+            needsRedraw = true;
+        }
+        for (let s = 0; s < 2; s++) {
+            const ev = v[`eff${s + 1}`];
+            if (ev) effVals[s] = ev.split(',').map((x) => parseInt(x, 10));
+        }
     }
 
     if (tickCount % 24 === 0) pollFeedbackGuard();
 
     if (tickCount % 12 === 0) {
         fetchSteps();
-        for (let s = 0; s < 2; s++) {
-            const ev = getParam(`eff${s + 1}`);
-            effVals[s] = ev ? ev.split(',').map((x) => parseInt(x, 10)) : [];
-        }
         paintAll(false);
         needsRedraw = true;
     }

@@ -124,8 +124,18 @@ int main(void) {
         {"machine1", "5"}, {"machine2", "3"}, {"fx1", "7"}, {"fx2", "9"}, {"mix", "77"},
         {"seq_on", "0"}, {"seq_len", "9"}, {"fill", "1"}, {"seq_clear", "1"},
         {"fx1_p1", "42"}, {"fx2_p8", "13"},
+        /* Every LFO field, on every LFO. A partial probe list here is worse
+         * than none: the UI harnesses use `settable` to flag writes the engine
+         * would ignore, and a key missing from this list reads as a bug in the
+         * UI. That happened — the chain editor's MULT and SPH knobs were
+         * reported as writing keys the engine does not accept, when in fact
+         * they were simply never probed. */
         {"lfo1_dest", "4"}, {"lfo1_spd", "99"}, {"lfo1_wave", "3"},
-        {"lfo2_depth", "20"}, {"lfo1_trig", "1"}, {"lfo3_dest", "6"}, {"lfo3_spd", "70"},
+        {"lfo1_mult", "5"}, {"lfo1_phase", "33"}, {"lfo1_depth", "77"}, {"lfo1_trig", "1"},
+        {"lfo2_dest", "9"}, {"lfo2_spd", "88"}, {"lfo2_wave", "2"},
+        {"lfo2_mult", "6"}, {"lfo2_phase", "44"}, {"lfo2_depth", "20"}, {"lfo2_trig", "1"},
+        {"lfo3_dest", "6"}, {"lfo3_spd", "70"}, {"lfo3_wave", "4"},
+        {"lfo3_mult", "7"}, {"lfo3_phase", "22"}, {"lfo3_depth", "55"}, {"lfo3_trig", "1"},
         {"live_rec", "1"}, {"menv_dest", "3"}, {"menv_atk", "20"}, {"menv_hold", "30"},
         {"menv_dec", "40"}, {"menv_depth", "90"}, {"prob5", "37"}, {"pattern", "3"}, {"page_mask", "7"}, {"song_on", "1"},
         {"song_len", "8"}, {"song_row2", "5:3:0"}, {"trigtype4", "1"},
