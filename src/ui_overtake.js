@@ -153,9 +153,34 @@ const MACHINE_COLOR = [
     SkyBlue,       /* 18 Supervoid Reverb  space */
     TealGreen,     /* 19 Warble            tape */
     Rose,          /* 20 Grainer           granular */
-    White          /* 21 Single Player     source — the only machine that
-                    *    ORIGINATES audio, so it gets its own colour */
+    White,         /* 21 Single Player     source */
+    White,         /* 22 Multi Player      source */
+    White,         /* 23 Subtracks         source */
+    YellowGreen,   /* 24 Wavefinder        source, wavetable */
+    Blue           /* 25 Shape             not a source — shelving EQ */
 ];
+
+
+/* The palette occupies pad rows 1-3, but three of those pads are undo, memo
+ * and song. The LED painter skipped them and the press handler did NOT, which
+ * was harmless only while the machine count stayed below the index of the
+ * first function pad — at 21 machines nothing reached pad 81. Adding the
+ * Phase 3 machines pushed the count past it, and pressing Undo would have
+ * loaded a machine instead.
+ *
+ * So both paths now go through one function. It returns the machine a pad
+ * selects, or -1 for "not a palette pad", and SHIFT reaches the upper bank so
+ * every machine the engine has stays reachable by pad however many there are.
+ */
+const PALETTE_SLOTS = PALETTE_PADS.filter(
+    (pad) => pad !== PAD_UNDO && pad !== PAD_MEMO && pad !== PAD_SONG);
+
+function paletteMachine(pad, shift) {
+    const slot = PALETTE_SLOTS.indexOf(pad);
+    if (slot < 0) return -1;
+    const code = slot + (shift ? PALETTE_SLOTS.length : 0);
+    return code < nMachines() ? code : -1;
+}
 
 /* ----------------------------------------------------------------- state */
 
@@ -1089,10 +1114,10 @@ function paintSteps(force) {
 function paintPalette(force) {
     for (let i = 0; i < PALETTE_PADS.length; i++) {
         const pad = PALETTE_PADS[i];
-        if (pad === PAD_UNDO || pad === PAD_MEMO || pad === PAD_SONG) continue;
-        const code = i;
+        const code = paletteMachine(pad, shiftHeld);
+        if (code < 0) continue;
         let color = Black;
-        if (code < nMachines()) {
+        {
             /* A machine added to the engine without a colour here would
              * otherwise hand `undefined` to setLED and light nothing. */
             color = MACHINE_COLOR[code] !== undefined ? MACHINE_COLOR[code] : LightGrey;
@@ -1148,12 +1173,10 @@ function handlePadPress(note) {
         return;
     }
 
-    /* Machine palette */
-    const pi = PALETTE_PADS.indexOf(note);
-    if (pi >= 0) {
-        if (pi < nMachines()) loadMachine(pi);
-        return;
-    }
+    /* Machine palette. SHIFT reaches the upper bank; a pad that is undo, memo
+     * or song is never a palette pad, so those keep working. */
+    const pi = paletteMachine(note, shiftHeld);
+    if (pi >= 0) { loadMachine(pi); return; }
 
     /* SHIFT + row 4 selects the step-attribute mode the jog edits. */
     if (shiftHeld) {

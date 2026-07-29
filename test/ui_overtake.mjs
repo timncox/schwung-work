@@ -1067,6 +1067,57 @@ async function testMachineColorTableCoversEveryMachine() {
     check(lit.length === 0, `${lit.length} pads were lit with an undefined colour`);
 }
 
+
+/* The palette occupies pad rows 1-3, but three of those pads are undo, memo
+ * and song. Mapping pad index straight to machine index was safe only while
+ * the machine count stayed below the first function pad's index — at 21
+ * machines nothing reached pad 81. Phase 3 pushed the count past it, and
+ * pressing Undo would have loaded a machine instead of undoing. */
+async function testPaletteNeverShadowsTheFunctionPads() {
+    console.log('undo, memo and song are not swallowed by the machine palette');
+    const ctx = await loadUI();
+    ctx.host.init();
+
+    for (const [pad, key] of [[81, 'undo'], [82, 'memo'], [83, 'song']]) {
+        ctx.writes.length = 0;
+        ctx.host.onMidiMessageInternal(noteOn(pad));
+        ctx.host.onMidiMessageInternal(noteOff(pad));
+        const loaded = ctx.writes.find((w) => /^machine[12]$/.test(w.key));
+        check(!loaded,
+              `pad ${pad} (${key}) loaded machine ${loaded && loaded.val} instead ` +
+              `of doing its own job`);
+    }
+}
+
+/* Every machine the engine has must be reachable from the pads, not just from
+ * the GLOBAL page knob — that is what the palette is for. */
+async function testEveryMachineIsReachableFromThePalette() {
+    console.log('every machine the engine lists can be loaded from a pad');
+    const ctx = await loadUI();
+    ctx.host.init();
+    const total = ctx.store.machines.split(',').length;
+
+    const reached = new Set();
+    for (const shift of [false, true]) {
+        if (shift) ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+        else ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+        for (const pad of [92,93,94,95,96,97,98,99,84,85,86,87,88,89,90,91,76,77,78,79,80]) {
+            ctx.writes.length = 0;
+            ctx.host.onMidiMessageInternal(noteOn(pad));
+            ctx.host.onMidiMessageInternal(noteOff(pad));
+            const w = ctx.writes.find((x) => /^machine[12]$/.test(x.key));
+            if (w) reached.add(parseInt(`${w.val}`, 10));
+        }
+    }
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+
+    const missing = [];
+    for (let i = 0; i < total; i++) if (!reached.has(i)) missing.push(i);
+    check(missing.length === 0,
+          `machines ${missing.join(', ')} of ${total} cannot be loaded from any ` +
+          `pad — the palette is smaller than the machine list`);
+}
+
 /* ------------------------------------------------------------------ run */
 
 const tests = [
@@ -1082,6 +1133,8 @@ const tests = [
     testNoUnknownWritesAnywhere,
     testResumeForcesRepaints,
     testMachineColorTableCoversEveryMachine,
+    testPaletteNeverShadowsTheFunctionPads,
+    testEveryMachineIsReachableFromThePalette,
     testWavLoadRoundTrip,
     testWavVariantsAndChunkParsing,
     testOversizedSampleIsTruncated,

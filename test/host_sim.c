@@ -147,7 +147,9 @@ static void test_all_machines_bounded(void) {
              * loaded and no trig fired, silence is the correct output. Their
              * real coverage is test_sample_transfer / test_single_player
              * below, which load audio and fire it. */
-            if (sIdx == 1 && mc != WORK_FX_BYPASS && mc != WORK_FX_SINGLE) {
+            const int is_src = (mc == WORK_FX_SINGLE || mc == WORK_FX_MULTI ||
+                                mc == WORK_FX_SUBTRACKS || mc == WORK_FX_WAVEFINDER);
+            if (sIdx == 1 && mc != WORK_FX_BYPASS && !is_src) {
                 CHECK(e > 0, "%s (default): output is completely silent",
                       work_machine_name(mc));
             }
@@ -1783,6 +1785,226 @@ static void test_grainer_reads_the_sample(void) {
     work_destroy(w);
 }
 
+/* -------------------------------------------------- Phase 3: SRC machines */
+
+/* Fire a note at a machine holding a sample and report the energy it makes. */
+static int64_t src_energy(int machine, int note, int blocks,
+                          void (*setup)(work_t *)) {
+    work_t *w = work_create(&host);
+    const int frames = 6000;
+    static int16_t pcm[6000 * 2];
+    make_ramp(pcm, frames);
+    send_sample(w, pcm, frames, 1000);
+
+    char code[8]; snprintf(code, sizeof code, "%d", machine);
+    work_set_param(w, "machine1", code);
+    work_set_param(w, "machine2", "0");
+    work_set_param(w, "mix", "127");
+    if (setup) setup(w);
+
+    uint8_t on[3] = { 0x90, (uint8_t)note, 100 };
+    work_on_midi(w, on, 3, 2);
+
+    int16_t in[BLOCK * 2] = {0}, out[BLOCK * 2];
+    int64_t e = 0;
+    for (int b = 0; b < blocks; ++b) {
+        work_process(w, in, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) e += llabs(out[i]);
+    }
+    work_destroy(w);
+    return e;
+}
+
+static void test_multi_player_is_polyphonic(void) {
+    printf("Multi Player is polyphonic and tracks note pitch\n");
+
+    work_t *w = work_create(&host);
+    const int frames = 6000;
+    static int16_t pcm[6000 * 2];
+    make_ramp(pcm, frames);
+    send_sample(w, pcm, frames, 1000);
+    work_set_param(w, "machine1", "22");
+    work_set_param(w, "machine2", "0");
+    work_set_param(w, "mix", "127");
+    work_set_param(w, "fx1_p2", "0");      /* no vibrato, so this is pitch only */
+
+    int16_t in[BLOCK * 2] = {0}, out[BLOCK * 2];
+
+    /* one note */
+    uint8_t n1[3] = { 0x90, 60, 100 };
+    work_on_midi(w, n1, 3, 2);
+    int64_t one = 0;
+    for (int b = 0; b < 6; ++b) {
+        work_process(w, in, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) one += llabs(out[i]);
+    }
+    CHECK(one > 0, "a single note made no sound");
+
+    /* four notes at once must be louder than one — that is what polyphony is */
+    work_destroy(w);
+    w = work_create(&host);
+    send_sample(w, pcm, frames, 1000);
+    work_set_param(w, "machine1", "22");
+    work_set_param(w, "machine2", "0");
+    work_set_param(w, "mix", "127");
+    work_set_param(w, "fx1_p2", "0");
+    for (int n = 0; n < 4; ++n) {
+        uint8_t on[3] = { 0x90, (uint8_t)(60 + n * 3), 100 };
+        work_on_midi(w, on, 3, 2);
+        work_process(w, in, out, BLOCK);       /* each note lands its own block */
+    }
+    int64_t many = 0;
+    for (int b = 0; b < 6; ++b) {
+        work_process(w, in, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) many += llabs(out[i]);
+    }
+    CHECK(many > one, "four notes were no louder than one — voices are not "
+          "stacking, so the machine is monophonic (%lld vs %lld)",
+          (long long)many, (long long)one);
+
+    /* Eight voices is the documented limit; a ninth must steal, not overrun. */
+    for (int n = 0; n < 16; ++n) {
+        uint8_t on[3] = { 0x90, (uint8_t)(40 + n), 100 };
+        work_on_midi(w, on, 3, 2);
+        work_process(w, in, out, BLOCK);
+    }
+    int railed = 0;
+    int64_t e = run_blocks(w, 40, &railed);
+    CHECK(e >= 0 && railed < 40 * BLOCK, "sixteen notes railed the output");
+    work_destroy(w);
+}
+
+/* A note an octave up must read through the sample about twice as fast, so it
+ * runs out sooner. Comparing durations is a pitch test that needs no FFT. */
+static void test_multi_player_pitch(void) {
+    printf("a higher note plays the sample faster\n");
+    int64_t low  = src_energy(22, 48, 200, NULL);   /* an octave below unity */
+    int64_t high = src_energy(22, 72, 200, NULL);   /* an octave above       */
+    CHECK(low > high, "the low note did not sound longer than the high one "
+          "(%lld vs %lld) — pitch is not reaching the read rate",
+          (long long)low, (long long)high);
+}
+
+static void set_reverse(work_t *w)  { work_set_param(w, "fx1_p2", "40");  }
+static void set_fwd_loop(work_t *w) { work_set_param(w, "fx1_p2", "80");  }
+
+static void test_subtracks_play_modes(void) {
+    printf("Subtracks plays forward, reverse and loops\n");
+
+    int64_t fwd = src_energy(23, 60, 60, NULL);
+    CHECK(fwd > 0, "forward mode made no sound");
+
+    int64_t rev = src_energy(23, 60, 60, set_reverse);
+    CHECK(rev > 0, "reverse mode made no sound");
+
+    /* A forward loop must still be sounding long after a one-shot has ended.
+     * The window is the whole 6000-frame sample, ~136 ms, so 200 blocks
+     * (~580 ms) is well past it. */
+    work_t *w = work_create(&host);
+    const int frames = 6000;
+    static int16_t pcm[6000 * 2];
+    make_ramp(pcm, frames);
+    send_sample(w, pcm, frames, 1000);
+    work_set_param(w, "machine1", "23");
+    work_set_param(w, "machine2", "0");
+    work_set_param(w, "mix", "127");
+    work_set_param(w, "fx1_p6", "127");      /* long decay, so LEN ends it */
+    set_fwd_loop(w);
+    uint8_t on[3] = { 0x90, 60, 100 };
+    work_on_midi(w, on, 3, 2);
+
+    int16_t in[BLOCK * 2] = {0}, out[BLOCK * 2];
+    for (int b = 0; b < 100; ++b) work_process(w, in, out, BLOCK);
+    int64_t late = 0;
+    for (int b = 0; b < 40; ++b) {
+        work_process(w, in, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) late += llabs(out[i]);
+    }
+    CHECK(late > 0, "forward loop stopped at the end of the window");
+    work_destroy(w);
+}
+
+static void test_wavefinder_needs_a_wavetable(void) {
+    printf("Wavefinder oscillates from the sample, and is silent without one\n");
+
+    /* Too short to hold two 2048-frame waves: silent rather than reading junk. */
+    work_t *w = work_create(&host);
+    work_set_param(w, "machine1", "24");
+    work_set_param(w, "machine2", "0");
+    work_set_param(w, "mix", "127");
+    int16_t in[BLOCK * 2] = {0}, out[BLOCK * 2];
+    int64_t empty = 0;
+    for (int b = 0; b < 20; ++b) {
+        work_process(w, in, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) empty += llabs(out[i]);
+    }
+    CHECK(empty == 0, "Wavefinder made sound with no wavetable loaded");
+    work_destroy(w);
+
+    /* Long enough for several waves: it should oscillate continuously, with
+     * no trig at all — it is an oscillator, not a one-shot. */
+    w = work_create(&host);
+    const int frames = 2048 * 6;
+    static int16_t pcm[2048 * 6 * 2];
+    make_ramp(pcm, frames);
+    send_sample(w, pcm, frames, 2048);
+    work_set_param(w, "machine1", "24");
+    work_set_param(w, "machine2", "0");
+    work_set_param(w, "mix", "127");
+    int64_t e = 0;
+    for (int b = 0; b < 40; ++b) {
+        work_process(w, in, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) e += llabs(out[i]);
+    }
+    CHECK(e > 0, "Wavefinder was silent with a wavetable loaded");
+    work_destroy(w);
+}
+
+static void test_shape_shelves(void) {
+    printf("Shape boosts and cuts its shelves, and is flat in the middle\n");
+    work_t *w = work_create(&host);
+    work_set_param(w, "machine1", "25");
+    work_set_param(w, "machine2", "0");
+    work_set_param(w, "mix", "127");
+    work_set_param(w, "fx1_p5", "0");      /* no drive, so this measures the EQ */
+    work_set_param(w, "fx1_p7", "127");    /* full level */
+    work_set_param(w, "fx1_p8", "127");    /* full wet  */
+    work_set_param(w, "fx1_p1", "64");     /* LO.G flat */
+    work_set_param(w, "fx1_p4", "64");     /* HI.G flat */
+    work_set_param(w, "fx1_p5", "64");     /* WDTH unity */
+
+    /* Shape makes no sound of its own — the manual says so explicitly. */
+    int16_t quiet[BLOCK * 2] = {0}, out[BLOCK * 2];
+    int64_t self = 0;
+    for (int b = 0; b < 10; ++b) {
+        work_process(w, quiet, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) self += llabs(out[i]);
+    }
+    CHECK(self == 0, "Shape generated sound from silence (%lld)", (long long)self);
+
+    /* Low shelf boost must raise a low tone more than a cut does. */
+    int16_t lo[BLOCK * 2];
+    for (int i = 0; i < BLOCK; ++i) {
+        float v = sinf((float)i / (float)WORK_SR * 60.0f * 6.28318531f) * 8000.0f;
+        lo[i * 2] = (int16_t)v; lo[i * 2 + 1] = (int16_t)v;
+    }
+    work_set_param(w, "fx1_p1", "127");    /* LO.G max boost */
+    int64_t boosted = 0;
+    for (int b = 0; b < 20; ++b) {
+        work_process(w, lo, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) boosted += llabs(out[i]);
+    }
+    work_set_param(w, "fx1_p1", "0");      /* LO.G max cut */
+    int64_t cut = 0;
+    for (int b = 0; b < 20; ++b) {
+        work_process(w, lo, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) cut += llabs(out[i]);
+    }
+    CHECK(boosted > cut * 2, "the low shelf barely moved a 60 Hz tone: "
+          "boost %lld vs cut %lld", (long long)boosted, (long long)cut);
+    work_destroy(w);
+}
+
 int main(void) {
     printf("Work engine — host simulator\n\n");
 
@@ -1839,6 +2061,12 @@ int main(void) {
     test_single_player();
 
     test_grainer_reads_the_sample();
+
+    test_multi_player_is_polyphonic();
+    test_multi_player_pitch();
+    test_subtracks_play_modes();
+    test_wavefinder_needs_a_wavetable();
+    test_shape_shelves();
 
     printf("\n%d checks, %d failed\n", tests_run, tests_failed);
     return tests_failed ? 1 : 0;

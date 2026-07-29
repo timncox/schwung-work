@@ -102,6 +102,11 @@ renumbers every saved preset.
 | 8 | Filterbank | 18 | Supervoid Reverb |
 | 9 | Frequency Warper | 19 | Warble |
 | | | 20 | Grainer |
+| | | 21 | Single Player |
+| | | 22 | Multi Player |
+| | | 23 | Subtracks |
+| | | 24 | Wavefinder |
+| | | 25 | Shape |
 
 Knob labels live in `PARAM_NAME[][]` in `work_core.c` and are served to the UI
 via `get_param("labels1"/"labels2")`. **The UI must never keep its own copy** —
@@ -178,10 +183,30 @@ Phase 1 (**done**) — the 20 FX machines as an `audio_fx` build.
 Phase 2 (**done**) — `overwork`: the overtake build. Step buttons as Tonverk's
 [TRIG] keys, machine palette on the pads, hold-step + turn-knob parameter locks,
 trig conditions, micro-timing, retrig, pattern pages, copy/paste.
-Phase 3 (**started**, v0.6.0) — the SRC machines.
+Phase 3 (**machines done**, v0.7.0) — the SRC machines.
 
-Landed: **sample memory and transfer**, **Single Player**, and Grainer reading
-the loaded sample instead of live input.
+All six now exist: **Single Player**, **Multi Player**, **Subtracks**,
+**Grainer** (reading the loaded sample), **Wavefinder** and **Shape**, on top of
+the sample memory and transfer below. Twenty-six machines total.
+
+Three needed adaptation, and the docs say so rather than letting the names
+imply otherwise:
+
+- **Multi Player** is eight-voice polyphonic with the documented vibrato, but
+  Tonverk plays multi-sampled INSTRUMENTS mapped across the keyboard from its
+  SD card. Work has one sample buffer, so every note plays that sample
+  transposed. The polyphony and vibrato are real; the multisampling is not.
+- **Subtracks** implements the documented PLAYBACK set — play mode (forward,
+  reverse, and both loops), STRT, LEN, L.ST. Its defining feature, eight
+  samples on eight sequencer subtracks plus a supertrack, is NOT here and
+  cannot be: Work is a two-slot FX chain, not an eight-track sampler. Reverse
+  and a separate loop point still make it a real gain over Single Player.
+- **Wavefinder** has no SD card and no 127-slot wavetable store, so the loaded
+  sample IS the wavetable, read as a series of 2048-frame waves with POS
+  interpolating across them. SLOT is replaced by MIX.
+
+**Shape** needed no adaptation at all — a Work slot IS a bus insert, which is
+exactly where the manual says Shape belongs.
 
 The constraint that shaped the whole design: `work_set_param` runs on the
 SHIM'S AUDIO THREAD — `shim_handle_param_bulk` says so in its own comment
@@ -201,9 +226,13 @@ Nothing the render path reads moves until `sample_end`, so an interrupted
 transfer leaves the previous sample playing rather than half of a new one.
 Budget is `WORK_SAMPLE_SECONDS` (8) of stereo int16 = 1.35 MB per instance.
 
-Still to do: Multi Player, Subtracks, Wavefinder, Shape; voice architecture
-(polyphony, per-track filter/amp envelopes, voice LFOs); arpeggiator. CPU on
-the A53 remains unmeasured.
+Voices: `WORK_VOICES` is 8, matching what the manual documents for Multi
+Player, Subtracks and Grainer. A voice is a read cursor plus an envelope, so
+eight cost almost nothing next to the FX machines. Allocation is oldest-first.
+Notes pitch the voice with 60 as unity, the sampler convention.
+
+Still to do: per-voice filter and amp envelopes, the two voice LFOs, and the
+arpeggiator. CPU on the A53 remains unmeasured.
 
 Phase 2 leftovers worth doing: song mode, per-step trig probability beyond the
 three fixed percentages, and a browser editor (`web_ui.html`) — the manager

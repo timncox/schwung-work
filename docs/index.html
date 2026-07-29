@@ -247,7 +247,7 @@ footer a{color:var(--rust)}
     <div class="tb-side">
       <div class="tb-cell">Module<b>Schwung / Move</b></div>
       <div class="tb-cell">Builds<b>audio_fx · overtake</b></div>
-      <div class="tb-cell">Revision<b>v0.6.0</b></div>
+      <div class="tb-cell">Revision<b>v0.7.0</b></div>
       <div class="tb-cell">Source<b><a href="https://github.com/timncox/schwung-work">timncox/schwung-work</a></b></div>
     </div>
   </div>
@@ -542,7 +542,7 @@ footer a{color:var(--rust)}
 </main>
 
 <footer>
-  <p><strong>Work &amp; Overwork</strong> v0.6.0 &mdash; a module for <a href="https://github.com/charlesvestal/schwung">Schwung</a> on the Ableton Move. MIT licensed.<br>
+  <p><strong>Work &amp; Overwork</strong> v0.7.0 &mdash; a module for <a href="https://github.com/charlesvestal/schwung">Schwung</a> on the Ableton Move. MIT licensed.<br>
   Source and tests: <a href="https://github.com/timncox/schwung-work">timncox/schwung-work</a> &middot; distribution: <a href="https://github.com/timncox/schwung-overwork">timncox/schwung-overwork</a> &middot; <a href="https://timncox.github.io/schwung/">all modules</a></p>
   <p>Inspired by the Elektron Tonverk and written from its published user manual. Not affiliated with or endorsed by Elektron. Tonverk is Elektron&rsquo;s trademark.</p>
 </footer>
@@ -589,7 +589,11 @@ footer a{color:var(--rust)}
     {n:"Supervoid Reverb", f:"space", d:"Room to huge. FREQ and GAIN form a feedback shelving filter — at full GAIN the treble stays in the tail, lowering it damps progressively.", p:["PRE","DEC","FREQ","GAIN","HPF","LPF","MIX"]},
     {n:"Warble", f:"tape", d:"Tape wobble with a band-shaped signal and added noise. SPEED at zero makes the modulator a random walk. The noise deliberately sits outside the mix law.", p:["SPEED","DEPTH","BASE","WIDTH","N.LEV","N.HPF","STEREO","MIX"]},
     {n:"Grainer", f:"gran", d:"Granulates the last two seconds of live input. POS is where in that buffer grains start, SCAN moves that point and wraps, SPRD scatters it, SIZE is grain length and AMNT how many sound at once. With a sample loaded the grains read THAT instead of the live input, which is what makes it an SRC machine; clear the sample and it granulates the input again. Tonverk\u2019s Grainer spans 24 parameters; this one has eight and a fixed Hann window.", p:["TUNE","DENS","SIZE","POS","SCAN","SPRD","AMNT","MIX"]},
-    {n:"Single Player", f:"src", d:"The first SRC machine: one shot of the loaded sample per trig. TUNE is \u00b1two octaves, STRT and LEN scan a window into the sample, LOOP holds that window instead of stopping at its end, ATK and DEC shape an AD envelope, LEV and PAN place the result. Unlike every machine above it this is a SOURCE \u2014 it replaces its input rather than processing it, which is what lets a Work slot originate audio. Silent until a sample is loaded.", p:["TUNE","STRT","LEN","LOOP","ATK","DEC","LEV","PAN"]}
+    {n:"Single Player", f:"src", d:"The first SRC machine: one shot of the loaded sample per trig. TUNE is \u00b1two octaves, STRT and LEN scan a window into the sample, LOOP holds that window instead of stopping at its end, ATK and DEC shape an AD envelope, LEV and PAN place the result. Unlike every machine above it this is a SOURCE \u2014 it replaces its input rather than processing it, which is what lets a Work slot originate audio. Silent until a sample is loaded.", p:["TUNE","STRT","LEN","LOOP","ATK","DEC","LEV","PAN"]},
+    {n:"Multi Player", f:"src", d:"Eight-voice polyphonic playback of the loaded sample, pitched by incoming notes with note 60 as unity. VIBR, SPD and FADE are the documented vibrato: depth, speed, and the time it takes to fade in. Tonverk loads multi-sampled INSTRUMENTS from its SD card and maps them across the keyboard; Work has one sample buffer, so every note plays that one sample transposed. The polyphony and the vibrato are real, the multisampling is not.", p:["TUNE","VIBR","SPD","FADE","STRT","LEN","LEV","PAN"]},
+    {n:"Subtracks", f:"src", d:"The playback half of Tonverk\u2019s Subtracks: MODE chooses forward, reverse, forward loop or reverse loop, STRT and LEN set the window, and L.ST is the point a loop returns to. Reverse and a separate loop point are both things Single Player cannot do. What is NOT here is the machine\u2019s defining feature \u2014 eight samples on eight sequencer subtracks with their own pages, plus a supertrack. Work is a two-slot FX chain, not an eight-track sampler.", p:["TUNE","MODE","STRT","LEN","L.ST","ATK","DEC","LEV"]},
+    {n:"Wavefinder", f:"src", d:"Two wavetable oscillators blended together, with POS selecting the wave, ANIM an internal modulator that animates it (eleven envelope and LFO shapes), A.POS its depth, SPD its rate and DTUN the detune between the two. Movement through the table is interpolated, which is what makes it wavetable synthesis rather than switching. Tonverk browses wavetables on an SD card into 127 numbered slots; here the loaded SAMPLE is the wavetable, read as a series of 2048-frame waves.", p:["TUNE","POS","A.POS","ANIM","SPD","DTUN","LEV","MIX"]},
+    {n:"Shape", f:"src", d:"A low shelf and a high shelf, each with frequency and gain, where 64 turns the shelf into a full pass \u2014 the manual\u2019s Shape makes no sound of its own, it shapes what is on the bus. This is the one Phase 3 machine that needed no adaptation at all, because a Work slot IS a bus insert. WDTH is mid/side width and DRV a little saturation.", p:["LO.G","LO.F","HI.F","HI.G","WDTH","DRV","LEV","MIX"]}
   ];
 
   /* ---------------- machine reference ---------------- */

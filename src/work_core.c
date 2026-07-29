@@ -267,6 +267,18 @@ typedef struct {
     float  sp_env;               /* AD envelope level                     */
     int    sp_stage;             /* 0 idle, 1 attack, 2 decay             */
 
+    /* Polyphonic voices for Multi Player and Subtracks. */
+    work_voice_t voice[WORK_VOICES];
+    uint32_t     voice_clock;    /* monotonic, for oldest-first stealing  */
+
+    /* Wavefinder: two oscillator phases and their animation phases. */
+    double wf_ph[2];
+    float  wf_anim[2];
+    float  wf_sh[2];             /* sample-and-hold value per oscillator  */
+
+    /* Shape: shelving filter state, two channels each */
+    float  sh_lo[2], sh_hi[2];
+
     int    last_machine;         /* reset state when the machine changes  */
 } work_slot_t;
 
@@ -351,6 +363,8 @@ struct work {
     int                  clock_ticks;
     int                  clock_running;
     int                  note_pending;  /* note-on seen since last block */
+    int                  note_num;      /* its pitch, for polyphonic SRC  */
+    int                  note_vel;
     uint32_t             rng;           /* LFO random wave; kept separate from
                                          * the slots' so an LFO cannot shift a
                                          * Degrader's dropout sequence */
@@ -378,7 +392,8 @@ static const char *MACHINE_NAME[WORK_FX_COUNT] = {
     "Degrader", "Dirtshaper", "Filter Folder", "Filterbank", "Frequency Warper",
     "Infinite Flanger", "Low-Pass Filter", "Multimode Filter", "Panoramic Chorus",
     "Phase 98", "Rumsklang Reverb", "Saturator Delay", "Steel Box Reverb",
-    "Supervoid Reverb", "Warble", "Grainer", "Single Player"
+    "Supervoid Reverb", "Warble", "Grainer", "Single Player",
+    "Multi Player", "Subtracks", "Wavefinder", "Shape"
 };
 
 /* Knob labels A-H per machine, matching the Tonverk manual's abbreviations.
@@ -408,6 +423,10 @@ static const char *PARAM_NAME[WORK_FX_COUNT][WORK_PARAMS] = {
 /* Warble    */ {"SPEED","DEPTH","BASE","WIDTH","N.LEV","N.HPF","STEREO","MIX"},
 /* Grainer   */ {"TUNE","DENS","SIZE","POS","SCAN","SPRD","AMNT","MIX"},
 /* Single    */ {"TUNE","STRT","LEN","LOOP","ATK","DEC","LEV","PAN"},
+/* Multi     */ {"TUNE","VIBR","SPD","FADE","STRT","LEN","LEV","PAN"},
+/* Subtracks */ {"TUNE","MODE","STRT","LEN","L.ST","ATK","DEC","LEV"},
+/* Wavefindr */ {"TUNE","POS","A.POS","ANIM","SPD","DTUN","LEV","MIX"},
+/* Shape     */ {"LO.G","LO.F","HI.F","HI.G","WDTH","DRV","LEV","MIX"},
 };
 
 const char *work_machine_name(int code) {
@@ -483,6 +502,10 @@ static const uint8_t PARAM_DEFAULT[WORK_FX_COUNT][WORK_PARAMS] = {
 /* Warble    */ {40,40,48,72,16,64,64,64},
 /* Grainer   */ {64,72,40,24,68,24,80,80},
 /* Single    */ {  64,    0,  127,    0,    0,  127,  100,   64},
+/* Multi     */ {  64,    0,   40,   40,    0,  127,  100,   64},
+/* Subtracks */ {  64,    0,    0,  127,    0,    0,  127,  100},
+/* Wavefindr */ {  64,   32,   64,    0,   40,   68,  100,  127},
+/* Shape     */ {  64,   40,   80,   64,   64,    0,  100,  127},
 };
 
 /* ------------------------------------------------- transport / tempo helpers */
@@ -1742,6 +1765,349 @@ static void slot_reset(work_slot_t *s) {
 }
 
 
+/* ----------------------------------------------------------- voice helpers
+ *
+ * Tonverk's Multi Player, Subtracks and Grainer are all documented as
+ * eight-voice polyphonic. A voice here is a read cursor plus an envelope, so
+ * eight of them cost almost nothing next to the FX machines.
+ *
+ * Voice allocation is oldest-first: with every voice busy, the one that has
+ * been sounding longest is taken. That is the least surprising rule for a
+ * sample player — the note you started first is the one you have stopped
+ * caring about.
+ */
+static work_voice_t *voice_alloc(work_slot_t *s) {
+    work_voice_t *best = &s->voice[0];
+    for (int i = 0; i < WORK_VOICES; ++i) {
+        if (s->voice[i].stage == 0) { best = &s->voice[i]; break; }
+        if (s->voice[i].age < best->age) best = &s->voice[i];
+    }
+    best->age = ++s->voice_clock;
+    return best;
+}
+
+/* Read the sample at a fractional frame, clamped. Every SRC machine goes
+ * through this: the cursor is never trusted against sample_frames, because a
+ * transfer can shorten the sample between blocks. */
+static void sample_read(const work_t *w, double pos, float *l, float *r) {
+    const int frames = w->sample_frames;
+    if (frames < 2 || !w->sample) { *l = 0.0f; *r = 0.0f; return; }
+    int i0 = (int)pos;
+    if (i0 < 0) i0 = 0;
+    if (i0 > frames - 2) i0 = frames - 2;
+    const float fr = (float)(pos - (double)i0);
+    const float a0 = w->sample[i0 * 2]           / 32768.0f;
+    const float a1 = w->sample[(i0 + 1) * 2]     / 32768.0f;
+    const float b0 = w->sample[i0 * 2 + 1]       / 32768.0f;
+    const float b1 = w->sample[(i0 + 1) * 2 + 1] / 32768.0f;
+    *l = a0 + (a1 - a0) * fr;
+    *r = b0 + (b1 - b0) * fr;
+}
+
+/* Equal-power pan, 64 = centre. */
+static void pan_gains(uint8_t p, float *gl, float *gr) {
+    const float a = (float)p / 127.0f * 1.57079633f;
+    *gl = cosf(a) * 1.41421356f;
+    *gr = sinf(a) * 1.41421356f;
+}
+
+/* ------------------------------------------------------------ Multi Player
+ *
+ * The manual describes Multi Player as an eight-voice polyphonic player of
+ * multi-sampled instruments, with TUNE, VIBR (vibrato depth), SPD (vibrato
+ * speed) and FADE (vibrato fade-in).
+ *
+ * Not carried across: multi-sampled INSTRUMENTS. Tonverk loads a set of
+ * samples mapped across the keyboard from its SD card; Work has one sample
+ * buffer, so every note plays that one sample transposed. The polyphony,
+ * the vibrato and the parameter set are real; the multisampling is not, and
+ * calling that out matters more than pretending otherwise.
+ *
+ * The remaining four knobs carry STRT/LEN/LEV/PAN so the machine is playable
+ * without a second page, which Work has no room for.
+ */
+static void m_multi(mctx_t *m, float *l, float *r) {
+    work_slot_t *s = m->s;
+    work_t      *w = m->w;
+    const uint8_t *p = m->p;
+
+    const int frames = w->sample_frames;
+    if (frames < 2 || !w->sample) { *l = 0.0f; *r = 0.0f; return; }
+
+    int start = (int)((double)p[4] / 127.0 * (frames - 1));
+    int len   = (int)((double)p[5] / 127.0 * (frames - start));
+    if (len < 2) len = 2;
+    if (start + len > frames) len = frames - start;
+
+    const float base = powf(2.0f, ((float)p[0] - 64.0f) / 12.8f);   /* +/-5 oct */
+    const float vdep = (float)p[1] / 127.0f * 0.06f;                /* semitone-ish */
+    const float vspd = 0.5f + (float)p[2] / 127.0f * 11.5f;         /* Hz */
+    const float fade = 0.01f + (float)p[3] / 127.0f * 3.0f;         /* seconds */
+    const float lev  = (float)p[6] / 127.0f;
+    float gl, gr; pan_gains(p[7], &gl, &gr);
+
+    float ol = 0.0f, orr = 0.0f;
+    for (int i = 0; i < WORK_VOICES; ++i) {
+        work_voice_t *v = &s->voice[i];
+        if (v->stage == 0) continue;
+
+        /* Vibrato fades in over FADE, which is what the manual describes. */
+        v->vib_fade += 1.0f / (fade * (float)WORK_SR);
+        if (v->vib_fade > 1.0f) v->vib_fade = 1.0f;
+        v->vib_ph += vspd / (float)WORK_SR;
+        if (v->vib_ph >= 1.0f) v->vib_ph -= 1.0f;
+        const float vib = sinf(v->vib_ph * 6.28318531f) * vdep * v->vib_fade;
+
+        float sl, sr;
+        sample_read(w, v->pos, &sl, &sr);
+        ol += sl * v->env * v->gain;
+        orr += sr * v->env * v->gain;
+
+        v->pos += (double)(v->rate * base * powf(2.0f, vib));
+        if (v->pos >= start + len || v->pos < start) { v->stage = 0; v->env = 0.0f; }
+
+        /* short AD so a released note does not click */
+        if (v->stage == 1) {
+            v->env += 1.0f / (0.002f * (float)WORK_SR);
+            if (v->env >= 1.0f) { v->env = 1.0f; v->stage = 2; }
+        }
+    }
+
+    *l = ol * lev * gl;
+    *r = orr * lev * gr;
+}
+
+/* -------------------------------------------------------------- Subtracks
+ *
+ * The manual's Subtracks machine loads eight samples onto eight sequencer
+ * subtracks, each with its own SRC/FLTR/AMP/MOD pages, plus a supertrack for
+ * the shared FX parameters.
+ *
+ * That architecture is NOT reproduced, and cannot be: Work is a two-slot FX
+ * chain, not an eight-track sampler with per-track parameter pages. What IS
+ * reproduced is the machine's documented PLAYBACK parameter set, which is the
+ * part that makes a sound: TUNE, PLAY MODE (forward / reverse / forward loop /
+ * reverse loop), STRT, LEN and L.ST (loop start).
+ *
+ * That is a real gain over Single Player — reverse playback and a separate
+ * loop point are both things Single Player cannot do — so the machine earns
+ * its slot even without the routing. The docs say so in as many words rather
+ * than letting the name imply the rest.
+ */
+enum { SUB_FWD = 0, SUB_REV, SUB_FWD_LOOP, SUB_REV_LOOP };
+
+static void m_subtracks(mctx_t *m, float *l, float *r) {
+    work_slot_t *s = m->s;
+    work_t      *w = m->w;
+    const uint8_t *p = m->p;
+
+    const int frames = w->sample_frames;
+    if (frames < 2 || !w->sample) { *l = 0.0f; *r = 0.0f; return; }
+
+    const int mode = iclamp((int)p[1] * 4 / 128, 0, 3);
+
+    int start = (int)((double)p[2] / 127.0 * (frames - 1));
+    int len   = (int)((double)p[3] / 127.0 * (frames - start));
+    if (len < 2) len = 2;
+    if (start + len > frames) len = frames - start;
+    const int end = start + len;
+    /* L.ST is the point playback returns to, between STRT and the end. */
+    int lst = start + (int)((double)p[4] / 127.0 * (len - 1));
+    if (lst < start) lst = start;
+    if (lst > end - 2) lst = end - 2;
+
+    const float rate = powf(2.0f, ((float)p[0] - 64.0f) / 12.8f);   /* +/-5 oct */
+    const float atk  = 0.0005f + (float)p[5] / 127.0f * 2.0f;
+    const float dec  = 0.0100f + (float)p[6] / 127.0f * 8.0f;
+    const float lev  = (float)p[7] / 127.0f;
+
+    float ol = 0.0f, orr = 0.0f;
+    for (int i = 0; i < WORK_VOICES; ++i) {
+        work_voice_t *v = &s->voice[i];
+        if (v->stage == 0) continue;
+
+        float sl, sr;
+        sample_read(w, v->pos, &sl, &sr);
+        ol += sl * v->env * v->gain;
+        orr += sr * v->env * v->gain;
+
+        v->pos += (double)(v->rate * rate) * (double)v->dir;
+
+        if (v->dir > 0 && v->pos >= end) {
+            if (mode == SUB_FWD_LOOP) v->pos = lst;
+            else { v->stage = 0; v->env = 0.0f; }
+        } else if (v->dir < 0 && v->pos <= lst) {
+            if (mode == SUB_REV_LOOP) v->pos = end - 1;
+            else if (v->pos <= start) { v->stage = 0; v->env = 0.0f; }
+        }
+
+        if (v->stage == 1) {
+            v->env += 1.0f / (atk * (float)WORK_SR);
+            if (v->env >= 1.0f) { v->env = 1.0f; v->stage = 2; }
+        } else if (v->stage == 2) {
+            v->env -= 1.0f / (dec * (float)WORK_SR);
+            if (v->env <= 0.0f) { v->env = 0.0f; v->stage = 0; }
+        }
+    }
+
+    *l = ol * lev;
+    *r = orr * lev;
+}
+
+/* ------------------------------------------------------------- Wavefinder
+ *
+ * Two wavetable oscillators blended together, each with a position into the
+ * table (POS), an internal modulator that animates that position (ANIM, SPD,
+ * A.POS) and a detune between them (DTUN). Moving through the table is
+ * interpolated, which is what makes it sound like wavetable synthesis rather
+ * than switching.
+ *
+ * WHERE THE TABLE COMES FROM is the departure. Tonverk browses wavetables on
+ * an SD card and holds up to 127 per project in numbered SLOTs. Work has no
+ * card and no slot store — but it does have a loaded sample, so the sample IS
+ * the wavetable: it is read as a series of WF_WAVE-frame waves and POS selects
+ * between them, interpolating across the boundary. Load a wavetable file and
+ * it behaves as one; load a drum loop and you get something else entirely,
+ * which is a fair trade for not having a browser.
+ *
+ * ANIM shapes, in the manual's order: one-shot exp down / ramp down / tri /
+ * ramp up / exp up, then looping ramp down / tri / square / ramp up, random,
+ * and sample-and-hold.
+ */
+#define WF_WAVE 2048
+
+static float wf_anim_shape(int shape, float t, float *sh, uint32_t *rng) {
+    switch (shape) {
+        case 0:  return expf(-4.0f * t);                       /* exp down 1shot */
+        case 1:  return 1.0f - t;                              /* ramp down      */
+        case 2:  return t < 0.5f ? t * 2.0f : (1.0f - t) * 2.0f;
+        case 3:  return t;                                     /* ramp up        */
+        case 4:  return 1.0f - expf(-4.0f * t);                /* exp up         */
+        case 5:  return 1.0f - t;                              /* ramp down loop */
+        case 6:  return t < 0.5f ? t * 2.0f : (1.0f - t) * 2.0f;
+        case 7:  return t < 0.5f ? 1.0f : 0.0f;                /* square loop    */
+        case 8:  return t;                                     /* ramp up loop   */
+        case 9:  return rnd_01(rng);                           /* random         */
+        default:                                               /* sample & hold  */
+            if (t < 0.02f) *sh = rnd_01(rng);
+            return *sh;
+    }
+}
+
+static void m_wavefinder(mctx_t *m, float *l, float *r) {
+    work_slot_t *s = m->s;
+    work_t      *w = m->w;
+    const uint8_t *p = m->p;
+
+    const int frames = w->sample_frames;
+    if (frames < WF_WAVE * 2 || !w->sample) { *l = 0.0f; *r = 0.0f; return; }
+
+    const int waves = frames / WF_WAVE;
+    const float tune = powf(2.0f, ((float)p[0] - 64.0f) / 32.0f);
+    const float dtun = powf(2.0f, ((float)p[5] - 64.0f) / 256.0f);   /* fine */
+    const float posk = (float)p[1] / 127.0f;
+    const float apos = ((float)p[2] - 64.0f) / 64.0f;                /* bipolar */
+    const int   anim = iclamp((int)p[3] * 11 / 128, 0, 10);
+    const float spd  = 0.05f + (float)p[4] / 127.0f * 8.0f;          /* Hz */
+    const float lev  = (float)p[6] / 127.0f;
+    const float mix  = (float)p[7] / 127.0f;
+
+    /* One wave is WF_WAVE frames, so a "note" is SR / WF_WAVE Hz at rate 1. */
+    const float step = tune * 1.0f;
+
+    float ol = 0.0f, orr = 0.0f;
+    for (int o = 0; o < 2; ++o) {
+        const float rate = (o == 0) ? step : step * dtun;
+
+        s->wf_anim[o] += spd / (float)WORK_SR;
+        if (s->wf_anim[o] >= 1.0f) s->wf_anim[o] -= 1.0f;
+        const float a = wf_anim_shape(anim, s->wf_anim[o], &s->wf_sh[o], &s->rng);
+
+        float pos = posk + apos * a;
+        if (pos < 0.0f) pos = 0.0f;
+        if (pos > 1.0f) pos = 1.0f;
+
+        /* Interpolate ACROSS waves as well as within one, which is what the
+         * manual means by "transitioning between waves is interpolated". */
+        const float wf = pos * (float)(waves - 1);
+        const int   w0 = iclamp((int)wf, 0, waves - 2);
+        const float wfr = wf - (float)w0;
+
+        s->wf_ph[o] += (double)rate;
+        while (s->wf_ph[o] >= (double)WF_WAVE) s->wf_ph[o] -= (double)WF_WAVE;
+
+        float al, ar, bl, br;
+        sample_read(w, (double)(w0 * WF_WAVE) + s->wf_ph[o], &al, &ar);
+        sample_read(w, (double)((w0 + 1) * WF_WAVE) + s->wf_ph[o], &bl, &br);
+
+        const float vl = al + (bl - al) * wfr;
+        const float vr = ar + (br - ar) * wfr;
+        ol += vl * 0.5f;
+        orr += vr * 0.5f;
+    }
+
+    *l = (*l) * (1.0f - mix) + ol * lev * mix;
+    *r = (*r) * (1.0f - mix) + orr * lev * mix;
+}
+
+/* ------------------------------------------------------------------ Shape
+ *
+ * The manual is explicit that Shape "does not produce any sound, but instead
+ * helps to shape the sound on the Bus and Send FX tracks" — a low shelf and a
+ * high shelf, each with a frequency and a gain, where 64 turns the shelf into
+ * a full high-pass or low-pass response.
+ *
+ * That maps onto Work exactly, because a Work slot IS a bus insert. This is
+ * the only new machine that needs no adaptation at all. The remaining knobs
+ * carry stereo width, a little drive, level and mix, which the manual's Shape
+ * has on its AMP page.
+ */
+static void m_shape(mctx_t *m, float *l, float *r) {
+    work_slot_t *s = m->s;
+    const uint8_t *p = m->p;
+
+    /* Shelf frequencies, 30 Hz - 1 kHz low and 500 Hz - 12 kHz high. */
+    const float lof = 30.0f * powf(1000.0f / 30.0f, (float)p[1] / 127.0f);
+    const float hif = 500.0f * powf(12000.0f / 500.0f, (float)p[2] / 127.0f);
+
+    /* 64 = flat; 0 = -12 dB, 127 = +12 dB, matching the documented scale.
+     * At the extremes the shelf becomes a full pass, as the manual describes. */
+    const float log_ = ((float)p[0] - 64.0f) / 64.0f;
+    const float hig  = ((float)p[3] - 64.0f) / 64.0f;
+    const float lgain = powf(10.0f, log_ * 12.0f / 20.0f);
+    const float hgain = powf(10.0f, hig  * 12.0f / 20.0f);
+
+    const float wid = (float)p[4] / 127.0f * 2.0f;      /* 0 mono, 1 as-is, 2 wide */
+    const float drv = 1.0f + (float)p[5] / 127.0f * 6.0f;
+    const float lev = (float)p[6] / 127.0f;
+    const float mix = (float)p[7] / 127.0f;
+
+    const float alo = expf(-6.28318531f * lof / (float)WORK_SR);
+    const float ahi = expf(-6.28318531f * hif / (float)WORK_SR);
+
+    float in[2] = { *l, *r }, out[2];
+    for (int c = 0; c < 2; ++c) {
+        /* one-pole split: low band, high band, the rest is the middle */
+        s->sh_lo[c] = in[c] + alo * (s->sh_lo[c] - in[c]);
+        s->sh_hi[c] = in[c] + ahi * (s->sh_hi[c] - in[c]);
+        const float low  = s->sh_lo[c];
+        const float high = in[c] - s->sh_hi[c];
+        const float mid  = in[c] - low - high;
+        float v = low * lgain + mid + high * hgain;
+        if (drv > 1.0f) v = softclip(v * drv) / drv;
+        out[c] = v;
+    }
+
+    /* mid/side width */
+    const float mid = (out[0] + out[1]) * 0.5f;
+    const float side = (out[0] - out[1]) * 0.5f * wid;
+    out[0] = mid + side;
+    out[1] = mid - side;
+
+    *l = *l * (1.0f - mix) + out[0] * lev * mix;
+    *r = *r * (1.0f - mix) + out[1] * lev * mix;
+}
+
 /* ---------------------------------------------------------- Single Player
  *
  * The first of Tonverk's SRC machines: one shot of the loaded sample per trig.
@@ -1847,6 +2213,10 @@ static void run_machine(mctx_t *m, int machine, float *l, float *r) {
         case WORK_FX_WARBLE:    m_warble(m, l, r);    break;
         case WORK_FX_GRAINER:   m_grainer(m, l, r);   break;
         case WORK_FX_SINGLE:    m_single(m, l, r);    break;
+        case WORK_FX_MULTI:     m_multi(m, l, r);     break;
+        case WORK_FX_SUBTRACKS: m_subtracks(m, l, r); break;
+        case WORK_FX_WAVEFINDER:m_wavefinder(m, l, r);break;
+        case WORK_FX_SHAPE:     m_shape(m, l, r);     break;
         case WORK_FX_BYPASS:
         default:                                      break;
     }
@@ -1939,16 +2309,52 @@ static void song_advance(work_t *w) {
 /* Start every SRC voice from the top of its window. Called by a full trig and
  * by an incoming note; both are the "something happened" edge. Only slots
  * actually holding an SRC machine react, so this is free on an FX-only chain. */
-static void work_src_trigger(work_t *w) {
+static void work_src_trigger(work_t *w, int note, int vel) {
+    const int frames = w->sample_frames;
+    if (frames <= 0) return;
+
+    /* 60 is unity, the sampler convention: a C3 trig plays at the recorded
+     * pitch and everything else transposes from there. A sequencer trig has no
+     * note of its own, so it uses unity. */
+    const float pitch = powf(2.0f, ((float)note - 60.0f) / 12.0f);
+    const float gain  = vel > 0 ? (float)vel / 127.0f : 1.0f;
+
     for (int i = 0; i < WORK_SLOTS; ++i) {
-        if (w->cfg[i].machine != WORK_FX_SINGLE) continue;
         work_slot_t *s = &w->slot[i];
-        const int frames = w->sample_frames;
-        if (frames <= 0) continue;
-        int start = (int)((double)w->cfg[i].p[1] / 127.0 * (frames - 1));
-        s->sp_pos   = start;
-        s->sp_env   = 0.0f;
-        s->sp_stage = 1;
+        switch (w->cfg[i].machine) {
+        case WORK_FX_SINGLE: {
+            int start = (int)((double)w->cfg[i].p[1] / 127.0 * (frames - 1));
+            s->sp_pos   = start;
+            s->sp_env   = 0.0f;
+            s->sp_stage = 1;
+            break;
+        }
+        case WORK_FX_MULTI: {
+            int start = (int)((double)w->cfg[i].p[4] / 127.0 * (frames - 1));
+            work_voice_t *v = voice_alloc(s);
+            v->pos = start; v->env = 0.0f; v->stage = 1;
+            v->rate = pitch; v->gain = gain; v->dir = 1;
+            v->vib_ph = 0.0f; v->vib_fade = 0.0f; v->note = note;
+            break;
+        }
+        case WORK_FX_SUBTRACKS: {
+            const int mode = iclamp((int)w->cfg[i].p[1] * 4 / 128, 0, 3);
+            int start = (int)((double)w->cfg[i].p[2] / 127.0 * (frames - 1));
+            int len   = (int)((double)w->cfg[i].p[3] / 127.0 * (frames - start));
+            if (len < 2) len = 2;
+            if (start + len > frames) len = frames - start;
+            work_voice_t *v = voice_alloc(s);
+            /* The reverse modes start at the END of the window and walk back,
+             * which is what the manual describes for REV and REV.L. */
+            const int reverse = (mode == SUB_REV || mode == SUB_REV_LOOP);
+            v->pos   = reverse ? (start + len - 1) : start;
+            v->dir   = reverse ? -1 : 1;
+            v->env   = 0.0f; v->stage = 1;
+            v->rate  = pitch; v->gain = gain; v->note = note;
+            break;
+        }
+        default: break;
+        }
     }
 }
 
@@ -2010,7 +2416,7 @@ static void seq_run(work_t *w, int frames) {
         /* An SRC machine has a voice to start, unlike every FX machine before
          * it: a full trig fires the sample from its window start. A LOCK trig
          * deliberately does not, matching Elektron's trigless lock. */
-        work_src_trigger(w);
+        work_src_trigger(w, 60, 0);
     }
 }
 
@@ -2225,7 +2631,7 @@ void work_process(work_t *w, const int16_t *in, int16_t *out, int frames) {
         }
         /* A played note fires the SRC voice too, so Work is usable from a
          * keyboard or Move's own pads without the sequencer running. */
-        work_src_trigger(w);
+        work_src_trigger(w, w->note_num, w->note_vel);
         w->note_pending = 0;
     }
 
@@ -2401,7 +2807,11 @@ void work_on_midi(work_t *w, const uint8_t *msg, int len, int source) {
                 break;
             }
             if (len >= 3 && (msg[0] & 0xF0) == 0x90 && msg[2] > 0) {
+                /* Remember the note so a polyphonic SRC machine can pitch its
+                 * voice by it. 60 is unity, matching the sampler convention. */
                 w->note_pending = 1;
+                w->note_num = msg[1];
+                w->note_vel = msg[2];
             } else if (len >= 3 && ((msg[0] & 0xF0) == 0x80 ||
                                     ((msg[0] & 0xF0) == 0x90 && msg[2] == 0))) {
                 for (int i = 0; i < WORK_SLOTS; ++i) w->slot[i].env_stage = 4.0f;

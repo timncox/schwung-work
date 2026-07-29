@@ -78,6 +78,12 @@
  * I/O in set_param would block the audio callback. Instead the UI reads the
  * WAV with the host's file bindings and pushes it through in chunks, and the
  * engine does nothing but a bounded memcpy per chunk. */
+/* Polyphony. Tonverk's Multi Player, Subtracks and Grainer are all documented
+ * as eight-voice; matching that is cheap here because a voice is a read cursor
+ * and an envelope, not a synth. Voices live in the slot struct, so they are
+ * allocated with it and the render path still never allocates. */
+#define WORK_VOICES 8
+
 #define WORK_SAMPLE_SECONDS 8
 #define WORK_SAMPLE_FRAMES  (WORK_SAMPLE_SECONDS * 44100)
 /* Longest comb line: the Freeverb-derived tuning table tops out at 1617
@@ -116,6 +122,10 @@ typedef enum {
      * fixed Hann window in place of FADE + SHAPE. */
     WORK_FX_GRAINER,     /* Grainer           live granular                   */
     WORK_FX_SINGLE,      /* Single Player     one-shot sample voice            */
+    WORK_FX_MULTI,       /* Multi Player      polyphonic sample voice          */
+    WORK_FX_SUBTRACKS,   /* Subtracks         play modes + loop points         */
+    WORK_FX_WAVEFINDER,  /* Wavefinder        two wavetable oscillators        */
+    WORK_FX_SHAPE,       /* Shape             shelving EQ + width, no source   */
     WORK_FX_COUNT
 } work_fx_t;
 
@@ -219,6 +229,22 @@ typedef struct {
     uint8_t attack, hold, decay;
     uint8_t depth;                    /* bipolar around 64                  */
 } work_modenv_cfg_t;
+
+/* One sample voice. Multi Player and Subtracks are polyphonic, so a voice owns
+ * everything that differs per note: where it is reading, how fast, its envelope
+ * and its vibrato phase. */
+typedef struct {
+    double pos;          /* fractional read cursor, frames                */
+    float  env;
+    int    stage;        /* 0 idle, 1 attack, 2 decay                     */
+    float  rate;         /* playback rate, including note pitch           */
+    float  vib_ph;
+    float  vib_fade;     /* 0..1, vibrato fades in over FADE              */
+    float  gain;         /* note velocity                                 */
+    int    note;         /* -1 when free                                  */
+    int    dir;          /* +1 forward, -1 reverse                        */
+    uint32_t age;        /* for voice stealing: oldest goes first         */
+} work_voice_t;
 
 /* One insert slot: machine code + 8 parameters, each 0..127 like Elektron. */
 typedef struct {
