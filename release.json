@@ -1,30 +1,7 @@
 {
-  "version": "0.5.0",
-  "download_url": "https://github.com/timncox/schwung-work/releases/download/v0.5.0/work-module.tar.gz",
+  "version": "0.7.0",
+  "download_url": "https://github.com/timncox/schwung-work/releases/download/v0.7.0/work-module.tar.gz",
   "name": "Work",
-  "description": "Twenty-one Tonverk-inspired FX machines with three LFOs, a modulation envelope and MIDI CC/NRPN",
-  "repo_url": "https://github.com/timncox/schwung-work",
-  "modules": {
-    "work": {
-      "version": "0.5.0",
-      "download_url": "https://github.com/timncox/schwung-work/releases/download/v0.5.0/work-module.tar.gz",
-      "name": "Work",
-      "description": "Twenty-one Tonverk-inspired FX machines in two insert slots, three FX LFOs, a modulation envelope and MIDI CC/NRPN control",
-      "repo_url": "https://github.com/timncox/schwung-work"
-    },
-    "work-in": {
-      "version": "0.5.0",
-      "download_url": "https://github.com/timncox/schwung-work/releases/download/v0.5.0/work-in-module.tar.gz",
-      "name": "Work In",
-      "description": "The same twenty-one FX machines on the live input, with feedback protection",
-      "repo_url": "https://github.com/timncox/schwung-work"
-    },
-    "overwork": {
-      "version": "0.5.0",
-      "download_url": "https://github.com/timncox/schwung-work/releases/download/v0.5.0/overwork-module.tar.gz",
-      "name": "Overwork",
-      "description": "Full-surface Work: 16-pattern bank, song mode, parameter locks, live recording, presets and feedback protection",
-      "repo_url": "https://github.com/timncox/schwung-work"
-    }
-  }
+  "description": "Twenty-six Tonverk-inspired machines in two insert slots \u2014 twenty-one effects and five sample sources \u2014 with three FX LFOs, a modulation envelope and MIDI CC/NRPN",
+  "repo_url": "https://github.com/timncox/schwung-work"
 }
