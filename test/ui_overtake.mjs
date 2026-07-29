@@ -106,6 +106,7 @@ function makeHost() {
     const leds = new Map();
     const screen = [];
     const roundTrips = [];   /* one entry per blocking read of the DSP */
+    let shiftState = 0;
 
     const vfs = makeVFS();
 
@@ -131,6 +132,10 @@ function makeHost() {
             return Buffer.from(raw).toString('base64');
         },
         host_ensure_dir(path) { vfs.dirs.add(path); return true; },
+        /* The shim is authoritative for SHIFT. Tracking it locally from CC 49
+         * latches when a release is missed, and on hardware that made a knob
+         * edit the base value instead of writing a lock. */
+        shadow_get_shift_held() { return shiftState; },
         host_flush_display() {},
 
         /* Every one of these is a blocking round-trip on hardware, serviced
@@ -196,6 +201,7 @@ function makeHost() {
             }
             return out;
         },
+        setShift(v) { shiftState = v ? 1 : 0; },
         host_module_set_param(key, val) {
             writes.push({ key, val });
             /* Model the sample transfer the way work_core.c does, so
@@ -298,6 +304,12 @@ async function loadUI() {
 
 /* MIDI helpers matching what the shim delivers */
 const cc   = (num, val) => [0xB0, num, val];
+/* Injecting CC 49 alone is no longer enough: the UI asks the shim. Tests that
+ * hold Shift must move the shim's view too, which is what the hardware does. */
+function holdShift(ctx, on) {
+    ctx.host.setShift(on);
+    ctx.host.onMidiMessageInternal(cc(49, on ? 127 : 0));
+}
 /* Move's step buttons are NOTES 16-31, not CCs. The harness sent them as CCs,
  * which is why every step-related check passed while the sequencer could not
  * be played on hardware at all — the mock encoded my assumption instead of the
@@ -400,7 +412,7 @@ async function testShiftEscapesTheLockGesture() {
     ctx.writes.length = 0;
 
     ctx.host.onMidiMessageInternal(stepDown(2));
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    holdShift(ctx, true);
     ctx.host.onMidiMessageInternal(cc(KNOB1, 1));
 
     const lockWrites = ctx.writes.filter((w) => /^lock\d+_\d+$/.test(w.key));
@@ -459,10 +471,10 @@ async function testJogSetsLengthAndStepAttrs() {
 
     /* condition mode, then hold a step and jog */
     ctx.writes.length = 0;
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));      /* shift + pad 72 = COND */
+    holdShift(ctx, true);      /* shift + pad 72 = COND */
     ctx.host.onMidiMessageInternal(noteOn(72));
     ctx.host.onMidiMessageInternal(noteOff(72));
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    holdShift(ctx, false);
     ctx.host.onMidiMessageInternal(stepDown(1));
     ctx.host.onMidiMessageInternal(cc(JOG, 1));
 
@@ -546,10 +558,10 @@ async function testLiveRecordToggle() {
     const ctx = await loadUI();
     ctx.host.init();
     ctx.writes.length = 0;
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    holdShift(ctx, true);
     ctx.host.onMidiMessageInternal(noteOn(68));
     ctx.host.onMidiMessageInternal(noteOff(68));
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    holdShift(ctx, false);
     const w = ctx.writes.find((x) => x.key === 'live_rec');
     check(!!w && `${w.val}` === '1', `shift+play did not arm live_rec (${w && w.val})`);
     /* unshifted play must still be play, not record */
@@ -563,10 +575,10 @@ async function testProbabilityMode() {
     console.log('shift + pattern-page selects probability mode, jog sets it');
     const ctx = await loadUI();
     ctx.host.init();
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    holdShift(ctx, true);
     ctx.host.onMidiMessageInternal(noteOn(71));
     ctx.host.onMidiMessageInternal(noteOff(71));
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    holdShift(ctx, false);
 
     ctx.writes.length = 0;
     ctx.host.onMidiMessageInternal(stepDown(4));   /* hold step 5 */
@@ -763,10 +775,10 @@ async function testMonitorManualOverride() {
     for (let i = 0; i < 30; i++) ctx.host.tick();
 
     ctx.writes.length = 0;
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    holdShift(ctx, true);
     ctx.host.onMidiMessageInternal(noteOn(69));
     ctx.host.onMidiMessageInternal(noteOff(69));
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    holdShift(ctx, false);
     const on = ctx.writes.find((w) => w.key === 'monitor');
     check(!!on && `${on.val}` === '1', `override did not unmute (${on && on.val})`);
 
@@ -783,9 +795,9 @@ const PDIR = '/data/UserData/schwung/presets/overwork';
 
 /* Open the preset browser: Shift + jog click. */
 function openPresets(ctx) {
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    holdShift(ctx, true);
     ctx.host.onMidiMessageInternal(cc(3, 127));      /* MoveMainButton */
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    holdShift(ctx, false);
     ctx.host.tick();                                 /* the device redraws on tick */
 }
 
@@ -1141,8 +1153,8 @@ async function testEveryMachineIsReachableFromThePalette() {
 
     const reached = new Set();
     for (const shift of [false, true]) {
-        if (shift) ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
-        else ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+        if (shift) holdShift(ctx, true);
+        else holdShift(ctx, false);
         for (const pad of [92,93,94,95,96,97,98,99,84,85,86,87,88,89,90,91,76,77,78,79,80]) {
             ctx.writes.length = 0;
             ctx.host.onMidiMessageInternal(noteOn(pad));
@@ -1151,7 +1163,7 @@ async function testEveryMachineIsReachableFromThePalette() {
             if (w) reached.add(parseInt(`${w.val}`, 10));
         }
     }
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    holdShift(ctx, false);
 
     const missing = [];
     for (let i = 0; i < total; i++) if (!reached.has(i)) missing.push(i);
@@ -1174,10 +1186,10 @@ async function testSampleBrowserIsReachableAndLoads() {
     ctx.vfs.binaries.set('/data/UserData/UserLibrary/Samples/b.wav', makeWav({ frames: 800 }));
 
     /* SHIFT + slot pad opens it */
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    holdShift(ctx, true);
     ctx.host.onMidiMessageInternal(noteOn(70));
     ctx.host.onMidiMessageInternal(noteOff(70));
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    holdShift(ctx, false);
     ctx.host.tick();
 
     const shown = ctx.screen.map((x) => x.text).join(' ');
@@ -1194,10 +1206,10 @@ async function testSampleBrowserIsReachableAndLoads() {
 
     /* A successful load closes the browser, so reopen it to pick another —
      * that is the intended flow, not a workaround. */
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    holdShift(ctx, true);
     ctx.host.onMidiMessageInternal(noteOn(70));
     ctx.host.onMidiMessageInternal(noteOff(70));
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    holdShift(ctx, false);
 
     /* jog scrolls to the other file and loads that one instead */
     ctx.host.onMidiMessageInternal(cc(JOG, 1));
@@ -1216,10 +1228,10 @@ async function testSampleBrowserClosesTheWayItOpened() {
     ctx.vfs.binaries.set('/data/UserData/UserLibrary/Samples/a.wav', makeWav({ frames: 400 }));
 
     const openClose = () => {
-        ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+        holdShift(ctx, true);
         ctx.host.onMidiMessageInternal(noteOn(70));
         ctx.host.onMidiMessageInternal(noteOff(70));
-        ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+        holdShift(ctx, false);
         ctx.host.tick();
     };
     openClose();
@@ -1288,10 +1300,10 @@ async function testBrowserReportsWhatTheEngineHolds() {
     ctx.vfs.binaries.set('/data/UserData/UserLibrary/Samples/kick.wav',
                          makeWav({ frames: 4410 }));
 
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    holdShift(ctx, true);
     ctx.host.onMidiMessageInternal(noteOn(70));
     ctx.host.onMidiMessageInternal(noteOff(70));
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    holdShift(ctx, false);
     ctx.host.tick();
 
     /* the mock engine reports back what the transfer declared */
@@ -1313,10 +1325,10 @@ async function testBrowserReportsFailure() {
     ctx.vfs.binaries.set('/data/UserData/UserLibrary/Samples/notes.wav',
                          Buffer.from('this is not a wav at all'));
 
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    holdShift(ctx, true);
     ctx.host.onMidiMessageInternal(noteOn(70));
     ctx.host.onMidiMessageInternal(noteOff(70));
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    holdShift(ctx, false);
     ctx.host.onMidiMessageInternal(cc(JOG_CLICK, 127));
     ctx.host.tick();
 
@@ -1345,10 +1357,10 @@ async function testLoadTrustsTheEngineNotItself() {
         if (k === 'sample_end') { ctx.store.sample_frames = '0'; ctx.store.sample_name = ''; }
     };
 
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    holdShift(ctx, true);
     ctx.host.onMidiMessageInternal(noteOn(70));
     ctx.host.onMidiMessageInternal(noteOff(70));
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    holdShift(ctx, false);
     const ok = ctx.host.loadSampleFile('/data/UserData/UserLibrary/Samples/a.wav');
     check(ok === false, 'the UI reported success while the engine held nothing');
     ctx.host.tick();
@@ -1368,10 +1380,10 @@ async function testLoadClosesTheBrowserAndPadsWorkAgain() {
     ctx.vfs.binaries.set('/data/UserData/UserLibrary/Samples/kick.wav',
                          makeWav({ frames: 4410 }));
 
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    holdShift(ctx, true);
     ctx.host.onMidiMessageInternal(noteOn(70));
     ctx.host.onMidiMessageInternal(noteOff(70));
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    holdShift(ctx, false);
     ctx.host.onMidiMessageInternal(cc(JOG_CLICK, 127));
     ctx.host.tick();
 
@@ -1383,10 +1395,10 @@ async function testLoadClosesTheBrowserAndPadsWorkAgain() {
 
     /* and the palette works again — this is the reported symptom */
     ctx.writes.length = 0;
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    holdShift(ctx, true);
     ctx.host.onMidiMessageInternal(noteOn(92));
     ctx.host.onMidiMessageInternal(noteOff(92));
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    holdShift(ctx, false);
     const loaded = ctx.writes.find((w) => /^machine[12]$/.test(w.key));
     check(loaded && parseInt(`${loaded.val}`, 10) === 21,
           `Shift + first palette pad loaded ${loaded && loaded.val}, expected 21 ` +
@@ -1403,10 +1415,10 @@ async function testFailedLoadKeepsTheBrowserOpen() {
     ctx.vfs.binaries.set('/data/UserData/UserLibrary/Samples/bad.wav',
                          Buffer.from('not a wav'));
 
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    holdShift(ctx, true);
     ctx.host.onMidiMessageInternal(noteOn(70));
     ctx.host.onMidiMessageInternal(noteOff(70));
-    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    holdShift(ctx, false);
     ctx.host.onMidiMessageInternal(cc(JOG_CLICK, 127));
     ctx.host.tick();
 

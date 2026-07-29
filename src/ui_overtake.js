@@ -191,6 +191,27 @@ function paletteMachine(pad, shift) {
     return code < nMachines() ? code : -1;
 }
 
+
+/* Whether SHIFT is down.
+ *
+ * Tracking it locally from CC 49 latches: if a shift-ON is seen and the
+ * matching release is not, the module believes Shift is held forever. Measured
+ * on the device — the shim's own control block reported shift_held=0 while the
+ * JS side had it true across 495 consecutive events, and the consequences look
+ * like unrelated faults everywhere: a knob edits the base value instead of
+ * writing a parameter lock, a palette pad loads machine+21, and the slot pad
+ * opens the sample browser rather than switching slots. A whole session reads
+ * as broken.
+ *
+ * The shim knows the truth, so ask it. The local flag stays only as a fallback
+ * for hosts without the binding, and init() clears it. */
+function shiftDown() {
+    if (typeof shadow_get_shift_held === 'function') {
+        try { return shadow_get_shift_held() !== 0; } catch (e) { /* fall through */ }
+    }
+    return shiftHeld;
+}
+
 /* ----------------------------------------------------------------- state */
 
 let editPage   = EDIT_FX;
@@ -1265,7 +1286,7 @@ function paintSteps(force) {
 function paintPalette(force) {
     for (let i = 0; i < PALETTE_PADS.length; i++) {
         const pad = PALETTE_PADS[i];
-        const code = paletteMachine(pad, shiftHeld);
+        const code = paletteMachine(pad, shiftDown());
         if (code < 0) continue;
         let color = Black;
         {
@@ -1290,7 +1311,7 @@ function paintTransport(force) {
     setLED(PAD_FILL,  fillLatched ? BrightRed : (!monitor ? OrangeRed : 0x0C), force);
     setLED(PAD_SLOT,  focusSlot === 0 ? SkyBlue : YellowGreen, force);
     setLED(PAD_PPAGE, [Blue, Cyan, Purple, OrangeRed][patPage % 4], force);
-    if (shiftHeld) {
+    if (shiftDown()) {
         /* while shift is held row 4 IS the step-attribute mode row */
         setLED(PAD_MODE_COND,   attrMode === MODE_COND   ? Cyan   : 0x0A, force);
         setLED(PAD_MODE_MICRO,  attrMode === MODE_MICRO  ? Purple : 0x0A, force);
@@ -1324,7 +1345,7 @@ function handlePadPress(note) {
          * pad while a modal is open is how a user ends up stuck in it with no
          * way back — the browser opens on SHIFT + slot pad and has to close
          * the same way. */
-        if (shiftHeld && note === PAD_SLOT) { closeSampleBrowser(); return; }
+        if (shiftDown() && note === PAD_SLOT) { closeSampleBrowser(); return; }
         announce('Sample browser open. Shift and slot pad to close.');
         return;
     }
@@ -1335,11 +1356,11 @@ function handlePadPress(note) {
 
     /* Machine palette. SHIFT reaches the upper bank; a pad that is undo, memo
      * or song is never a palette pad, so those keep working. */
-    const pi = paletteMachine(note, shiftHeld);
+    const pi = paletteMachine(note, shiftDown());
     if (pi >= 0) { loadMachine(pi); return; }
 
     /* SHIFT + row 4 selects the step-attribute mode the jog edits. */
-    if (shiftHeld) {
+    if (shiftDown()) {
         switch (note) {
             case PAD_MODE_COND:
                 attrMode = attrMode === MODE_COND ? MODE_NONE : MODE_COND;
@@ -1389,9 +1410,9 @@ function handlePadPress(note) {
 
     switch (note) {
         case PAD_UNDO:
-            host_module_set_param(shiftHeld ? 'redo' : 'undo', '1');
+            host_module_set_param(shiftDown() ? 'redo' : 'undo', '1');
             fetchAll();
-            announce(shiftHeld ? 'Redo' : 'Undo');
+            announce(shiftDown() ? 'Redo' : 'Undo');
             return;
         case PAD_MEMO:
             memoAt = Date.now();
@@ -1489,7 +1510,7 @@ function handlePadRelease(note) {
  * STEP_FIRST. */
 function handleStepNote(note, velocity) {
     /* SHIFT + a step selects that pattern from the bank. */
-    if (shiftHeld && velocity > 0) {
+    if (shiftDown() && velocity > 0) {
         const p = note - STEP_FIRST;
         host_module_set_param('pattern', `${p}`);
         curPattern = p;
@@ -1591,7 +1612,7 @@ function onMidiMessageInternal(data) {
         if (d1 === MoveMainButton && d2 > 0) {
             /* Shift + jog click toggles the preset browser — the same gesture
              * the sibling modules use, so it is where a user will look. */
-            if (shiftHeld) {
+            if (shiftDown()) {
                 if (presetMode) {
                     presetMode = false;
                     announceView(EDIT_NAME[editPage]);
@@ -1626,7 +1647,7 @@ function onMidiMessageInternal(data) {
              * Shift escapes the gesture — it edits the base even while a step
              * is held, for when you are inspecting a step's locks and want to
              * move the underlying value instead. */
-            if (heldStep >= 0 && !shiftHeld) {
+            if (heldStep >= 0 && !shiftDown()) {
                 lockKnob(heldStep, knob, delta);
             } else {
                 if (heldStep >= 0) heldUsed = true;   /* don't also toggle the trig */
