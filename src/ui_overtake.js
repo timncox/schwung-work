@@ -194,22 +194,40 @@ function paletteMachine(pad, shift) {
 
 /* Whether SHIFT is down.
  *
- * Tracking it locally from CC 49 latches: if a shift-ON is seen and the
- * matching release is not, the module believes Shift is held forever. Measured
- * on the device — the shim's own control block reported shift_held=0 while the
- * JS side had it true across 495 consecutive events, and the consequences look
- * like unrelated faults everywhere: a knob edits the base value instead of
- * writing a parameter lock, a palette pad loads machine+21, and the slot pad
- * opens the sample browser rather than switching slots. A whole session reads
- * as broken.
+ * Tracking it locally from CC 49 is correct — shadow_ui.js notes that the
+ * shim's own shift tracking does NOT work in overtake mode, which is why it
+ * tracks locally too — but it LATCHES. See a shift-ON, miss the release, and
+ * the module believes Shift is held forever.
  *
- * The shim knows the truth, so ask it. The local flag stays only as a fallback
- * for hosts without the binding, and init() clears it. */
+ * That is not hypothetical: measured on the device, the JS side reported Shift
+ * held across 495 consecutive events while the shim's control block said 0.
+ * And latched Shift does not look like one bug, it looks like several
+ * unrelated ones — a knob edits the base value instead of writing a parameter
+ * lock, a palette pad loads machine+21 so Compressor arrives as Wavefinder,
+ * and the slot pad opens the sample browser rather than switching slots. Every
+ * one of those was reported separately from hardware and chased separately.
+ *
+ * The origin is the launch gesture. Overwork is opened with Shift+Vol+jog
+ * click; shadow_ui does not forward MIDI to a module until init() has
+ * returned, and init was measured taking about six seconds. The release lands
+ * inside that window and is discarded, so the module starts life latched.
+ *
+ * So: ignore Shift for a short settling window after init. The user cannot
+ * still be holding the launch combo a second later, and any genuine press
+ * after that is tracked normally. */
+const SHIFT_SETTLE_TICKS = 44;      /* about a second at ~44 ticks/sec */
+
 function shiftDown() {
-    if (typeof shadow_get_shift_held === 'function') {
-        try { return shadow_get_shift_held() !== 0; } catch (e) { /* fall through */ }
-    }
     return shiftHeld;
+}
+
+/* Called every tick. Masking reads during the settling window is not enough:
+ * the stale flag simply takes effect the moment the window closes. It has to
+ * be CLEARED while the window is open, so that whatever arrived from the
+ * launch combo is gone by the time the window shuts and any genuine press
+ * afterwards tracks normally. */
+function settleShift() {
+    if (tickCount < SHIFT_SETTLE_TICKS) shiftHeld = false;
 }
 
 /* ----------------------------------------------------------------- state */
@@ -1699,6 +1717,7 @@ globalThis.onResume = function () {
 
 globalThis.tick = function () {
     tickCount++;
+    settleShift();
 
     /* The playhead and the live effective values in ONE bulk round-trip every
      * other tick (~22/sec). A read costs a whole SPI frame, so the old

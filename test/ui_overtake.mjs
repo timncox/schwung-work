@@ -307,6 +307,13 @@ const cc   = (num, val) => [0xB0, num, val];
 /* Injecting CC 49 alone is no longer enough: the UI asks the shim. Tests that
  * hold Shift must move the shim's view too, which is what the hardware does. */
 function holdShift(ctx, on) {
+    /* Tick past the post-init settling window first. The UI ignores Shift for
+     * about a second after init, because the launch gesture is itself a Shift
+     * combo whose release is swallowed while init runs — so a module that
+     * trusted the flag started life latched. A real user cannot press Shift in
+     * the same millisecond they opened the module; the harness should not
+     * either. */
+    for (let i = 0; i < 50; i++) ctx.host.tick();
     ctx.host.setShift(on);
     ctx.host.onMidiMessageInternal(cc(49, on ? 127 : 0));
 }
@@ -1505,10 +1512,43 @@ async function testStepsArriveAsNotes() {
           `hold-step + knob wrote no lock; got ${JSON.stringify(ctx.writes)}`);
 }
 
+
+/* The launch gesture is itself a Shift combo (Shift+Vol+jog click), and
+ * shadow_ui does not forward MIDI to a module until init() has returned —
+ * measured at about six seconds. The release therefore lands inside that
+ * window and is discarded, so a module that trusts its own CC 49 tracking
+ * starts life believing Shift is held, forever.
+ *
+ * On hardware that did not look like one bug. It looked like several: knobs
+ * edited base values instead of writing locks, palette pads loaded machine+21,
+ * and the slot pad opened the sample browser. All reported separately. */
+async function testShiftDoesNotLatchFromTheLaunchGesture() {
+    console.log('a shift-on with no release does not latch the module');
+    const ctx = await loadUI();
+    ctx.host.init();
+
+    /* the press arrives, the release never does */
+    ctx.host.setShift(1);
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    for (let i = 0; i < 60; i++) ctx.host.tick();
+
+    /* a knob must now write a LOCK, not edit the base — which is the whole
+     * gesture the module exists for */
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(stepDown(0));
+    ctx.host.onMidiMessageInternal(cc(KNOB1, 4));
+    ctx.host.onMidiMessageInternal(stepUp(0));
+    const locked = ctx.writes.find((w) => /^lock\d+_\d+$/.test(w.key));
+    check(!!locked,
+          `Shift stayed latched from launch: hold-step + knob wrote ` +
+          `${JSON.stringify(ctx.writes)} instead of a lock`);
+}
+
 /* ------------------------------------------------------------------ run */
 
 const tests = [
     testInitReadsOnlyServedKeys,
+    testShiftDoesNotLatchFromTheLaunchGesture,
     testStepsArriveAsNotes,
     testHoldStepPlusKnobLocks,
     testLockNudgeStartsFromLock,
