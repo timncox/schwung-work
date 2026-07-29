@@ -9,3 +9,5 @@ docs/*.pdf
 .DS_Store
 .claude/
 .playwright-mcp/
+
+.venv-e2e/

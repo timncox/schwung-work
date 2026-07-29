@@ -162,6 +162,41 @@ If feedback persists with a source machine loaded and "INPUT MUTED" showing,
 the loop is Move's own input monitoring rather than ours — schwung's docs put
 the firmware's autosample and line-in monitoring explicitly out of scope.
 
+## On-device tests (test/e2e_overwork.py)
+
+Every hardware bug in this module got past a green suite, and all for the same
+reason: the JS harness mocks the host, and a mock encodes what I ASSUMED the
+device does. When the assumption was wrong the mock was wrong the same way, so
+the test agreed with the code and both were wrong together. Step buttons are the
+canonical case — they are NOTES 16-31, the handler sat in the CC branch where
+nothing reached it, and the harness sent CCs too.
+
+`test/e2e_overwork.py` talks to the real Move through schwung's `schwung-testd`,
+so the contract under test is the device's. It injects real MIDI, reads
+parameters out of the running DSP, and snapshots real pad LEDs.
+
+```sh
+ssh ableton@move.local 'nohup setsid /data/UserData/schwung/bin/schwung-testd &'
+ssh -fN -L 47777:localhost:47777 ableton@move.local
+.venv-e2e/bin/pytest test/e2e_overwork.py -v
+```
+
+The venv exists because pytest-schwung needs Python >= 3.10 and the system
+python is 3.9:
+
+```sh
+$(brew --prefix python@3.12)/bin/python3.12 -m venv .venv-e2e
+.venv-e2e/bin/pip install -e ../schwung/tools/pytest-schwung pytest
+```
+
+**One manual step remains.** Overwork must already be open on the device.
+`bus.set_open_tool('overwork')` writes the command and shadow_ui reads it, but
+answers `tool not found: overwork` — its open_tool path searches
+`scanForToolModules()` (component_type `tool`) and overtake modules come from
+`scanForOvertakeModules()` instead. Teaching schwung's open_tool to fall back to
+the overtake list would make the suite fully unattended; until then every test
+skips with a clear message rather than failing.
+
 ## Verification
 
 ```bash
