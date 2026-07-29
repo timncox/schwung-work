@@ -388,6 +388,78 @@ static void test_two_slot_series(void) {
           (long long)e2);
 }
 
+/* Three in series, not two. The third slot was appended in v0.8.0 and the
+ * thing that can silently go wrong is that it is configured but never
+ * rendered — every existing test would still pass. */
+static void test_three_slot_series(void) {
+    printf("slot 3 processes the output of slot 2\n");
+
+    work_t *a = work_create(&host);
+    set_slot(a, 0, WORK_FX_GRIT);
+    set_slot(a, 1, WORK_FX_FBANK);
+    set_all_params(a, 1, 64);                    /* pass it through */
+    int dummy;
+    int64_t e1 = run_blocks(a, 60, &dummy);
+    work_destroy(a);
+    CHECK(e1 > 0, "two slots alone produced silence");
+
+    work_t *b = work_create(&host);
+    set_slot(b, 0, WORK_FX_GRIT);
+    set_slot(b, 1, WORK_FX_FBANK);
+    set_all_params(b, 1, 64);
+    set_slot(b, 2, WORK_FX_FBANK);
+    set_all_params(b, 2, 0);                     /* a wall in slot 3 */
+    int64_t e2 = run_blocks(b, 60, &dummy);
+    work_destroy(b);
+    CHECK(e2 == 0, "slot 3 did not receive slot 2's output (energy %lld)",
+          (long long)e2);
+}
+
+/* The lock index map is APPEND-ONLY: slot 3's parameters sit above the machine
+ * and mix entries, because renumbering would move every lock in every pattern
+ * ever saved. This test is the guard on that promise. */
+static void test_lock_map_is_append_only(void) {
+    printf("slot 3's locks append; the old indices still mean what they meant\n");
+    work_t *w = work_create(&host);
+    set_slot(w, 0, WORK_FX_CLOCK);
+    set_slot(w, 1, WORK_FX_CLOCK);
+    set_slot(w, 2, WORK_FX_CLOCK);
+
+    char s[64];
+    /* the pre-v0.8.0 indices, unmoved */
+    work_get_param(w, "locklabel0",  s, sizeof(s));
+    CHECK(strcmp(s, "1:TUNE") == 0, "lock 0 reads %s, expected 1:TUNE", s);
+    work_get_param(w, "locklabel8",  s, sizeof(s));
+    CHECK(strcmp(s, "2:TUNE") == 0, "lock 8 reads %s, expected 2:TUNE", s);
+    work_get_param(w, "locklabel16", s, sizeof(s));
+    CHECK(strcmp(s, "1:MACH") == 0, "lock 16 reads %s, expected 1:MACH", s);
+    work_get_param(w, "locklabel17", s, sizeof(s));
+    CHECK(strcmp(s, "2:MACH") == 0, "lock 17 reads %s, expected 2:MACH", s);
+    work_get_param(w, "locklabel18", s, sizeof(s));
+    CHECK(strcmp(s, "MIX") == 0, "lock 18 reads %s, expected MIX", s);
+    /* and the appended ones */
+    work_get_param(w, "locklabel19", s, sizeof(s));
+    CHECK(strcmp(s, "3:TUNE") == 0, "lock 19 reads %s, expected 3:TUNE", s);
+    work_get_param(w, "locklabel26", s, sizeof(s));
+    CHECK(strcmp(s, "3:MIX") == 0, "lock 26 reads %s, expected 3:MIX", s);
+    work_get_param(w, "locklabel27", s, sizeof(s));
+    CHECK(strcmp(s, "3:MACH") == 0, "lock 27 reads %s, expected 3:MACH", s);
+
+    /* A lock on slot 3 must actually reach slot 3 when the step fires. */
+    work_set_param(w, "seq_len", "1");
+    work_set_param(w, "step0", "1:0:0:0");
+    work_set_param(w, "locks0", "19=7");
+    work_set_param(w, "seq_on", "1");
+    int dummy;
+    run_blocks(w, 4, &dummy);
+    s[0] = '\0';
+    work_get_param(w, "eff3", s, sizeof(s));
+    CHECK(atoi(s) == 7, "a lock at 19 left slot 3's effective knobs at \"%s\", "
+          "expected knob A to be 7", s);
+
+    work_destroy(w);
+}
+
 /* Loading a machine installs its defaults, the way selecting a machine does on
  * the hardware. */
 static void test_machine_load_installs_defaults(void) {
@@ -2260,6 +2332,8 @@ int main(void) {
     test_machine_change_resets();
     test_fx_lfo_modulates();
     test_two_slot_series();
+    test_three_slot_series();
+    test_lock_map_is_append_only();
     test_machine_load_installs_defaults();
     test_midi_clock();
     test_param_name_table();

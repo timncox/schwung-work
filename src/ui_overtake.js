@@ -281,11 +281,11 @@ let hwInput     = 0;
 let copyBuf    = null;
 
 /* mirrored DSP state */
-let machineName = ['Bypass', 'Bypass'];
+let machineName = ['Bypass', 'Bypass', 'Bypass'];
 let machineList = [];
 let condList    = [];
-let fxLabels    = [[], []];
-let effVals     = [[], []];
+let fxLabels    = [[], [], []];
+let effVals     = [[], [], []];
 let cfg         = {};        /* key -> value for everything the knobs edit  */
 let steps       = [];        /* per step: {active, cond, micro, retrig, nlocks} */
 let seqPos      = 0;
@@ -374,6 +374,27 @@ function setNum(key, v) {
     host_module_set_param(key, `${v}`);
 }
 
+/* Lock indices, mirroring the map in work_core.h. The map is APPEND-ONLY, so
+ * slot 3's parameters sit ABOVE the machine and mix entries rather than after
+ * slot 2's — computing slot * 8 + knob gives the wrong index for slot 3 and
+ * would write a lock onto slot 1's MACHINE select. */
+const N_SLOTS       = 3;
+const LOCK_MACH1    = 16;
+const LOCK_MIX      = 18;
+const LOCK_S3P0     = 19;
+const LOCK_MACH3    = 27;
+const DEST_MAX      = N_SLOTS * 8 - 1;
+
+function lockForParam(slot, knob) {
+    return slot < 2 ? slot * 8 + knob : LOCK_S3P0 + knob;
+}
+function isMachineKey(key) {
+    return /^machine[1-9]$/.test(key);
+}
+function lockForMachine(slot) {
+    return slot < 2 ? LOCK_MACH1 + slot : LOCK_MACH3;
+}
+
 /* The knob descriptors for the current edit page. FX labels come from the DSP
  * so they always match whichever machine the focused slot holds. */
 function pageKnobs() {
@@ -384,7 +405,7 @@ function pageKnobs() {
             out.push({
                 key: `fx${focusSlot + 1}_p${i + 1}`,
                 label: lab && lab.length ? lab : '',
-                lock: focusSlot * 8 + i,
+                lock: lockForParam(focusSlot, i),
                 min: 0, max: 127
             });
         }
@@ -392,7 +413,7 @@ function pageKnobs() {
     }
     if (editPage === EDIT_MENV) {
         return [
-            { key: 'menv_dest',  label: 'DEST',  lock: -1, min: -1, max: 15 },
+            { key: 'menv_dest',  label: 'DEST',  lock: -1, min: -1, max: DEST_MAX },
             { key: 'menv_atk',   label: 'ATK',   lock: -1, min: 0, max: 127 },
             { key: 'menv_hold',  label: 'HOLD',  lock: -1, min: 0, max: 127 },
             { key: 'menv_dec',   label: 'DEC',   lock: -1, min: 0, max: 127 },
@@ -405,7 +426,7 @@ function pageKnobs() {
     if (editPage === EDIT_LFO1 || editPage === EDIT_LFO2 || editPage === EDIT_LFO3) {
         const n = editPage - EDIT_LFO1 + 1;
         return [
-            { key: `lfo${n}_dest`,  label: 'DEST',  lock: -1, min: -1, max: 15 },
+            { key: `lfo${n}_dest`,  label: 'DEST',  lock: -1, min: -1, max: DEST_MAX },
             { key: `lfo${n}_spd`,   label: 'SPD',   lock: -1, min: 0, max: 127 },
             { key: `lfo${n}_mult`,  label: 'MULT',  lock: -1, min: 0, max: 127 },
             { key: `lfo${n}_wave`,  label: 'WAVE',  lock: -1, min: 0, max: 6 },
@@ -417,11 +438,11 @@ function pageKnobs() {
     }
     /* EDIT_GLOBAL */
     return [
-        { key: 'machine1',     label: 'FX1',  lock: 16, min: 0, max: nMachines() - 1 },
-        { key: 'machine2',     label: 'FX2',  lock: 17, min: 0, max: nMachines() - 1 },
-        { key: 'mix',     label: 'MIX',  lock: 18, min: 0, max: 127 },
+        { key: 'machine1', label: 'FX1',  lock: lockForMachine(0), min: 0, max: nMachines() - 1 },
+        { key: 'machine2', label: 'FX2',  lock: lockForMachine(1), min: 0, max: nMachines() - 1 },
+        { key: 'machine3', label: 'FX3',  lock: lockForMachine(2), min: 0, max: nMachines() - 1 },
+        { key: 'mix',     label: 'MIX',  lock: LOCK_MIX, min: 0, max: 127 },
         { key: 'seq_len', label: 'LEN',  lock: -1, min: 1, max: MAX_STEPS },
-        { key: '', label: '', lock: -1, min: 0, max: 0 },
         { key: '', label: '', lock: -1, min: 0, max: 0 },
         { key: '', label: '', lock: -1, min: 0, max: 0 },
         { key: '', label: '', lock: -1, min: 0, max: 0 }
@@ -445,7 +466,7 @@ function fetchAll() {
     if (machineList.length === 0) keys.push('machines');
     if (condList.length === 0) keys.push('conds');
 
-    for (let s = 1; s <= 2; s++) {
+    for (let s = 1; s <= N_SLOTS; s++) {
         keys.push(`machine${s}`, `labels${s}`, `eff${s}`);
         for (let i = 1; i <= 8; i++) keys.push(`fx${s}_p${i}`);
     }
@@ -464,7 +485,7 @@ function fetchAll() {
     if (v.machines) machineList = v.machines.split(',');
     if (v.conds) condList = v.conds.split(',');
 
-    for (let s = 0; s < 2; s++) {
+    for (let s = 0; s < N_SLOTS; s++) {
         const code = num(`machine${s + 1}`);
         cfg[`machine${s + 1}`] = code;
         machineName[s] = machineList[code] || `#${code}`;
@@ -981,7 +1002,7 @@ function adjustKnob(knob, delta) {
     if (v === cfg[k.key]) return;
 
     setNum(k.key, v);
-    if (k.key === 'machine1' || k.key === 'machine2') fetchAll();
+    if (isMachineKey(k.key)) fetchAll();
     if (k.key === 'seq_len') seqLen = v;
 
     announceParameter(k.label, knobText(knob));
@@ -1246,7 +1267,7 @@ function knobText(i) {
     if (!k || !k.key) return '';
     const v = cfg[k.key] | 0;
 
-    if (k.key === 'machine1' || k.key === 'machine2') {
+    if (isMachineKey(k.key)) {
         const nm = machineList[v] || `#${v}`;
         return nm.length > 6 ? nm.slice(0, 6) : nm;
     }
@@ -1367,7 +1388,10 @@ function paintFunctions(force) {
 function paintTransport(force) {
     setLED(PAD_PLAY,  liveRec ? Red : (seqOn ? BrightGreen : DarkGrey), force);
     setLED(PAD_FILL,  fillLatched ? BrightRed : (!monitor ? OrangeRed : 0x0C), force);
-    setLED(PAD_SLOT,  focusSlot === 0 ? SkyBlue : YellowGreen, force);
+    /* One colour per slot, so the pad says which one the knobs address without
+     * looking at the screen. Two colours for three slots would leave slot 3
+     * indistinguishable from slot 2. */
+    setLED(PAD_SLOT,  [SkyBlue, YellowGreen, BurntOrange][focusSlot] || SkyBlue, force);
     setLED(PAD_PPAGE, [Blue, Cyan, Purple, OrangeRed][patPage % 4], force);
     if (shiftDown()) {
         /* while shift is held row 4 IS the step-attribute mode row */
@@ -1495,7 +1519,7 @@ function handlePadPress(note) {
             needsRedraw = true;
             return;
         case PAD_SLOT:
-            focusSlot = focusSlot ? 0 : 1;
+            focusSlot = (focusSlot + 1) % N_SLOTS;
             fetchAll();
             announceView(`FX ${focusSlot + 1}, ${machineName[focusSlot]}`);
             return;
@@ -1765,14 +1789,14 @@ globalThis.tick = function () {
      * channel had — which is what made other reads time out and return
      * nothing. Twenty-two updates a second is still smoother than the eye. */
     if (tickCount % 2 === 0) {
-        const v = getParams(['seq_pos', 'eff1', 'eff2']);
+        const v = getParams(['seq_pos', 'eff1', 'eff2', 'eff3']);
         const pos = parseInt(v.seq_pos, 10);
         if (Number.isFinite(pos) && pos !== seqPos) {
             seqPos = pos;
             paintSteps(false);
             needsRedraw = true;
         }
-        for (let s = 0; s < 2; s++) {
+        for (let s = 0; s < N_SLOTS; s++) {
             const ev = v[`eff${s + 1}`];
             if (ev) effVals[s] = ev.split(',').map((x) => parseInt(x, 10));
         }

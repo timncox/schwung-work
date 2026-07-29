@@ -57,14 +57,21 @@ import {
 
 /* ------------------------------------------------------------------ pages */
 
+const N_SLOTS       = 3;
 const PAGE_MACHINES = 0;
-const PAGE_FX1      = 1;
-const PAGE_FX2      = 2;
-/* pages 3 and 4 are FX LFO 1 and 2 — they need no named constant because
- * nothing branches on them; PAGES and PAGE_NAME carry their layout */
-const PAGE_COUNT    = 5;
+const PAGE_FX1      = 1;          /* slot N's page is PAGE_FX1 + N */
+/* The LFO pages follow the FX pages and need no named constant, because
+ * nothing branches on them; PAGES and PAGE_NAME carry their layout. Both are
+ * derived from N_SLOTS so a slot cannot be added without its page. */
+const PAGE_COUNT    = 1 + N_SLOTS + 2;
 
-const PAGE_NAME = ['MACHINES', 'FX 1', 'FX 2', 'LFO 1', 'LFO 2'];
+const PAGE_NAME = ['MACHINES', 'FX 1', 'FX 2', 'FX 3', 'LFO 1', 'LFO 2'];
+
+/* Which slot a page edits, or -1 for the machine and LFO pages. */
+function pageSlot(p) {
+    const s = p - PAGE_FX1;
+    return s >= 0 && s < N_SLOTS ? s : -1;
+}
 
 const WAVE_NAME = ['Tri', 'Sine', 'Sqr', 'Saw', 'Ramp', 'Exp', 'Rand'];
 
@@ -96,12 +103,18 @@ const PAGES = [
      * is what left Granulator unreachable when the 21st machine landed. */
     [ { key: 'machine1', label: 'FX 1', min: 0, max: 0,   step: 1 },
       { key: 'machine2', label: 'FX 2', min: 0, max: 0,   step: 1 },
+      { key: 'machine3', label: 'FX 3', min: 0, max: 0,   step: 1 },
       { key: 'mix',      label: 'MIX',  min: 0, max: 127, step: 1 } ],
     FX_KNOBS(1),
     FX_KNOBS(2),
+    FX_KNOBS(3),
     LFO_KNOBS(1),
     LFO_KNOBS(2)
 ];
+
+/* Is this key one of the machine selects? A chain of === comparisons is what
+ * left slot 3 out of the label refresh when the slot was added. */
+function isMachineKey(key) { return /^machine[1-9]$/.test(key); }
 
 /* ------------------------------------------------------------------- state */
 
@@ -111,10 +124,10 @@ let needsRedraw = true;
 let tickCount   = 0;
 
 let values      = {};           /* key -> number, mirrored from the DSP    */
-let machineName = ['--', '--'];
-let fxLabels    = [[], []];
+let machineName = ['--', '--', '--'];
+let fxLabels    = [[], [], []];
 let machineList = [];
-let labelsDirty = [true, true];
+let labelsDirty = [true, true, true];
 
 /* Background-refresh budget. BURST covers a full page plus both label strings
  * so a page or machine change fills in within a few hundred ms; the steady
@@ -153,13 +166,12 @@ function readNum(key) {
 /* The machine select's range is the engine's list length, never a constant. */
 function applyMachineRange() {
     const max = machineList.length > 0 ? machineList.length - 1 : 0;
-    PAGES[PAGE_MACHINES][0].max = max;
-    PAGES[PAGE_MACHINES][1].max = max;
+    for (let s = 0; s < N_SLOTS; s++) PAGES[PAGE_MACHINES][s].max = max;
 }
 
 /* Resolve both slot machine names from the mirror. Local — costs no reads. */
 function syncMachineNames() {
-    for (let s = 0; s < 2; s++) {
+    for (let s = 0; s < N_SLOTS; s++) {
         const code = values[`machine${s + 1}`];
         if (code === undefined) machineName[s] = '--';
         else machineName[s] = machineList[code] || `#${code}`;
@@ -190,7 +202,7 @@ function refreshStep() {
         return;
     }
 
-    for (let s = 0; s < 2; s++) {
+    for (let s = 0; s < N_SLOTS; s++) {
         if (labelsDirty[s]) {
             if (readLabels(s)) needsRedraw = true;
             return;
@@ -202,7 +214,7 @@ function refreshStep() {
     const k = knobs[refreshCursor % knobs.length];
     refreshCursor++;
     if (readNum(k.key)) {
-        if (k.key === 'machine1' || k.key === 'machine2') syncMachineNames();
+        if (isMachineKey(k.key)) syncMachineNames();
         needsRedraw = true;
     }
 }
@@ -227,8 +239,9 @@ function fit(s, maxPx) {
 function knobLabel(i) {
     const k = PAGES[page][i];
     if (!k) return '';
-    if (page === PAGE_FX1 || page === PAGE_FX2) {
-        const t = fxLabels[page === PAGE_FX1 ? 0 : 1][i];
+    const slot = pageSlot(page);
+    if (slot >= 0) {
+        const t = fxLabels[slot][i];
         return t && t.length ? t : '';
     }
     return k.label;
@@ -243,7 +256,7 @@ function knobValue(i) {
     const v = values[k.key];
     if (v === undefined) return '--';
 
-    if (k.key === 'machine1' || k.key === 'machine2') return machineList[v] || `#${v}`;
+    if (isMachineKey(k.key)) return machineList[v] || `#${v}`;
     if (k.key.endsWith('_wave')) return WAVE_NAME[v % 7];
     if (k.key.endsWith('_trig')) return v ? 'Retrig' : 'Free';
     if (k.key.endsWith('_dest')) {
@@ -313,8 +326,8 @@ function drawUI() {
     }
 
     let right = `${page + 1}/${PAGE_COUNT}`;
-    if (page === PAGE_FX1) right = machineName[0];
-    else if (page === PAGE_FX2) right = machineName[1];
+    const slot = pageSlot(page);
+    if (slot >= 0) right = machineName[slot];
     drawHeader(PAGE_NAME[page], right);
     drawGridPage();
     drawFooter('Jog:page  Click:home');
@@ -358,10 +371,10 @@ function adjustKnob(i, delta) {
      * slot's eight parameters and its knob labels are now stale. Mark them for
      * the background refresh — reading them HERE is what made scrolling the
      * machine list unusable. */
-    if (k.key === 'machine1' || k.key === 'machine2') {
-        const s = k.key === 'machine1' ? 0 : 1;
+    if (isMachineKey(k.key)) {
+        const s = parseInt(k.key.slice(7), 10) - 1;
         labelsDirty[s] = true;
-        for (const p of PAGES[s === 0 ? PAGE_FX1 : PAGE_FX2]) delete values[p.key];
+        for (const p of PAGES[PAGE_FX1 + s]) delete values[p.key];
         syncMachineNames();
         burst = BURST_READS;
     }
@@ -378,8 +391,8 @@ function setPage(p) {
     refreshCursor = 0;
     burst = BURST_READS;
     let spoken = PAGE_NAME[page];
-    if (page === PAGE_FX1) spoken = `FX 1, ${machineName[0]}`;
-    else if (page === PAGE_FX2) spoken = `FX 2, ${machineName[1]}`;
+    const slot = pageSlot(page);
+    if (slot >= 0) spoken = `FX ${slot + 1}, ${machineName[slot]}`;
     announceView(spoken);
     needsRedraw = true;
 }
@@ -451,9 +464,9 @@ globalThis.init = function () {
     shiftHeld = false;
     values = {};
     machineList = [];
-    machineName = ['--', '--'];
-    fxLabels = [[], []];
-    labelsDirty = [true, true];
+    machineName = ['--', '--', '--'];
+    fxLabels = [[], [], []];
+    labelsDirty = [true, true, true];
     refreshCursor = 0;
     tickCount = 0;
 

@@ -474,13 +474,17 @@ int work_lock_label(work_t *w, int index, char *buf, int buf_len) {
 
     if (index < 0 || index >= WORK_LOCKABLE)
         return nclamp(snprintf(buf, (size_t)buf_len, "?"), cap);
-    if (index == 18)
+    if (index == WORK_LOCK_MIX)
         return nclamp(snprintf(buf, (size_t)buf_len, "MIX"), cap);
-    if (index >= 16)
-        return nclamp(snprintf(buf, (size_t)buf_len, "%d:MACH", index - 15), cap);
+    if (index == WORK_LOCK_MACH3)
+        return nclamp(snprintf(buf, (size_t)buf_len, "3:MACH"), cap);
+    if (index == WORK_LOCK_MACH1 || index == WORK_LOCK_MACH1 + 1)
+        return nclamp(snprintf(buf, (size_t)buf_len, "%d:MACH",
+                               index - WORK_LOCK_MACH1 + 1), cap);
 
-    int slot = index / WORK_PARAMS;
-    int knob = index % WORK_PARAMS;
+    int knob = 0;
+    int slot = work_lock_decode(index, &knob);
+    if (slot < 0) return nclamp(snprintf(buf, (size_t)buf_len, "?"), cap);
     const char *nm = PARAM_NAME[w->cfg[slot].machine][knob];
     if (!nm[0]) nm = "-";
     return nclamp(snprintf(buf, (size_t)buf_len, "%d:%s", slot + 1, nm), cap);
@@ -2481,18 +2485,21 @@ static void build_effective(work_t *w, int frames) {
     for (int s = 0; s < WORK_SLOTS; ++s)
         for (int i = 0; i < WORK_PARAMS; ++i)
             w->eff[s][i] = w->cfg[s].p[i];
-    w->eff_machine[0] = w->cfg[0].machine;
-    w->eff_machine[1] = w->cfg[1].machine;
-    w->eff_mix        = w->mix;
+    for (int s = 0; s < WORK_SLOTS; ++s) w->eff_machine[s] = w->cfg[s].machine;
+    w->eff_mix = w->mix;
 
     if (w->seq_on && w->held_mask) {
         for (int i = 0; i < WORK_LOCKABLE; ++i) {
             if (!(w->held_mask & (1u << i))) continue;
             uint8_t v = w->held[i];
-            if (i < 16)       w->eff[i / WORK_PARAMS][i % WORK_PARAMS] = v;
-            else if (i < 18)  w->eff_machine[i - 16] =
-                                  (uint8_t)iclamp(v, 0, WORK_FX_COUNT - 1);
-            else              w->eff_mix = v;
+            int knob = 0;
+            int slot = work_lock_decode(i, &knob);
+            if (slot >= 0)                    w->eff[slot][knob] = v;
+            else if (i == WORK_LOCK_MIX)      w->eff_mix = v;
+            else if (i == WORK_LOCK_MACH3)    w->eff_machine[2] =
+                                                  (uint8_t)iclamp(v, 0, WORK_FX_COUNT - 1);
+            else                              w->eff_machine[i - WORK_LOCK_MACH1] =
+                                                  (uint8_t)iclamp(v, 0, WORK_FX_COUNT - 1);
         }
     }
 
@@ -2777,6 +2784,20 @@ static void nrpn_apply(work_t *w, int num, int value14) {
         work_set_param(w, "mix", val);
         return;
     }
+    /* Slot 3 landed after the map was published, and 27-31 is not eight wide.
+     * Rather than renumber a map someone may already have on a controller, it
+     * takes the free block at 80. */
+    if (num >= 80 && num <= 87) {
+        snprintf(key, sizeof(key), "fx3_p%d", num - 79);
+        snprintf(val, sizeof(val), "%d", v7);
+        work_set_param(w, key, val);
+        return;
+    }
+    if (num == 88) {
+        snprintf(val, sizeof(val), "%d", (value14 * (WORK_FX_COUNT - 1)) / 16383);
+        work_set_param(w, "machine3", val);
+        return;
+    }
     if (num >= 100 && num < 100 + WORK_PATTERNS) {   /* pattern select */
         snprintf(val, sizeof(val), "%d", num - 100);
         work_set_param(w, "pattern", val);
@@ -2808,6 +2829,20 @@ static void cc_apply(work_t *w, int cc, int v) {
         return;
     }
     if (cc == 26) { work_set_param(w, "mix", val); return; }
+
+    /* Slot 3, on the free block at 80 — see the NRPN note above. It also
+     * clears Move's own encoder CCs (71-78), which only matters if an
+     * external controller is echoing them. */
+    if (cc >= 80 && cc <= 87) {
+        snprintf(key, sizeof(key), "fx3_p%d", cc - 79);
+        work_set_param(w, key, val);
+        return;
+    }
+    if (cc == 88) {
+        snprintf(val, sizeof(val), "%d", (v * (WORK_FX_COUNT - 1) + 63) / 127);
+        work_set_param(w, "machine3", val);
+        return;
+    }
 
     /* CC 32/40/48 start LFO 1/2/3; the seven fields run in page order */
     if ((cc >= 32 && cc <= 38) || (cc >= 40 && cc <= 46) || (cc >= 48 && cc <= 54)) {
@@ -2980,9 +3015,19 @@ static void step_set_locks(work_step_t *st, const char *s) {
 }
 
 /* "fx1_p3" -> slot 0, param 2. Returns 0 if the key is not of that shape. */
+/* "machine1".."machineN" and the "fx1".."fxN" aliases -> slot index, else -1.
+ * One parser rather than a chain of strcmp, so adding a slot cannot leave one
+ * spelling behind — which is exactly what left slot 3 unconfigurable. */
+static int parse_machine_key(const char *key) {
+    int s = -1;
+    if (strncmp(key, "machine", 7) == 0 && key[8] == '\0') s = key[7] - '1';
+    else if (strncmp(key, "fx", 2) == 0 && key[3] == '\0') s = key[2] - '1';
+    return (s >= 0 && s < WORK_SLOTS) ? s : -1;
+}
+
 static int parse_slot_param(const char *key, int *slot, int *idx) {
     if (strncmp(key, "fx", 2) != 0) return 0;
-    if (key[2] != '1' && key[2] != '2') return 0;
+    if (key[2] < '1' || key[2] >= '1' + WORK_SLOTS) return 0;
     if (strncmp(key + 3, "_p", 2) != 0) return 0;
     int n = atoi(key + 5);
     if (n < 1 || n > WORK_PARAMS) return 0;
@@ -3220,9 +3265,9 @@ void work_set_param(work_t *w, const char *key, const char *val) {
      * it failed to resolve. visible_if fails OPEN, so every machine's labels
      * showed at once with Bypass's "(no parameters)" first. fx1/fx2 stay as
      * aliases so nothing that already used them breaks. */
-    if (strcmp(key, "machine1") == 0 || strcmp(key, "machine2") == 0 ||
-        strcmp(key, "fx1") == 0 || strcmp(key, "fx2") == 0) {
-        int s  = (key[0] == 'm' ? key[7] : key[2]) - '1';
+    {
+        int s = parse_machine_key(key);
+        if (s >= 0) {
         int mc = parse_machine(val);
         if (mc >= 0 && mc != w->cfg[s].machine) {
             w->cfg[s].machine = (uint8_t)mc;
@@ -3231,6 +3276,7 @@ void work_set_param(work_t *w, const char *key, const char *val) {
                 w->cfg[s].p[i] = PARAM_DEFAULT[mc][i];
         }
         return;
+        }
     }
 
     if (strcmp(key, "mix") == 0) { w->mix = (uint8_t)iclamp(atoi(val), 0, 127); return; }
@@ -3450,17 +3496,19 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
     if (parse_slot_param(key, &slot, &idx))
         return nclamp(snprintf(buf, buf_len, "%d", w->cfg[slot].p[idx]), cap);
 
-    if (strcmp(key, "machine1") == 0 || strcmp(key, "machine2") == 0 ||
-        strcmp(key, "fx1") == 0 || strcmp(key, "fx2") == 0)
-        return nclamp(snprintf(buf, buf_len, "%d",
-                      w->cfg[(key[0] == 'm' ? key[7] : key[2]) - '1'].machine), cap);
+    {
+        int s = parse_machine_key(key);
+        if (s >= 0)
+            return nclamp(snprintf(buf, buf_len, "%d", w->cfg[s].machine), cap);
+    }
 
     if (strcmp(key, "mix") == 0)
         return nclamp(snprintf(buf, buf_len, "%d", w->mix), cap);
 
     /* The values actually reaching the DSP this block, after locks and LFOs.
      * The UI shows these live so a moving parameter reads as moving. */
-    if (strcmp(key, "eff1") == 0 || strcmp(key, "eff2") == 0) {
+    if (strncmp(key, "eff", 3) == 0 && key[3] >= '1' &&
+        key[3] < '1' + WORK_SLOTS && key[4] == '\0') {
         int s = key[3] - '1';
         int n = 0;
         for (int i = 0; i < WORK_PARAMS; ++i)
@@ -3468,9 +3516,16 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
                                     i ? "," : "", w->eff[s][i]), cap);
         return n;
     }
-    if (strcmp(key, "effm") == 0)
-        return nclamp(snprintf(buf, buf_len, "%d,%d,%d",
-                               w->eff_machine[0], w->eff_machine[1], w->eff_mix), cap);
+    /* Every slot's effective machine, then the effective mix — the UI reads
+     * this in one round-trip rather than one per slot. */
+    if (strcmp(key, "effm") == 0) {
+        int n = 0;
+        for (int s = 0; s < WORK_SLOTS; ++s)
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%d,",
+                                    w->eff_machine[s]), cap);
+        return nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%d",
+                                   w->eff_mix), cap);
+    }
 
     if (strcmp(key, "seq_on") == 0)  return nclamp(snprintf(buf, buf_len, "%d", w->seq_on), cap);
     if (strcmp(key, "seq_len") == 0) return nclamp(snprintf(buf, buf_len, "%d", CURPAT(w)->len), cap);
@@ -3578,7 +3633,8 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
     /* The eight knob labels for whichever machine a slot currently holds.
      * The UI reads these rather than carrying its own copy of the table —
      * a second copy in JS is a copy that drifts. */
-    if (strcmp(key, "labels1") == 0 || strcmp(key, "labels2") == 0) {
+    if (strncmp(key, "labels", 6) == 0 && key[6] >= '1' &&
+        key[6] < '1' + WORK_SLOTS && key[7] == '\0') {
         int mc = w->cfg[key[6] - '1'].machine;
         int n = 0;
         for (int i = 0; i < WORK_PARAMS; ++i)

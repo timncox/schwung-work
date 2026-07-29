@@ -2,7 +2,7 @@
 
 **Twenty-six machines for the Ableton Move** — twenty-one effects and five
 sample sources — as a [Schwung](https://github.com/charlesvestal/schwung)
-module. Two insert slots in series, each loaded with one machine, plus three FX
+module. Three insert slots in series, each loaded with one machine, plus three FX
 LFOs and a modulation envelope that can modulate any slot parameter.
 
 > Clean-room: every machine is an original DSP implementation, written from

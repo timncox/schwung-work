@@ -24,7 +24,7 @@
 #include "plugin_api_v1.h"
 
 #define WORK_SR          44100
-#define WORK_SLOTS       2      /* insert FX 1 and 2, in series */
+#define WORK_SLOTS       3      /* insert FX 1, 2 and 3, in series */
 #define WORK_PARAMS      8      /* knob A-H, one per Move encoder */
 #define WORK_LFOS        3      /* FX LFO 1, 2 and 3 (3 added in v0.3.0) */
 
@@ -148,8 +148,50 @@ typedef enum {
  *   16     slot 1 machine
  *   17     slot 2 machine
  *   18     global dry/wet
- * Append only — the index is part of the pattern format. */
-#define WORK_LOCKABLE   19
+ *   19..26 slot 3 parameters A-H     (v0.8.0)
+ *   27     slot 3 machine            (v0.8.0)
+ *
+ * Append only — the index is part of the pattern format. That is why slot 3
+ * sits ABOVE the machine and mix entries instead of following slot 2's
+ * parameters: renumbering would silently move every lock in every pattern
+ * ever saved. The map is not contiguous, so go through the two helpers below
+ * rather than computing slot * WORK_PARAMS.
+ *
+ * A FOURTH slot does not fit. lock_mask is a uint32_t and four slots need 37
+ * indices, so adding one means widening the mask AND versioning the pattern
+ * format — not just bumping WORK_SLOTS. */
+#define WORK_LOCK_MACH1  16     /* slot 2's machine is the next index */
+#define WORK_LOCK_MIX    18
+#define WORK_LOCK_S3P0   19     /* slot 3 parameters A-H run from here */
+#define WORK_LOCK_MACH3  27
+#define WORK_LOCKABLE    28
+
+/* (slot, knob) -> lock index, and back. Both return -1 for anything out of
+ * range so a caller cannot quietly address the wrong parameter. */
+static inline int work_lock_param_index(int slot, int knob) {
+    if (slot < 0 || slot >= WORK_SLOTS || knob < 0 || knob >= WORK_PARAMS)
+        return -1;
+    return slot < 2 ? slot * WORK_PARAMS + knob : WORK_LOCK_S3P0 + knob;
+}
+
+static inline int work_lock_machine_index(int slot) {
+    if (slot < 0 || slot >= WORK_SLOTS) return -1;
+    return slot < 2 ? WORK_LOCK_MACH1 + slot : WORK_LOCK_MACH3;
+}
+
+/* Decode a lock index to the slot parameter it addresses. Returns the slot and
+ * writes the knob, or -1 when the index is a machine select or the mix. */
+static inline int work_lock_decode(int index, int *knob) {
+    if (index >= 0 && index < 2 * WORK_PARAMS) {
+        if (knob) *knob = index % WORK_PARAMS;
+        return index / WORK_PARAMS;
+    }
+    if (index >= WORK_LOCK_S3P0 && index < WORK_LOCK_S3P0 + WORK_PARAMS) {
+        if (knob) *knob = index - WORK_LOCK_S3P0;
+        return 2;
+    }
+    return -1;
+}
 
 /* Trig conditions — the fill/previous/first/ratio set that step sequencers
  * have converged on. A neighbour-track condition has no meaning for a single
@@ -312,6 +354,12 @@ void    work_process(work_t *w, const int16_t *in, int16_t *out, int frames);
  *   CC 48..54  FX LFO 3                 CC 56..60  modulation envelope
  *   CC 64      sequencer on/off         CC 65      fill
  *   CC 66      live record
+ *   CC 80..87  FX 3 parameters A..H     CC 88      FX 3 machine
+ *
+ * FX 3 sits at 80 rather than continuing at 27, because the map was published
+ * with two slots and 27..31 is not eight controls wide. Renumbering would
+ * silently move every control someone had already assigned. NRPN mirrors these
+ * numbers exactly, so CC 80 and NRPN 80 reach the same parameter.
  */
 void    work_set_param(work_t *w, const char *key, const char *val);
 int     work_get_param(work_t *w, const char *key, char *buf, int buf_len);

@@ -5,7 +5,7 @@ last_touched: 2026-07-28
 
 # Work
 
-Schwung module for the Ableton Move: **twenty-six machines in two insert
+Schwung module for the Ableton Move: **twenty-six machines in three insert
 slots** — twenty-one effects and five sample sources — inspired by the FX
 section of the Elektron Tonverk. Three FX LFOs and a modulation envelope
 modulate any slot parameter.
@@ -41,8 +41,8 @@ Practical consequences:
 ## Architecture
 
 The reference device is 8 encoders per page and Move has 8 knobs, so parameter
-pages map 1:1. Two insert slots in series, each holding one machine with up to
-8 parameters — that is what this engine models.
+pages map 1:1. Three insert slots in series, each holding one machine with up
+to 8 parameters — that is what this engine models.
 
 ```
 src/work_core.{c,h}   the engine: 21 machines, 2 slots, 2 FX LFOs, sequencer

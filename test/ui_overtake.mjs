@@ -25,6 +25,11 @@ const root = path.resolve(here, '..');
 const contract = JSON.parse(fs.readFileSync(path.join(root, 'build/contract.json'), 'utf8'));
 const settable = new Set([...contract.settable, ...contract.commands]);
 
+/* Where MIX sits on the GLOBAL page. Derived rather than written down, because
+ * the page grew an FX 3 select and every hardcoded index after it shifted. */
+const N_SLOTS = (contract.get.effm || '0,0').split(',').length - 1;
+const MIX_KNOB = N_SLOTS;
+
 let checks = 0;
 let failures = 0;
 function check(cond, msg) {
@@ -396,6 +401,46 @@ async function testHoldStepPlusKnobLocks() {
           `release after locking should not rewrite the step, got ${JSON.stringify(stepWrites)}`);
 }
 
+/* The lock index map is APPEND-ONLY: slot 3's parameters live at 19-26, not at
+ * 16-23, because 16/17/18 were already the machine selects and the mix. Get
+ * this wrong and holding a step while turning a knob on slot 3 writes a lock
+ * onto slot 1's MACHINE — the patch would change machine mid-pattern and
+ * nothing would say why. */
+async function testSlotThreeLocksAppendRatherThanCollide() {
+    console.log("slot 3's locks land at 19-26, clear of the machine and mix indices");
+    const ctx = await loadUI();
+    ctx.host.init();
+
+    /* focus slot 3: the slot pad cycles 1 -> 2 -> 3 */
+    for (let i = 0; i < 2; i++) {
+        ctx.host.onMidiMessageInternal(noteOn(70));
+        ctx.host.onMidiMessageInternal(noteOff(70));
+    }
+    ctx.host.tick();
+
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(stepDown(2));          /* hold step 3 */
+    ctx.host.onMidiMessageInternal(cc(KNOB1, 1));         /* knob 1, +1  */
+
+    const locks = ctx.writes.filter((w) => /^lock\d+_\d+$/.test(w.key));
+    check(locks.length === 1,
+          `expected one lock write, got ${JSON.stringify(ctx.writes)}`);
+    if (locks.length) {
+        check(locks[0].key === 'lock2_19',
+              `slot 3 knob A must lock index 19, got ${locks[0].key} — 16 is ` +
+              `slot 1's machine select, so an off-by-map here silently ` +
+              `changes machine mid-pattern`);
+    }
+    ctx.host.onMidiMessageInternal(stepUp(2));
+
+    /* and the knob edits slot 3's base parameter, not slot 1's */
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(KNOB1, 1));
+    const base = ctx.writes.filter((w) => /^fx\d_p\d$/.test(w.key));
+    check(base.length === 1 && base[0].key === 'fx3_p1',
+          `knob 1 with slot 3 focused wrote ${JSON.stringify(base)}, expected fx3_p1`);
+}
+
 /* Nudging an existing lock must start from the LOCK's value, not the base —
  * this is what the missing lock<N>_<P> getter used to break. */
 async function testLockNudgeStartsFromLock() {
@@ -697,7 +742,7 @@ async function testKnobResponseCurve() {
 
     /* wide ranges keep the acceleration, or 0-127 becomes unusable */
     ctx = await atGlobalWith({ mix: '40' });
-    ctx.host.onMidiMessageInternal(cc(KNOB1 + 2, 20));   /* MIX, 0-127 */
+    ctx.host.onMidiMessageInternal(cc(KNOB1 + MIX_KNOB, 20));   /* MIX, 0-127 */
     const m = ctx.writes.find((x) => x.key === 'mix');
     check(m && parseInt(`${m.val}`, 10) === 60,
           `wide-range acceleration was lost: mix went to ${m && m.val}, expected 60`);
@@ -742,7 +787,7 @@ async function testBulkDecodeIsPositionallyCorrect() {
           `machine1 continued from the wrong base: wrote ${w && w.val}, expected 14`);
 
     ctx.writes.length = 0;
-    ctx.host.onMidiMessageInternal(cc(KNOB1 + 2, 1));       /* mix +1 */
+    ctx.host.onMidiMessageInternal(cc(KNOB1 + MIX_KNOB, 1));   /* mix +1 */
     const m = ctx.writes.find((x) => x.key === 'mix');
     check(m && parseInt(`${m.val}`, 10) === 100,
           `mix continued from the wrong base: wrote ${m && m.val}, expected 100`);
@@ -1648,6 +1693,7 @@ const tests = [
     testShiftDoesNotLatchFromTheLaunchGesture,
     testStepsArriveAsNotes,
     testHoldStepPlusKnobLocks,
+    testSlotThreeLocksAppendRatherThanCollide,
     testLockNudgeStartsFromLock,
     testPlainTapTogglesTrig,
     testShiftEscapesTheLockGesture,

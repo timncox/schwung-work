@@ -74,8 +74,7 @@ int main(void) {
 
     printf("{\n  \"get\": {");
     const char *simple[] = {
-        "machines", "conds", "machine1", "machine2", "fx1", "fx2", "labels1", "labels2",
-        "eff1", "eff2", "effm", "mix", "seq_on", "seq_len", "fill",
+        "machines", "conds", "effm", "mix", "seq_on", "seq_len", "fill",
         "seq_pos", "meter", "state", "live_rec",
         "menv_dest", "menv_atk", "menv_hold", "menv_dec", "menv_depth",
         "pattern", "page_mask", "song_on", "song_len", "song_pos", "undo_state",
@@ -84,11 +83,19 @@ int main(void) {
     for (size_t i = 0; i < sizeof(simple) / sizeof(simple[0]); ++i) emit(w, simple[i]);
 
     char key[32];
-    for (int s = 1; s <= 2; ++s)
+    /* Driven by WORK_SLOTS rather than a literal 2, so a new slot's keys land
+     * in the fixture automatically. The hardcoded list is what made every UI
+     * read of slot 3 look like a key the engine does not serve. */
+    for (int s = 1; s <= WORK_SLOTS; ++s) {
+        snprintf(key, sizeof(key), "machine%d", s); emit(w, key);
+        snprintf(key, sizeof(key), "fx%d", s);      emit(w, key);
+        snprintf(key, sizeof(key), "labels%d", s);  emit(w, key);
+        snprintf(key, sizeof(key), "eff%d", s);     emit(w, key);
         for (int p = 1; p <= 8; ++p) {
             snprintf(key, sizeof(key), "fx%d_p%d", s, p);
             emit(w, key);
         }
+    }
     for (int i = 0; i < WORK_STEPS; ++i) {
         snprintf(key, sizeof(key), "step%d", i);   emit(w, key);
         snprintf(key, sizeof(key), "locks%d", i);  emit(w, key);
@@ -121,9 +128,10 @@ int main(void) {
 
     /* Probe the writable keys with values that must change the read-back. */
     struct { const char *key; const char *probe; } probes[] = {
-        {"machine1", "5"}, {"machine2", "3"}, {"fx1", "7"}, {"fx2", "9"}, {"mix", "77"},
+        {"machine1", "5"}, {"machine2", "3"}, {"machine3", "4"},
+        {"fx1", "7"}, {"fx2", "9"}, {"fx3", "11"}, {"mix", "77"},
         {"seq_on", "0"}, {"seq_len", "9"}, {"fill", "1"}, {"seq_clear", "1"},
-        {"fx1_p1", "42"}, {"fx2_p8", "13"},
+        {"fx1_p1", "42"}, {"fx2_p8", "13"}, {"fx3_p4", "55"},
         /* Every LFO field, on every LFO. A partial probe list here is worse
          * than none: the UI harnesses use `settable` to flag writes the engine
          * would ignore, and a key missing from this list reads as a bug in the

@@ -175,7 +175,7 @@ footer a{color:var(--rust)}
   <div class="titleblock">
     <div class="tb-main">
       <h1>Work <span class="amp">&amp;</span><span class="over">Overwork</span></h1>
-      <p class="tagline">Twenty-six machines for the Ableton Move &mdash; twenty-one effects and five sample sources &mdash; in two insert slots with two FX LFOs. Overwork adds the whole surface and a 64-step sequencer that parameter-locks them.</p>
+      <p class="tagline">Twenty-six machines for the Ableton Move &mdash; twenty-one effects and five sample sources &mdash; in three insert slots with three FX LFOs. Overwork adds the whole surface and a 64-step sequencer that parameter-locks them.</p>
       <span class="stamp">Playing on hardware</span>
     </div>
     <div class="tb-side">
@@ -224,12 +224,12 @@ footer a{color:var(--rust)}
 </section>
 
 <section id="flow">
-  <div class="sechead"><span class="secnum">02</span><h2>Signal flow</h2><span class="note">two inserts in series</span></div>
-  <p>Both slots run in series. Each holds one machine. The two FX LFOs reach any slot parameter, and in Overwork the sequencer&rsquo;s parameter locks sit between the base value and the LFOs.</p>
+  <div class="sechead"><span class="secnum">02</span><h2>Signal flow</h2><span class="note">three inserts in series</span></div>
+  <p>All three slots run in series. Each holds one machine. The FX LFOs reach any slot parameter, and in Overwork the sequencer&rsquo;s parameter locks sit between the base value and the LFOs.</p>
   <div class="flow">
     <svg viewBox="0 0 900 260" role="img" aria-labelledby="flowtitle flowdesc">
       <title id="flowtitle">Work signal flow diagram</title>
-      <desc id="flowdesc">Audio enters at IN, passes through FX slot 1 then FX slot 2 in series, then a global dry/wet mix, then OUT. A resolution chain feeds the slots: base parameter values are overridden by the sequencer's parameter locks, which are then modulated by the two FX LFOs.</desc>
+      <desc id="flowdesc">Audio enters at IN, passes through FX slots 1, 2 and 3 in series, then a global dry/wet mix, then OUT. A resolution chain feeds the slots: base parameter values are overridden by the sequencer's parameter locks, which are then modulated by the FX LFOs.</desc>
 
       <rect class="box" x="14" y="96" width="78" height="48"/>
       <text class="lbl" x="53" y="125" text-anchor="middle">IN</text>
@@ -240,27 +240,34 @@ footer a{color:var(--rust)}
 
       <rect class="box" x="146" y="88" width="130" height="64"/>
       <text class="lbl" x="211" y="114" text-anchor="middle">FX SLOT 1</text>
-      <text x="211" y="132" text-anchor="middle">1 of 20 machines</text>
+      <text x="211" y="132" text-anchor="middle">1 of 26 machines</text>
 
       <line x1="276" y1="120" x2="324" y2="120"/>
       <path d="M324 120 l-9 -4 v8 z" fill="var(--ink-2)" stroke="none"/>
 
       <rect class="box" x="330" y="88" width="130" height="64"/>
       <text class="lbl" x="395" y="114" text-anchor="middle">FX SLOT 2</text>
-      <text x="395" y="132" text-anchor="middle">1 of 20 machines</text>
+      <text x="395" y="132" text-anchor="middle">1 of 26 machines</text>
 
-      <line x1="460" y1="120" x2="508" y2="120"/>
-      <path d="M508 120 l-9 -4 v8 z" fill="var(--ink-2)" stroke="none"/>
+      <line x1="460" y1="120" x2="500" y2="120"/>
+      <path d="M500 120 l-9 -4 v8 z" fill="var(--ink-2)" stroke="none"/>
 
-      <rect class="acc" x="514" y="96" width="96" height="48"/>
-      <text class="lbl" x="562" y="118" text-anchor="middle">MIX</text>
-      <text x="562" y="134" text-anchor="middle">dry / wet</text>
+      <rect class="box" x="506" y="88" width="130" height="64"/>
+      <text class="lbl" x="571" y="114" text-anchor="middle">FX SLOT 3</text>
+      <text x="571" y="132" text-anchor="middle">1 of 26 machines</text>
 
-      <line x1="610" y1="120" x2="658" y2="120"/>
-      <path d="M658 120 l-9 -4 v8 z" fill="var(--ink-2)" stroke="none"/>
+      <line x1="636" y1="120" x2="676" y2="120"/>
+      <path d="M676 120 l-9 -4 v8 z" fill="var(--ink-2)" stroke="none"/>
 
-      <rect class="box" x="664" y="96" width="78" height="48"/>
-      <text class="lbl" x="703" y="125" text-anchor="middle">OUT</text>
+      <rect class="acc" x="682" y="96" width="96" height="48"/>
+      <text class="lbl" x="730" y="118" text-anchor="middle">MIX</text>
+      <text x="730" y="134" text-anchor="middle">dry / wet</text>
+
+      <line x1="778" y1="120" x2="810" y2="120"/>
+      <path d="M810 120 l-9 -4 v8 z" fill="var(--ink-2)" stroke="none"/>
+
+      <rect class="box" x="816" y="96" width="70" height="48"/>
+      <text class="lbl" x="851" y="125" text-anchor="middle">OUT</text>
 
       <!-- resolution chain -->
       <rect class="box" x="146" y="206" width="112" height="40"/>
