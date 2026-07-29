@@ -196,6 +196,9 @@ let resumeRepaints = 0;
 let sampleMode  = false;     /* the sample browser is open                  */
 let samples     = [];
 let sampleIndex = 0;
+let sampleLoaded = '';       /* name the ENGINE reports holding              */
+let sampleFrames = 0;
+let sampleStatus = '';       /* last transfer result, shown on screen        */
 
 let presetMode  = false;
 let presetIndex = 0;         /* 0 = "Save new", 1..n = a stored preset      */
@@ -506,6 +509,12 @@ const SAMPLE_DIRS = [
 ];
 const SAMPLE_SCAN_DEPTH = 4;     /* Samples/Schwung/Skipback/<date>/x.wav */
 const SAMPLE_LIMIT = 200;        /* a browser, not an archive */
+
+/* Reading and transferring a sample blocks for a noticeable moment, so the
+ * "Reading..." frame has to reach the screen BEFORE that starts, not after. */
+function flushDisplay() {
+    if (typeof host_flush_display === 'function') host_flush_display();
+}
 const CHUNK_FRAMES = 8192;              /* 32 KB raw -> ~43 KB of base64 */
 
 const B64_CHARS =
@@ -647,23 +656,53 @@ function sendSample(name, wav, maxFrames) {
     return frames;
 }
 
+/* Ask the ENGINE what it is holding. Reporting success from our own side of
+ * the transfer is worth nothing — the sample crosses a shared-memory channel
+ * to another process, and only the far end knows whether it arrived. */
+function refreshSampleState() {
+    sampleFrames = parseInt(getParam('sample_frames'), 10) || 0;
+    sampleLoaded = sampleFrames > 0 ? getParam('sample_name') : '';
+}
+
 function loadSampleFile(path) {
+    const name = path.slice(path.lastIndexOf('/') + 1).replace(/\.wav$/i, '');
+
+    /* Every failure below sets a status the SCREEN shows. announce() alone
+     * reaches the screen reader only, so with it off a failed load and a
+     * successful one looked exactly the same: nothing happened. */
+    sampleStatus = `Reading ${name}...`;
+    needsRedraw = true;
+    drawSampleBrowser();
+    flushDisplay();
+
     const b64 = typeof host_read_file_base64 === 'function'
         ? host_read_file_base64(path) : null;
-    if (!b64) { announce('Could not read that file'); return false; }
+    if (!b64) {
+        sampleStatus = 'Could not read that file';
+        announce(sampleStatus); needsRedraw = true; return false;
+    }
 
     const wav = parseWav(b64ToBytes(`${b64}`));
-    if (!wav) { announce('Not a WAV this can read'); return false; }
+    if (!wav) {
+        sampleStatus = 'Not a WAV this can read';
+        announce(sampleStatus); needsRedraw = true; return false;
+    }
 
     const maxFrames = parseInt(getParam('sample_max'), 10) || 0;
-    const name = path.slice(path.lastIndexOf('/') + 1).replace(/\.wav$/i, '');
     const sent = sendSample(name, wav, maxFrames);
 
-    if (sent < wav.frames) {
-        announce(`Loaded ${name}, truncated to ${Math.round(sent / 44100)} seconds`);
-    } else {
-        announce(`Loaded ${name}`);
+    /* The engine is the authority on what landed. */
+    refreshSampleState();
+    if (sampleFrames <= 0) {
+        sampleStatus = 'Transfer failed';
+        announce(sampleStatus); needsRedraw = true; return false;
     }
+
+    const secs = (sampleFrames / 44100).toFixed(1);
+    sampleStatus = sent < wav.frames
+        ? `Loaded ${name}, cut to ${secs}s`
+        : `Loaded ${name}, ${secs}s`;
+    announce(sampleStatus);
     needsRedraw = true;
     return true;
 }
@@ -707,6 +746,14 @@ function listSamples() {
 function openSampleBrowser() {
     samples = listSamples();
     sampleIndex = 0;
+    sampleStatus = '';
+    refreshSampleState();
+    /* start on whatever is already loaded, if it is still in the list */
+    if (sampleLoaded) {
+        const at = samples.findIndex((f) =>
+            f.slice(f.lastIndexOf('/') + 1).replace(/\.wav$/i, '') === sampleLoaded);
+        if (at >= 0) sampleIndex = at;
+    }
     sampleMode = true;
     needsRedraw = true;
     announceView(samples.length
@@ -738,7 +785,11 @@ function drawSampleBrowser() {
             if (idx >= samples.length) break;
             const y = 13 + r * 10;
             const path = samples[idx];
-            const label = path.slice(path.lastIndexOf('/') + 1);
+            let label = path.slice(path.lastIndexOf('/') + 1);
+            /* a dot marks the one the engine is actually holding */
+            const isLoaded = sampleLoaded &&
+                label.replace(/\.wav$/i, '') === sampleLoaded;
+            label = (isLoaded ? '\u2022' : ' ') + label;
             if (idx === sampleIndex) fill_rect(0, y - 1, 128, 9, 1);
             print(2, y, label.length > 24 ? label.slice(0, 24) : label,
                   idx === sampleIndex ? 0 : 1);
@@ -746,9 +797,12 @@ function drawSampleBrowser() {
     }
 
     fill_rect(0, 55, 128, 1, 1);
-    /* NOT "Back:exit" — in overtake mode Back belongs to the host and leaves
-     * the module altogether. The way out is the gesture that opened it. */
-    print(0, 57, 'Click:load  Sh+Slot:close', 1);
+    /* The status of the last attempt beats a static hint: a load that failed
+     * and a load that worked used to look identical on screen. NOT
+     * "Back:exit" — in overtake mode Back belongs to the host and leaves the
+     * module altogether. */
+    const foot = sampleStatus || 'Click:load  Sh+Slot:close';
+    print(0, 57, foot.length > 25 ? foot.slice(0, 25) : foot, 1);
 }
 
 /* --------------------------------------------------------------- editing */

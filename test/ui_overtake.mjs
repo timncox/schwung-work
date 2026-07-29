@@ -131,6 +131,7 @@ function makeHost() {
             return Buffer.from(raw).toString('base64');
         },
         host_ensure_dir(path) { vfs.dirs.add(path); return true; },
+        host_flush_display() {},
 
         /* Every one of these is a blocking round-trip on hardware, serviced
          * once per SPI frame. Counting them is the point — a UI that is
@@ -197,6 +198,27 @@ function makeHost() {
         },
         host_module_set_param(key, val) {
             writes.push({ key, val });
+            /* Model the sample transfer the way work_core.c does, so
+             * sample_frames/sample_name read back the way the engine reports
+             * them. Without this the mock records the writes and answers the
+             * fixture's stale values, and a UI that correctly asks the ENGINE
+             * what landed looks broken. */
+            if (key === 'sample_begin') {
+                const [n, nm] = `${val}`.split(':');
+                store.__declared = parseInt(n, 10) || 0;
+                store.__pending = nm || '';
+                store.__fill = 0;
+            } else if (key === 'sample_chunk') {
+                const bytes = Buffer.from(`${val}`, 'base64').length;
+                store.__fill = (store.__fill || 0) + Math.floor(bytes / 4);
+            } else if (key === 'sample_end') {
+                const n = Math.min(store.__fill || 0, store.__declared || 0);
+                store.sample_frames = `${n}`;
+                store.sample_name = n > 0 ? (store.__pending || '') : '';
+            } else if (key === 'sample_clear') {
+                store.sample_frames = '0';
+                store.sample_name = '';
+            }
             const fam = key.replace(/\d+/g, '#');
             const known = settable.has(key)
                 || [...settable].some((s) => s.replace(/\d+/g, '#') === fam);
@@ -1233,6 +1255,87 @@ async function testSampleScanIsBounded() {
           `the scan descended all 12 levels (${found.length} files) — it must stop`);
 }
 
+
+/* A load that failed and a load that worked looked IDENTICAL on screen: the
+ * only feedback was announce(), which reaches the screen reader and nothing
+ * else. With it off there was no way to tell whether the feature worked —
+ * reported from hardware as "the list shows but I can't select one". */
+async function testBrowserReportsWhatTheEngineHolds() {
+    console.log('the browser shows the result of a load on screen');
+    const ctx = await loadUI();
+    ctx.host.init();
+    ctx.vfs.dirs.add('/data/UserData/UserLibrary/Samples');
+    ctx.vfs.binaries.set('/data/UserData/UserLibrary/Samples/kick.wav',
+                         makeWav({ frames: 4410 }));
+
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    ctx.host.onMidiMessageInternal(noteOn(70));
+    ctx.host.onMidiMessageInternal(noteOff(70));
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    ctx.host.tick();
+
+    /* the mock engine reports back what the transfer declared */
+    ctx.host.onMidiMessageInternal(cc(JOG_CLICK, 127));
+    ctx.host.tick();
+
+    const screen = ctx.screen.map((x) => x.text).join(' ');
+    check(/Loaded/.test(screen),
+          `no confirmation on screen after a load; screen was "${screen}"`);
+    check(/kick/.test(screen), `the loaded name is not shown; screen was "${screen}"`);
+}
+
+/* A failure has to say so, and must not claim success. */
+async function testBrowserReportsFailure() {
+    console.log('an unreadable file reports failure on screen');
+    const ctx = await loadUI();
+    ctx.host.init();
+    ctx.vfs.dirs.add('/data/UserData/UserLibrary/Samples');
+    ctx.vfs.binaries.set('/data/UserData/UserLibrary/Samples/notes.wav',
+                         Buffer.from('this is not a wav at all'));
+
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    ctx.host.onMidiMessageInternal(noteOn(70));
+    ctx.host.onMidiMessageInternal(noteOff(70));
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    ctx.host.onMidiMessageInternal(cc(JOG_CLICK, 127));
+    ctx.host.tick();
+
+    const screen = ctx.screen.map((x) => x.text).join(' ');
+    check(/Not a WAV|Could not read/.test(screen),
+          `a bad file gave no error on screen; screen was "${screen}"`);
+    check(!/Loaded/.test(screen), 'a failed load claimed success');
+}
+
+/* The engine is the authority. If the transfer is dropped in transit, the UI
+ * must NOT report success just because it finished sending. */
+async function testLoadTrustsTheEngineNotItself() {
+    console.log('a transfer the engine did not take is reported as failed');
+    const ctx = await loadUI();
+    ctx.host.init();
+    ctx.vfs.dirs.add('/data/UserData/UserLibrary/Samples');
+    ctx.vfs.binaries.set('/data/UserData/UserLibrary/Samples/a.wav',
+                         makeWav({ frames: 1000 }));
+
+    /* The engine refuses everything: sample_end commits nothing. This is the
+     * transfer being dropped in transit, which the UI can only detect by
+     * asking rather than assuming. */
+    const realSet = ctx.host.host_module_set_param;
+    ctx.host.host_module_set_param = (k, v) => {
+        realSet(k, v);
+        if (k === 'sample_end') { ctx.store.sample_frames = '0'; ctx.store.sample_name = ''; }
+    };
+
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    ctx.host.onMidiMessageInternal(noteOn(70));
+    ctx.host.onMidiMessageInternal(noteOff(70));
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    const ok = ctx.host.loadSampleFile('/data/UserData/UserLibrary/Samples/a.wav');
+    check(ok === false, 'the UI reported success while the engine held nothing');
+    ctx.host.tick();
+    const screen = ctx.screen.map((x) => x.text).join(' ');
+    check(/failed/i.test(screen), `no failure shown; screen was "${screen}"`);
+}
+
 /* ------------------------------------------------------------------ run */
 
 const tests = [
@@ -1253,6 +1356,9 @@ const tests = [
     testSampleScanFindsNestedFiles,
     testSampleScanIsBounded,
     testSampleBrowserIsReachableAndLoads,
+    testBrowserReportsWhatTheEngineHolds,
+    testBrowserReportsFailure,
+    testLoadTrustsTheEngineNotItself,
     testSampleBrowserClosesTheWayItOpened,
     testWavLoadRoundTrip,
     testWavVariantsAndChunkParsing,
