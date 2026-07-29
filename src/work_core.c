@@ -293,6 +293,7 @@ typedef struct {
 
 struct work {
     const host_api_v1_t *host;
+    uint32_t             rui_rev;      /* bumped on every write; see rui_poll */
     work_vfilt_cfg_t     vfilt;        /* voice filter, shared by all slots */
     work_slot_cfg_t      cfg[WORK_SLOTS];
     work_lfo_cfg_t       lfo[WORK_LFOS];
@@ -3345,6 +3346,11 @@ static void sample_append_b64(work_t *w, const char *b64) {
 }
 
 void work_set_param(work_t *w, const char *key, const char *val) {
+    /* Every write bumps the revision. schwung's remote UI polls the cheap
+     * "rui_poll" digest and only pays for a full state read when this moves,
+     * so over-reporting costs one extra read and under-reporting loses an
+     * edit. Bumping unconditionally is the safe direction. */
+    if (w) w->rui_rev++;
     if (!w || !key || !val) return;
 
     if (strcmp(key, "sample_begin") == 0) {
@@ -3673,6 +3679,16 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
         else if (strcmp(f, "track") == 0) v = w->vfilt.track;
         if (v >= 0) return nclamp(snprintf(buf, buf_len, "%d", v), cap);
     }
+
+    /* The digest schwung's remote UI polls: revision, transport, playhead and
+     * tempo in one cheap read. It exists so the manager does NOT have to read
+     * the whole state blob on every poll — that blob serialises every step and
+     * lock, and the param channel it crosses is the one whose cost caused
+     * every UI bug in this module. Order is rev:on:tick:bpm. */
+    if (strcmp(key, "rui_poll") == 0)
+        return nclamp(snprintf(buf, buf_len, "%u:%d:%d:%d",
+                               (unsigned)w->rui_rev, w->seq_on ? 1 : 0,
+                               w->seq_pos, (int)(w->bpm + 0.5f)), cap);
 
     if (strcmp(key, "mix") == 0)
         return nclamp(snprintf(buf, buf_len, "%d", w->mix), cap);

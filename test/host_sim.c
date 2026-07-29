@@ -1763,6 +1763,35 @@ static void test_voice_filter(void) {
     work_destroy(d); work_destroy(e); work_destroy(f);
 }
 
+/* schwung's remote UI polls this instead of reading the whole state blob. If
+ * the revision never moved, a browser client would never see an edit made on
+ * the hardware; if it moved on every read, the manager would pay for a full
+ * state read every poll — and that blob serialises every step and lock. */
+static void test_remote_ui_poll_digest(void) {
+    printf("rui_poll reports a revision that moves on edits and not on reads\n");
+    work_t *w = work_create(&host);
+
+    char a[64], b[64];
+    work_get_param(w, "rui_poll", a, sizeof a);
+    CHECK(strchr(a, ':') != NULL, "rui_poll is \"%s\", expected rev:on:tick:bpm", a);
+
+    /* four fields */
+    int colons = 0;
+    for (const char *c = a; *c; ++c) if (*c == ':') colons++;
+    CHECK(colons == 3, "rui_poll has %d separators, expected 3 (%s)", colons, a);
+
+    /* reading must not move it, or every poll costs a full state read */
+    work_get_param(w, "rui_poll", b, sizeof b);
+    CHECK(strcmp(a, b) == 0, "two reads with no edit differed: %s vs %s", a, b);
+
+    /* an edit must move it, or a browser client never sees hardware changes */
+    work_set_param(w, "mix", "37");
+    work_get_param(w, "rui_poll", b, sizeof b);
+    CHECK(strcmp(a, b) != 0, "editing mix left rui_poll at %s", b);
+
+    work_destroy(w);
+}
+
 static void test_sample_transfer(void) {
     printf("a sample transfers in chunks and lands byte-exact\n");
     work_t *w = work_create(&host);
@@ -2456,6 +2485,7 @@ int main(void) {
     test_hw_input_flag();
 
     test_state_carries_the_sample_path();
+    test_remote_ui_poll_digest();
     test_voice_filter();
     test_sample_transfer();
     test_sample_bounds();

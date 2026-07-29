@@ -204,6 +204,43 @@ answers `tool not found: overwork` — its open_tool path searches
 the overtake list would make the suite fully unattended; until then every test
 skips with a clear message rather than failing.
 
+## The browser editor (not built yet)
+
+Researched 2026-07-29, from schwung's own source rather than its docs. Start
+here rather than rediscovering it.
+
+`docs/MODULES.md` says a custom `web_ui.html` is **synth-slot only** and that
+audio-FX modules cannot have one. That is out of date: `remote_ui.go` has
+`handleSubscribeTool`, which serves an OVERTAKE tool's `web_ui.html` under the
+`tool` component. So **Overwork can have one; Work (audio_fx) cannot** — for
+the chain build the auto-generated controls are all schwung offers.
+
+What the integration actually requires:
+
+- `modules/overtake/overwork/web_ui.html`, plus anything under that directory,
+  served at `/api/remote-ui/module-assets/overwork/<path>`. Relative URLs
+  resolve against that prefix, so the folder is self-contained. `module.json`,
+  `config.json` and `secrets/` are refused by the asset endpoint.
+- Param keys are **component-prefixed**: `overtake_dsp:mix`, not `mix`.
+- `schwungRemote.getParam()` reads a LOCAL CACHE, not the device. Subscribe
+  with `onParamChange` first and seed from the initial burst.
+- The seed comes from `fetchAllParams`, which parses `overtake_dsp:state` as a
+  FLAT JSON object: only string/number/bool fields become params. **Work's
+  state blob is not flat** — `p1`/`l1`/`vf` are arrays and `stp` is a packed
+  string, so none of them survive the seed. Either the engine grows a flat
+  view for the remote UI, or the page reads what it needs itself.
+- The manager polls `overtake_dsp:rui_poll`, a cheap digest documented as
+  `rev:on:tick:bpm`, and only does the expensive full `state` read when `rev`
+  changes. **The engine does not serve `rui_poll` today.** Without it every
+  poll is a full state read over the param channel — the same channel whose
+  cost caused every UI bug in this module (see the read-budget notes above).
+  Serve it before writing any of the HTML.
+- The iframe is sandboxed `allow-scripts allow-same-origin`: no navigation, no
+  popups, no form submission.
+
+Order of work: `rui_poll` + a flat remote-UI state view in the engine, with
+tests, THEN the page.
+
 ## Verification
 
 ```bash

@@ -79,7 +79,7 @@ int main(void) {
         "menv_dest", "menv_atk", "menv_hold", "menv_dec", "menv_depth",
         "pattern", "page_mask", "song_on", "song_len", "song_pos", "undo_state",
         "vf_base", "vf_width", "vf_reso", "vf_env", "vf_atk", "vf_dec", "vf_track",
-        "monitor", "hw_input"
+        "monitor", "hw_input", "rui_poll"
     };
     for (size_t i = 0; i < sizeof(simple) / sizeof(simple[0]); ++i) emit(w, simple[i]);
 
