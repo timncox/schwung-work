@@ -118,83 +118,6 @@ h3{font-size:1.02rem;letter-spacing:.01em;margin:26px 0 8px;font-weight:700}
 p{margin:0 0 14px;max-width:68ch}
 .lede{font-size:1.14rem;line-height:1.62;max-width:62ch}
 
-.callout{
-  border-left:3px solid var(--signal);background:rgba(228,87,46,.07);
-  padding:14px 18px;margin:20px 0;font-size:.95rem;
-}
-.callout strong{font-family:var(--mono);font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:var(--rust);display:block;margin-bottom:4px}
-
-/* ---------- signal flow ---------- */
-.flow{border:1.5px solid var(--rule);background:rgba(255,253,248,.6);padding:22px;margin:22px 0;overflow-x:auto}
-.flow svg{display:block;min-width:640px;width:100%;height:auto}
-.flow text{font-family:var(--mono);font-size:11px;fill:var(--ink-2)}
-.flow text.lbl{font-size:12px;font-weight:600;fill:var(--ink)}
-.flow rect.box{fill:rgba(237,232,220,.9);stroke:var(--ink);stroke-width:1.5}
-.flow rect.acc{fill:rgba(228,87,46,.14);stroke:var(--rust);stroke-width:1.5}
-.flow path,.flow line{stroke:var(--ink-2);stroke-width:1.4;fill:none}
-.flow path.dash{stroke:var(--teal);stroke-dasharray:4 3}
-
-/* ---------- p-lock demo ---------- */
-.demo{border:2px solid var(--ink);background:rgba(255,253,248,.72);margin:26px 0}
-.demo-head{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:12px 18px;border-bottom:1.5px solid var(--rule);font-family:var(--mono);font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3)}
-.demo-body{padding:22px 18px 24px}
-.steprow{display:grid;grid-template-columns:repeat(16,1fr);gap:5px;margin-bottom:6px}
-@media (max-width:760px){.steprow{grid-template-columns:repeat(8,1fr)}}
-.stepbtn{
-  aspect-ratio:1/1.35;border:1.5px solid var(--ink);background:var(--paper-2);
-  font-family:var(--mono);font-size:.62rem;color:var(--ink-3);cursor:pointer;
-  display:flex;align-items:flex-end;justify-content:center;padding-bottom:3px;
-  transition:background .12s,transform .08s;position:relative;
-}
-.stepbtn:hover{background:#DED6C2}
-.stepbtn[aria-pressed="true"]{background:var(--ink);color:var(--paper)}
-.stepbtn.held{background:var(--signal);border-color:var(--rust);color:#fff;transform:translateY(-2px)}
-.stepbtn.haslock::before{
-  content:"";position:absolute;top:4px;left:50%;transform:translateX(-50%);
-  width:7px;height:7px;border-radius:50%;background:var(--teal-fill);border:1px solid var(--teal);
-}
-.stepbtn[aria-pressed="true"].haslock::before{background:#7FD8CF}
-
-.knobrow{display:grid;grid-template-columns:repeat(8,1fr);gap:12px;margin-top:22px}
-@media (max-width:760px){.knobrow{grid-template-columns:repeat(4,1fr)}}
-.knob{text-align:center;font-family:var(--mono);font-size:.62rem;color:var(--ink-3)}
-.knob button{
-  width:100%;aspect-ratio:1;border-radius:50%;border:2px solid var(--ink);
-  background:radial-gradient(circle at 38% 32%, #FBF8F1, var(--paper-2) 72%);
-  cursor:ns-resize;position:relative;display:block;
-}
-.knob button:hover{border-color:var(--rust)}
-.knob .ind{position:absolute;left:50%;top:8%;width:2.5px;height:36%;background:var(--ink);transform-origin:50% 100%;border-radius:2px}
-.knob.locked button{border-color:var(--teal);box-shadow:0 0 0 3px rgba(46,139,132,.22)}
-.knob .lab{display:block;margin-top:6px;font-weight:600;color:var(--ink);letter-spacing:.04em}
-.knob .val{display:block;color:var(--ink-3)}
-.knob.locked .val{color:var(--teal);font-weight:600}
-
-.readout{
-  margin-top:20px;padding:12px 16px;border:1.5px dashed var(--rule);
-  font-family:var(--mono);font-size:.78rem;color:var(--ink-2);min-height:2.9em;line-height:1.5;
-}
-.readout b{color:var(--rust)}
-
-/* ---------- pad map ---------- */
-.tabs{display:flex;gap:0;margin:22px 0 0;border-bottom:2px solid var(--ink)}
-.tabs button{
-  font-family:var(--mono);font-size:.74rem;letter-spacing:.1em;text-transform:uppercase;
-  padding:9px 18px;border:2px solid var(--ink);border-bottom:0;background:var(--paper-2);
-  color:var(--ink-3);cursor:pointer;margin-right:-2px;
-}
-.tabs button[aria-selected="true"]{background:var(--ink);color:var(--paper)}
-.panel{border:2px solid var(--ink);border-top:0;background:rgba(255,253,248,.72);padding:22px 18px}
-.shifttoggle{
-  font:600 .72rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;
-  color:var(--ink-2);background:transparent;border:1.5px solid var(--rule);
-  border-radius:999px;padding:.5rem 1rem;margin:0 0 .9rem;cursor:pointer;
-  transition:background .15s,border-color .15s,color .15s;
-}
-.shifttoggle:hover{border-color:var(--rust);color:var(--ink)}
-.shifttoggle[aria-pressed="true"]{
-  background:var(--rust);border-color:var(--rust);color:#fff;
-}
 .padgrid{display:grid;grid-template-columns:repeat(8,1fr);gap:6px;max-width:560px}
 .pad{
   aspect-ratio:1;border:1.5px solid var(--ink);background:var(--paper-2);
@@ -253,7 +176,7 @@ footer a{color:var(--rust)}
     <div class="tb-main">
       <h1>Work <span class="amp">&amp;</span><span class="over">Overwork</span></h1>
       <p class="tagline">Twenty-six machines for the Ableton Move &mdash; twenty-one effects and five sample sources &mdash; in two insert slots with two FX LFOs. Overwork adds the whole surface and an Elektron-style step sequencer that parameter-locks them.</p>
-      <span class="stamp">Playing on hardware &mdash; see what is verified</span>
+      <span class="stamp">Playing on hardware</span>
     </div>
     <div class="tb-side">
       <div class="tb-cell">Module<b>Schwung / Move</b></div>
@@ -281,19 +204,6 @@ footer a{color:var(--rust)}
 <section id="overview">
   <div class="sechead"><span class="secnum">01</span><h2>Overview</h2><span class="note">two builds, one engine</span></div>
 
-  <div class="callout">
-    <h3>What has actually been heard on a Move</h3>
-    <p>Verified by ear, 29 July 2026: selecting machines across the whole list;
-    loading a WAV and playing it with Single Player from a sequencer trig;
-    <strong>parameter locks</strong>; Wavefinder&rsquo;s position sweep morphing
-    continuously; and a sample player in slot 1 feeding Rumsklang Reverb in
-    slot 2 with no crackling, which is the heaviest realistic pair and the
-    only real answer on CPU headroom.</p>
-    <p>Still unheard: <strong>Subtracks</strong>, <strong>Multi Player</strong>&rsquo;s
-    polyphony, <strong>presets</strong> saving and reloading, trig conditions,
-    and Shape&rsquo;s shelf extremes since they were deepened. Those are not
-    known to be broken &mdash; they are simply not known to work.</p>
-  </div>
   <p class="lede"><strong>Work</strong> is the <code>audio_fx</code> build. It drops into a Signal Chain slot or a Master FX slot and processes whatever is upstream.</p>
   <p class="lede"><strong>Overwork</strong> is the <code>overtake</code> build. It takes over Move&rsquo;s whole surface and runs the same twenty-six machines on the live input &mdash; mic, line, or USB-C &mdash; with a step sequencer driving parameter locks.</p>
 
