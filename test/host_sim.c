@@ -820,125 +820,33 @@ static void test_transport_restarts_pattern(void) {
 /* The Shadow UI and the Master FX knob pages get their labels from here.
  * module.json can only ever say "A".."H"; this must say TUNE, WIN, FDBK... and
  * must change when the machine changes. */
-static void test_ui_hierarchy_labels(void) {
-    printf("ui_hierarchy carries the loaded machine's real knob labels\n");
+/* Serving ui_hierarchy DIVERTS the host away from our own chain UI:
+ * enterComponentEdit() tries getComponentHierarchy() first and only falls
+ * through to loadModuleUi() -> ui_chain.js when it returns nothing. The
+ * generic hierarchy editor caches the hierarchy at entry and never re-fetches,
+ * which is what left the settings page stuck on the previous machine. So the
+ * engine must stay quiet on this key. */
+static void test_ui_hierarchy_not_served(void) {
+    printf("ui_hierarchy is not served, so the host reaches our chain UI\n");
     work_t *w = work_create(&host);
     assert(w);
     set_slot(w, 0, WORK_FX_CHRONO);
-    set_slot(w, 1, WORK_FX_WARBLE);
 
-    char buf[16384];
+    char buf[65536];
+    memset(buf, 0x5A, sizeof(buf));
     int n = work_get_param(w, "ui_hierarchy", buf, sizeof(buf));
-    CHECK(n > 0, "ui_hierarchy returned %d", n);
-    CHECK(n < (int)sizeof(buf) - 1,
-          "hierarchy is %d bytes; the device host buffer is 16384", n);
+    CHECK(n < 0, "ui_hierarchy answered with %d bytes — that diverts the host "
+                 "into the caching hierarchy editor and bypasses ui_chain.js", n);
 
-    CHECK(strstr(buf, "\"TUNE\"") != NULL, "Chrono Pitch's TUNE label missing");
-    CHECK(strstr(buf, "\"FDBK\"") != NULL, "Chrono Pitch's FDBK label missing");
-    CHECK(strstr(buf, "\"N.HPF\"") != NULL, "Warble's N.HPF label missing");
-    /* The level LINK must NOT name a machine: the Shadow UI captures the
-     * hierarchy once, so a machine name baked into it goes stale the moment
-     * the machine changes. */
-    CHECK(strstr(buf, "FX 1: ") == NULL,
-          "the slot link names a machine, which will go stale in the cache");
-    CHECK(strstr(buf, "\"FX 1 Parameters\"") != NULL,
-          "slot 1 link is missing");
-    /* No knob anywhere should be labelled with a bare letter — that was the
-     * original complaint: "I don't know what each does". */
-    for (char c = 'A'; c <= 'H'; ++c) {
-        char probe[16];
-        snprintf(probe, sizeof(probe), "\"name\":\"%c\"", c);
-        CHECK(strstr(buf, probe) == NULL,
-              "hierarchy still exposes a bare letter label \"%c\"", c);
-    }
-
-    /* balanced braces and brackets — a cheap structural check */
-    int braces = 0, brackets = 0, instr = 0;
-    for (const char *c = buf; *c; ++c) {
-        if (*c == '"' && (c == buf || c[-1] != '\\')) instr = !instr;
-        if (instr) continue;
-        if (*c == '{') braces++;
-        else if (*c == '}') braces--;
-        else if (*c == '[') brackets++;
-        else if (*c == ']') brackets--;
-    }
-    CHECK(braces == 0, "unbalanced braces in hierarchy (%d)", braces);
-    CHECK(brackets == 0, "unbalanced brackets in hierarchy (%d)", brackets);
-
-    /* Compact form (small buffer): the labels follow the loaded machine. */
+    /* the labels the chain UI actually uses must still be there */
+    char lab[256];
+    int ln = work_get_param(w, "labels1", lab, sizeof(lab));
+    CHECK(ln > 0 && strstr(lab, "TUNE") != NULL,
+          "labels1 must still serve the loaded machine's labels (%s)", lab);
     set_slot(w, 0, WORK_FX_FBANK);
-    work_get_param(w, "ui_hierarchy", buf, sizeof(buf));
-    CHECK(strstr(buf, "\"90Hz\"") != NULL,
-          "compact hierarchy did not follow the machine change");
-    CHECK(strstr(buf, "\"TUNE\"") == NULL,
-          "stale Chrono Pitch label survived the machine change");
-
-    /* Bypass has no parameters — it must say so, not emit an empty level */
-    set_slot(w, 0, WORK_FX_BYPASS);
-    work_get_param(w, "ui_hierarchy", buf, sizeof(buf));
-    CHECK(strstr(buf, "(no parameters)") != NULL,
-          "Bypass produced an empty parameter level");
-
-    /* ROOMY form (the chain path has a 64 kB buffer): every machine's labels
-     * are present at once, each gated on the slot's machine select, so the
-     * Shadow UI can swap them live instead of showing the previous machine
-     * until you back out and re-enter. */
-    {
-        static char big[65536];
-        int bn = work_get_param(w, "ui_hierarchy", big, sizeof(big));
-        CHECK(bn > 20000, "roomy hierarchy is only %d bytes — did it fall back?", bn);
-        CHECK(bn < (int)sizeof(big) - 1, "roomy hierarchy filled the buffer (%d)", bn);
-
-        CHECK(strstr(big, "visible_if") != NULL,
-              "roomy hierarchy has no visible_if gating");
-        /* labels from machines OTHER than the loaded one must be present */
-        CHECK(strstr(big, "\"TUNE\"") != NULL, "Chrono Pitch's TUNE missing from the roomy form");
-        CHECK(strstr(big, "\"90Hz\"") != NULL, "Filterbank's 90Hz missing from the roomy form");
-        CHECK(strstr(big, "\"PPONG\"") != NULL, "Saturator Delay's PPONG missing");
-        CHECK(strstr(big, "\"SPEED\"") != NULL, "Warble's SPEED missing");
-
-        /* the gate must reference the slot's own machine select */
-        CHECK(strstr(big, "{\"param\":\"machine1\",\"equals\":1}") != NULL,
-              "slot 1 entries are not gated on machine1");
-        CHECK(strstr(big, "{\"param\":\"machine2\",\"equals\":1}") != NULL,
-              "slot 2 entries are not gated on machine2");
-
-        /* knobs stay the eight shared keys — the filter picks the visible set */
-        CHECK(strstr(big, "\"knobs\":[\"fx1_p1\",\"fx1_p2\"") != NULL,
-              "slot 1 knob mapping is not the eight shared keys");
-
-        /* schwung's own component keys for chain FX slots are literally "fx1"
-         * and "fx2" (shadow_ui.js), so a parameter of ours by those names
-         * collides in the prefixed key space and visible_if fails OPEN —
-         * showing every machine's labels at once. Nothing gated may use them. */
-        CHECK(strstr(big, "\"param\":\"fx1\"") == NULL &&
-              strstr(big, "\"param\":\"fx2\"") == NULL,
-              "a visible_if gate uses fx1/fx2, which collide with schwung's "
-              "component keys and will fail open");
-
-        int braces = 0, brackets = 0, instr = 0;
-        for (const char *c = big; *c; ++c) {
-            if (*c == '"' && (c == big || c[-1] != '\\')) instr = !instr;
-            if (instr) continue;
-            if (*c == '{') braces++; else if (*c == '}') braces--;
-            else if (*c == '[') brackets++; else if (*c == ']') brackets--;
-        }
-        CHECK(braces == 0 && brackets == 0,
-              "roomy hierarchy is unbalanced (braces %d brackets %d)", braces, brackets);
-    }
-
-    /* and the usual short-buffer canary */
-    for (int capsz = 8; capsz <= 4096; capsz *= 4) {
-        char *small = malloc((size_t)capsz + 64);
-        memset(small, 0x3C, (size_t)capsz + 64);
-        int r = work_get_param(w, "ui_hierarchy", small, capsz);
-        int ok = 1;
-        for (int i = capsz; i < capsz + 64; ++i)
-            if ((unsigned char)small[i] != 0x3C) ok = 0;
-        CHECK(ok, "ui_hierarchy into %d bytes overwrote past the buffer", capsz);
-        CHECK(r <= capsz - 1, "ui_hierarchy into %d bytes reported %d", capsz, r);
-        free(small);
-    }
+    work_get_param(w, "labels1", lab, sizeof(lab));
+    CHECK(strstr(lab, "90Hz") != NULL,
+          "labels1 did not follow the machine change (%s)", lab);
     work_destroy(w);
 }
 
@@ -1606,7 +1514,7 @@ int main(void) {
     test_machine_load_installs_defaults();
     test_midi_clock();
     test_param_name_table();
-    test_ui_hierarchy_labels();
+    test_ui_hierarchy_not_served();
     test_reverbs_are_distinct();
     test_grainer();
 

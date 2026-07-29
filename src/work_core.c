@@ -2837,119 +2837,28 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
      * Kept deliberately compact: the on-device host reads get_param into a
      * 16 KB buffer, so this must not sprawl. Only the two loaded machines'
      * labels are emitted, not all twenty machines' worth. */
-    if (strcmp(key, "ui_hierarchy") == 0) {
-        int n = 0;
-
-        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-            "{\"levels\":{\"root\":{\"name\":\"Work\",\"params\":["
-            "{\"key\":\"machine1\",\"name\":\"FX 1 Machine\",\"type\":\"enum\",\"options\":["), cap);
-        for (int i = 0; i < WORK_FX_COUNT; ++i)
-            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s\"%s\"",
-                                    i ? "," : "", MACHINE_NAME[i]), cap);
-        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-            "]},{\"key\":\"machine2\",\"name\":\"FX 2 Machine\",\"type\":\"enum\",\"options\":["), cap);
-        for (int i = 0; i < WORK_FX_COUNT; ++i)
-            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s\"%s\"",
-                                    i ? "," : "", MACHINE_NAME[i]), cap);
-        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-            "]},{\"key\":\"mix\",\"name\":\"Dry/Wet\",\"type\":\"int\",\"min\":0,\"max\":127},"
-            "{\"level\":\"fx1p\",\"label\":\"FX 1 Parameters\"},"
-            "{\"level\":\"fx2p\",\"label\":\"FX 2 Parameters\"},"
-            "{\"level\":\"lfo1\",\"label\":\"FX LFO 1\"},"
-            "{\"level\":\"lfo2\",\"label\":\"FX LFO 2\"},"
-            "{\"level\":\"lfo3\",\"label\":\"FX LFO 3\"}],"
-            "\"knobs\":[\"machine1\",\"machine2\",\"mix\"]}"), cap);
-
-        /* Per-slot parameter levels.
-         *
-         * THE PROBLEM this solves: the Shadow UI captures the hierarchy ONCE,
-         * in enterHierarchyEditorWith(), and never re-fetches it. Emitting only
-         * the loaded machine's labels therefore left the settings page showing
-         * the PREVIOUS machine until you backed out and re-entered — which is
-         * exactly what Tim hit on hardware.
-         *
-         * The way out is `visible_if`, which the Shadow UI DOES re-evaluate
-         * live: refreshHierarchyVisibility() runs after every parameter edit,
-         * and the condition is resolved against the current value via
-         * getSlotParam(). So emit EVERY machine's labels, each gated on the
-         * slot's machine select, and the visible set swaps the moment the
-         * machine changes — no re-entry.
-         *
-         * The parameter KEYS are the same for every machine (fx1_p1..p8), so
-         * `knobs` still lists just those eight; the filter keeps whichever
-         * eight named entries are currently visible.
-         *
-         * That form costs ~35 kB, which is fine for the chain path
-         * (SHADOW_PARAM_VALUE_LEN is 64 kB) but not for the overtake host's
-         * 16 kB get_param buffer. So the shape follows the caller's buffer:
-         * anything that cannot hold the full form gets the compact
-         * current-machine one, which is all our own overtake UI ever needs. */
-        int roomy = (buf_len >= 40000);
-
-        for (int s = 0; s < WORK_SLOTS; ++s) {
-            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                ",\"fx%dp\":{\"name\":\"FX %d\",\"params\":[", s + 1, s + 1), cap);
-            int first = 1;
-
-            if (roomy) {
-                for (int mc = 0; mc < WORK_FX_COUNT; ++mc) {
-                    for (int i = 0; i < WORK_PARAMS; ++i) {
-                        const char *nm = PARAM_NAME[mc][i];
-                        if (!nm[0]) {
-                            if (i || PARAM_NAME[mc][0][0]) continue;
-                            nm = "(no parameters)";
-                        }
-                        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                            "%s{\"key\":\"fx%d_p%d\",\"name\":\"%s\",\"type\":\"int\","
-                            "\"min\":0,\"max\":127,"
-                            "\"visible_if\":{\"param\":\"machine%d\",\"equals\":%d}}",
-                            first ? "" : ",", s + 1, i + 1, nm, s + 1, mc), cap);
-                        first = 0;
-                    }
-                }
-            } else {
-                int mc = w->cfg[s].machine;
-                for (int i = 0; i < WORK_PARAMS; ++i) {
-                    if (!PARAM_NAME[mc][i][0]) continue;
-                    n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                        "%s{\"key\":\"fx%d_p%d\",\"name\":\"%s\",\"type\":\"int\",\"min\":0,\"max\":127}",
-                        first ? "" : ",", s + 1, i + 1, PARAM_NAME[mc][i]), cap);
-                    first = 0;
-                }
-                if (first)
-                    n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                        "{\"key\":\"fx%d_p1\",\"name\":\"(no parameters)\",\"type\":\"int\","
-                        "\"min\":0,\"max\":127}", s + 1), cap);
-            }
-
-            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "],\"knobs\":["), cap);
-            for (int i = 0; i < WORK_PARAMS; ++i)
-                n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s\"fx%d_p%d\"",
-                                        i ? "," : "", s + 1, i + 1), cap);
-            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "]}"), cap);
-        }
-
-        for (int l = 0; l < WORK_LFOS; ++l) {
-            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                ",\"lfo%d\":{\"name\":\"FX LFO %d\",\"params\":["
-                "{\"key\":\"lfo%d_dest\",\"name\":\"Destination\",\"type\":\"int\",\"min\":-1,\"max\":15},"
-                "{\"key\":\"lfo%d_spd\",\"name\":\"Speed\",\"type\":\"int\",\"min\":0,\"max\":127},"
-                "{\"key\":\"lfo%d_mult\",\"name\":\"Multiplier\",\"type\":\"int\",\"min\":0,\"max\":127},"
-                "{\"key\":\"lfo%d_wave\",\"name\":\"Waveform\",\"type\":\"enum\","
-                "\"options\":[\"Triangle\",\"Sine\",\"Square\",\"Saw\",\"Ramp\",\"Exponential\",\"Random\"]},"
-                "{\"key\":\"lfo%d_depth\",\"name\":\"Depth\",\"type\":\"int\",\"min\":0,\"max\":127},"
-                "{\"key\":\"lfo%d_phase\",\"name\":\"Start Phase\",\"type\":\"int\",\"min\":0,\"max\":127},"
-                "{\"key\":\"lfo%d_trig\",\"name\":\"Trig Mode\",\"type\":\"enum\","
-                "\"options\":[\"Free\",\"Retrig\"]}],"
-                "\"knobs\":[\"lfo%d_dest\",\"lfo%d_spd\",\"lfo%d_mult\",\"lfo%d_wave\","
-                "\"lfo%d_depth\",\"lfo%d_phase\",\"lfo%d_trig\"]}",
-                l + 1, l + 1, l + 1, l + 1, l + 1, l + 1, l + 1, l + 1, l + 1,
-                l + 1, l + 1, l + 1, l + 1, l + 1, l + 1, l + 1), cap);
-        }
-
-        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "}}"), cap);
-        return n;
-    }
+    /* ui_hierarchy is DELIBERATELY NOT SERVED.
+     *
+     * shadow_ui.js enterComponentEdit():
+     *
+     *     const hierarchy = getComponentHierarchy(slotIndex, componentKey);
+     *     if (hierarchy) { enterHierarchyEditor(...); return; }
+     *     enterComponentEditFallback(...);        // -> loadModuleUi -> ui_chain.js
+     *
+     * So answering this key REPLACES our own chain UI with the generic
+     * hierarchy editor — and that editor captures the hierarchy once, in
+     * enterHierarchyEditorWith(), and never re-fetches it. That is what left
+     * the settings page showing the previous machine until you backed out and
+     * re-entered, and no amount of visible_if gating fixed it because the
+     * whole editor was the wrong editor.
+     *
+     * src/ui_chain.js is strictly better here: it reads labels1/labels2 from
+     * this engine on every machine change, so its labels always match what is
+     * loaded. Staying quiet is what lets the host reach it.
+     *
+     * If Master FX pages ever need labels, the route is chain_params, NOT this
+     * key — chain_params does not divert the component editor.
+     */
 
     if (strcmp(key, "state") == 0) {
         int n = 0;
