@@ -1,6 +1,6 @@
 ---
 status: active
-last_touched: 2026-07-28
+last_touched: 2026-07-29
 ---
 
 # Work
@@ -206,40 +206,40 @@ skips with a clear message rather than failing.
 
 ## The browser editor (not built yet)
 
-Researched 2026-07-29, from schwung's own source rather than its docs. Start
-here rather than rediscovering it.
+**Follow `smack`.** It has the identical three-build shape to Work — audio_fx +
+sound_generator + overtake — and already ships one. Read `smack/src/web_ui.html`
+before writing anything here.
 
-`docs/MODULES.md` says a custom `web_ui.html` is **synth-slot only** and that
-audio-FX modules cannot have one. That is out of date: `remote_ui.go` has
-`handleSubscribeTool`, which serves an OVERTAKE tool's `web_ui.html` under the
-`tool` component. So **Overwork can have one; Work (audio_fx) cannot** — for
-the chain build the auto-generated controls are all schwung offers.
+A correction, because the first pass here got it wrong: schwung's
+`docs/MODULES.md` says a custom `web_ui.html` is synth-slot only and audio-FX
+modules cannot have one. Do not stop there. `remote_ui.go` also serves one for
+an OVERTAKE tool (`handleSubscribeTool`), and smack proves the whole pattern
+works in practice. The shape is:
 
-What the integration actually requires:
+- ONE `src/web_ui.html`. `scripts/build.sh` copies it into the sound_generator
+  and overtake module dirs (`work-in/`, `overwork/`) and adds it to both
+  tarballs. The audio_fx build does not get one and does not need one — the
+  chain slot has the auto-generated controls.
+- The page sniffs its own prefix at runtime rather than being built twice:
 
-- `modules/overtake/overwork/web_ui.html`, plus anything under that directory,
-  served at `/api/remote-ui/module-assets/overwork/<path>`. Relative URLs
-  resolve against that prefix, so the folder is self-contained. `module.json`,
-  `config.json` and `secrets/` are refused by the asset endpoint.
-- Param keys are **component-prefixed**: `overtake_dsp:mix`, not `mix`.
-- `schwungRemote.getParam()` reads a LOCAL CACHE, not the device. Subscribe
-  with `onParamChange` first and seed from the initial burst.
-- The seed comes from `fetchAllParams`, which parses `overtake_dsp:state` as a
-  FLAT JSON object: only string/number/bool fields become params. **Work's
-  state blob is not flat** — `p1`/`l1`/`vf` are arrays and `stp` is a packed
-  string, so none of them survive the seed. Either the engine grows a flat
-  view for the remote UI, or the page reads what it needs itself.
-- The manager polls `overtake_dsp:rui_poll`, a cheap digest documented as
-  `rev:on:tick:bpm`, and only does the expensive full `state` read when `rev`
-  changes. **The engine does not serve `rui_poll` today.** Without it every
-  poll is a full state read over the param channel — the same channel whose
-  cost caused every UI bug in this module (see the read-budget notes above).
-  Serve it before writing any of the HTML.
-- The iframe is sandboxed `allow-scripts allow-same-origin`: no navigation, no
-  popups, no form submission.
+      let PREFIX = null;   /* "overtake_dsp:" (tool) or "synth:" (slot) */
 
-Order of work: `rui_poll` + a flat remote-UI state view in the engine, with
-tests, THEN the page.
+  seeded from the first `onParamChange` burst, since `getParam` reads a LOCAL
+  CACHE and not the device.
+- Writes go through a single `rui_set` key rather than one param per control,
+  which matters here for the same reason everything else does: the param
+  channel is a blocking round-trip serviced once per SPI frame.
+- Anything under the module dir is served at
+  `/api/remote-ui/module-assets/<module-id>/<path>`; `module.json`,
+  `config.json` and `secrets/` are refused. The iframe is sandboxed
+  `allow-scripts allow-same-origin` — no navigation, popups or form submission.
+- The manager polls `rui_poll` (rev:on:tick:bpm) and only does the expensive
+  full `state` read when the revision moves. **The engine serves this as of
+  v0.8.0.**
+- It seeds the page by parsing `state` as a FLAT object, so only scalar fields
+  survive. Work's blob is not flat — `p1`/`l1`/`vf` are arrays and `stp` is
+  packed — so anything the page needs from those it must request itself, or
+  the engine grows a flat view.
 
 ## Verification
 
