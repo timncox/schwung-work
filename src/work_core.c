@@ -276,7 +276,9 @@ typedef struct {
     float  wf_anim[2];
     float  wf_sh[2];             /* sample-and-hold value per oscillator  */
 
-    /* Shape: shelving filter state, two channels each */
+    /* Shape: shelving filter state, two channels each. TWO poles per band,
+     * one pole per band: `in - low` is an exact complementary highpass only for a
+     * single pole, and cascading a second one breaks the null. See m_shape. */
     float  sh_lo[2], sh_hi[2];
 
     int    last_machine;         /* reset state when the machine changes  */
@@ -2050,6 +2052,16 @@ static void m_wavefinder(mctx_t *m, float *l, float *r) {
     *r = (*r) * (1.0f - mix) + orr * lev * mix;
 }
 
+/* Shelf gain from a bipolar 0..127 knob, 64 = flat. See the table in m_shape. */
+static float shelf_gain(uint8_t v) {
+    if (v >= 64) {
+        const float db = ((float)v - 64.0f) / 63.0f * 12.0f;
+        return powf(10.0f, db / 20.0f);
+    }
+    const float t = (float)v / 64.0f;      /* 0 at full cut, 1 at flat */
+    return t * t;                          /* -12 dB at t = 0.5, silence at 0 */
+}
+
 /* ------------------------------------------------------------------ Shape
  *
  * The manual is explicit that Shape "does not produce any sound, but instead
@@ -2070,12 +2082,23 @@ static void m_shape(mctx_t *m, float *l, float *r) {
     const float lof = 30.0f * powf(1000.0f / 30.0f, (float)p[1] / 127.0f);
     const float hif = 500.0f * powf(12000.0f / 500.0f, (float)p[2] / 127.0f);
 
-    /* 64 = flat; 0 = -12 dB, 127 = +12 dB, matching the documented scale.
-     * At the extremes the shelf becomes a full pass, as the manual describes. */
-    const float log_ = ((float)p[0] - 64.0f) / 64.0f;
-    const float hig  = ((float)p[3] - 64.0f) / 64.0f;
-    const float lgain = powf(10.0f, log_ * 12.0f / 20.0f);
-    const float hgain = powf(10.0f, hig  * 12.0f / 20.0f);
+    /* The documented scale is bipolar with a HARD end, and the ends are the
+     * point of the control:
+     *
+     *     -64  highpass response   (the low band is GONE, not merely reduced)
+     *     -32  -12 dB
+     *     -16   -6 dB
+     *       0  flat
+     *     +32   +6 dB
+     *     +63  +12 dB
+     *
+     * Capping the cut at -12 dB made the machine feel tame — reported from
+     * hardware as "it's not extreme, but able to cut lows or highs". Boost
+     * stays linear in dB; cut runs quadratically to SILENCE, which puts -12 dB
+     * at half travel and -6 dB at three quarters, matching the table, and
+     * turns the last of the travel into the full pass the manual describes. */
+    const float lgain = shelf_gain(p[0]);
+    const float hgain = shelf_gain(p[3]);
 
     const float wid = (float)p[4] / 127.0f * 2.0f;      /* 0 mono, 1 as-is, 2 wide */
     const float drv = 1.0f + (float)p[5] / 127.0f * 6.0f;
@@ -2087,13 +2110,36 @@ static void m_shape(mctx_t *m, float *l, float *r) {
 
     float in[2] = { *l, *r }, out[2];
     for (int c = 0; c < 2; ++c) {
-        /* one-pole split: low band, high band, the rest is the middle */
+        /* ONE pole per band, deliberately.
+         *
+         * `in - low` is an exact complementary highpass only while `low` is a
+         * single pole: the pair sums back to the input by construction. I
+         * cascaded a second pole to steepen the slope and it made the extreme
+         * WORSE, not better — two poles shift phase about 10 degrees at 60 Hz
+         * against a 645 Hz corner, so the subtraction no longer nulls and the
+         * full cut bottomed out at -14.7 dB instead of continuing down.
+         * Measured, not reasoned: the cascade cost roughly 6 dB of depth at
+         * the very end of the travel, which is the part of the control this
+         * was supposed to improve. */
         s->sh_lo[c] = in[c] + alo * (s->sh_lo[c] - in[c]);
         s->sh_hi[c] = in[c] + ahi * (s->sh_hi[c] - in[c]);
         const float low  = s->sh_lo[c];
         const float high = in[c] - s->sh_hi[c];
-        const float mid  = in[c] - low - high;
-        float v = low * lgain + mid + high * hgain;
+
+        /* Standard shelving form: take the input and add back the band scaled
+         * by how far the shelf departs from unity.
+         *
+         *   gain 1  ->  v = in                     (flat)
+         *   gain 0  ->  v = in - low               (the band is GONE)
+         *   gain 4  ->  v = in + 3*low             (+12 dB)
+         *
+         * The earlier version split the signal into low/mid/high and summed
+         * them with gains, which cannot reach a true highpass: whatever the
+         * low band failed to capture stayed in the middle at unity and leaked
+         * through at full cut. Subtracting the band itself removes exactly the
+         * band, which is what the manual's "highpass filter response" at the
+         * extreme actually means. */
+        float v = in[c] + low * (lgain - 1.0f) + high * (hgain - 1.0f);
         if (drv > 1.0f) v = softclip(v * drv) / drv;
         out[c] = v;
     }

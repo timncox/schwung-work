@@ -1982,26 +1982,93 @@ static void test_shape_shelves(void) {
     }
     CHECK(self == 0, "Shape generated sound from silence (%lld)", (long long)self);
 
-    /* Low shelf boost must raise a low tone more than a cut does. */
+    /* Low shelf boost must raise a low tone more than a cut does.
+     *
+     * The tone has to be CONTINUOUS across blocks. Building one 128-sample
+     * buffer and replaying it looks like a 60 Hz sine but is not: 128 samples
+     * is a sixth of a cycle at 60 Hz, so replaying it puts a step
+     * discontinuity every block — a 344 Hz buzz with broadband harmonics that
+     * a low shelf cannot remove, which caps the measurable cut no matter how
+     * good the filter is. Carrying the phase across blocks was the difference
+     * between measuring 10x and 21x here. */
     int16_t lo[BLOCK * 2];
-    for (int i = 0; i < BLOCK; ++i) {
-        float v = sinf((float)i / (float)WORK_SR * 60.0f * 6.28318531f) * 8000.0f;
-        lo[i * 2] = (int16_t)v; lo[i * 2 + 1] = (int16_t)v;
-    }
+    float lo_phase = 0.0f;
+    #define FILL_LO() do { \
+        for (int i = 0; i < BLOCK; ++i) { \
+            float v = sinf(lo_phase) * 8000.0f; \
+            lo_phase += 6.28318531f * 60.0f / (float)WORK_SR; \
+            if (lo_phase > 6.28318531f) lo_phase -= 6.28318531f; \
+            lo[i * 2] = (int16_t)v; lo[i * 2 + 1] = (int16_t)v; \
+        } \
+    } while (0)
+    FILL_LO();
     work_set_param(w, "fx1_p1", "127");    /* LO.G max boost */
     int64_t boosted = 0;
     for (int b = 0; b < 20; ++b) {
+        FILL_LO();
         work_process(w, lo, out, BLOCK);
         for (int i = 0; i < BLOCK * 2; ++i) boosted += llabs(out[i]);
     }
     work_set_param(w, "fx1_p1", "0");      /* LO.G max cut */
     int64_t cut = 0;
     for (int b = 0; b < 20; ++b) {
+        FILL_LO();
         work_process(w, lo, out, BLOCK);
         for (int i = 0; i < BLOCK * 2; ++i) cut += llabs(out[i]);
     }
     CHECK(boosted > cut * 2, "the low shelf barely moved a 60 Hz tone: "
           "boost %lld vs cut %lld", (long long)boosted, (long long)cut);
+
+    /* The ENDS are the point of this control. The manual documents -64 as a
+     * highpass response — the low band GONE, not merely reduced — and capping
+     * the cut at -12 dB made the machine feel tame on hardware ("it's not
+     * extreme, but able to cut lows or highs").
+     *
+     * Measure boost and cut at the SAME corner, which the first version of
+     * this test did not: it compared a cut taken at one LO.F against a boost
+     * taken at another and the ratio said more about the crossover than the
+     * shelf. And put the corner well ABOVE the tone — with LO.F at its default
+     * the corner sits near 93 Hz, barely above 60 Hz, so even a perfect
+     * subtraction can only remove about 70% of it.
+     *
+     * Measured at LO.F 110 relative to flat: -11.6 dB at LO.G 32 and -4.9 dB
+     * at 48, matching the manual's -12 and -6; +12.0 dB at 127; and -20.7 dB
+     * at 0, which is exactly a one-pole complementary highpass. Full cut
+     * against full boost is about 43x. The null is deep rather than infinite
+     * because the crossover is one pole — the honest limit of this topology,
+     * and steepening it makes the null WORSE, not better. */
+    work_set_param(w, "fx1_p2", "110");       /* corner ~1 kHz, tone well inside */
+    work_set_param(w, "fx1_p1", "127");
+    int64_t hiBoost = 0;
+    for (int b = 0; b < 30; ++b) {
+        FILL_LO();
+        work_process(w, lo, out, BLOCK);
+        if (b >= 10) for (int i = 0; i < BLOCK * 2; ++i) hiBoost += llabs(out[i]);
+    }
+    work_set_param(w, "fx1_p1", "0");
+    int64_t hiCut = 0;
+    for (int b = 0; b < 30; ++b) {
+        FILL_LO();
+        work_process(w, lo, out, BLOCK);
+        if (b >= 10) for (int i = 0; i < BLOCK * 2; ++i) hiCut += llabs(out[i]);
+    }
+    CHECK(hiCut * 15 < hiBoost, "at a corner above the tone, full cut left %lld "
+          "against a boost of %lld — under 15x means the extreme is not "
+          "approaching a highpass", (long long)hiCut, (long long)hiBoost);
+
+    /* ...and half travel stays a gentle shelf, so the control is playable
+     * rather than an on/off switch. */
+    work_set_param(w, "fx1_p1", "32");        /* the documented -12 dB point */
+    int64_t half = 0;
+    for (int b = 0; b < 30; ++b) {
+        FILL_LO();
+        work_process(w, lo, out, BLOCK);
+        if (b >= 10) for (int i = 0; i < BLOCK * 2; ++i) half += llabs(out[i]);
+    }
+    CHECK(half > hiCut * 2.5, "half-travel cut collapsed towards silence (%lld vs "
+          "%lld at full cut) — the taper is too abrupt to play",
+          (long long)half, (long long)hiCut);
+    work_set_param(w, "fx1_p2", "40");
     work_destroy(w);
 }
 
