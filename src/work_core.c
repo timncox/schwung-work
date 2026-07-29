@@ -385,6 +385,13 @@ struct work {
     int                  sample_fill;   /* frames written by the transfer    */
     int                  sample_declared; /* frames the transfer promised    */
     char                 sample_name[32];
+    /* Where the sample came from. The ENGINE never opens it — work_set_param
+     * runs on the audio thread — it only carries the string so a preset can
+     * record which file the patch expects. The UI reads it back after loading
+     * a preset and reloads the audio itself. Without this a preset restored
+     * every parameter, LFO, pattern and lock of an SRC patch and then played
+     * silence, which reads as a broken module rather than a missing file. */
+    char                 sample_path[192];
 };
 
 /* ---------------------------------------------------------- machine names */
@@ -3157,11 +3164,19 @@ void work_set_param(work_t *w, const char *key, const char *val) {
         w->sample_frames = n;
         return;
     }
+    if (strcmp(key, "sample_path") == 0) {
+        size_t n = strlen(val);
+        if (n >= sizeof(w->sample_path)) n = sizeof(w->sample_path) - 1;
+        memcpy(w->sample_path, val, n);
+        w->sample_path[n] = '\0';
+        return;
+    }
     if (strcmp(key, "sample_clear") == 0) {
         w->sample_frames = 0;
         w->sample_fill = 0;
         w->sample_declared = 0;
         w->sample_name[0] = '\0';
+        w->sample_path[0] = '\0';
         return;
     }
 
@@ -3566,6 +3581,8 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
         return nclamp(snprintf(buf, buf_len, "%d", WORK_SAMPLE_FRAMES), cap);
     if (strcmp(key, "sample_name") == 0)
         return nclamp(snprintf(buf, buf_len, "%s", w->sample_name), cap);
+    if (strcmp(key, "sample_path") == 0)
+        return nclamp(snprintf(buf, buf_len, "%s", w->sample_path), cap);
 
     if (strcmp(key, "machines") == 0) {
         int n = 0;
