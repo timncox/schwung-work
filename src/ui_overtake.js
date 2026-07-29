@@ -193,6 +193,10 @@ let needsRedraw = true;
 let tickCount  = 0;
 let resumeRepaints = 0;
 
+let sampleMode  = false;     /* the sample browser is open                  */
+let samples     = [];
+let sampleIndex = 0;
+
 let presetMode  = false;
 let presetIndex = 0;         /* 0 = "Save new", 1..n = a stored preset      */
 let presets     = [];
@@ -674,6 +678,56 @@ function listSamples() {
         }
     }
     return found;
+}
+
+/* Open the browser and scan for files. The scan is filesystem work, not param
+ * round-trips, so it is cheap — but it happens on the gesture rather than every
+ * tick so a directory with hundreds of files never touches the audio path. */
+function openSampleBrowser() {
+    samples = listSamples();
+    sampleIndex = 0;
+    sampleMode = true;
+    needsRedraw = true;
+    announceView(samples.length
+        ? `Sample browser, ${samples.length} file${samples.length === 1 ? '' : 's'}`
+        : 'Sample browser, no WAV files found');
+}
+
+function closeSampleBrowser() {
+    sampleMode = false;
+    needsRedraw = true;
+    announceView('Overwork');
+}
+
+function drawSampleBrowser() {
+    clear_screen();
+    print(0, 1, 'SAMPLES', 1);
+    const count = `${samples.length}`;
+    print(128 - text_width(count), 1, count, 1);
+    fill_rect(0, 9, 128, 1, 1);
+
+    if (!samples.length) {
+        print(2, 20, 'No .wav found in', 1);
+        print(2, 30, 'UserData/Samples', 1);
+    } else {
+        const rows = 4;
+        const top = Math.max(0, Math.min(sampleIndex - 1, samples.length - rows));
+        for (let r = 0; r < rows; r++) {
+            const idx = top + r;
+            if (idx >= samples.length) break;
+            const y = 13 + r * 10;
+            const path = samples[idx];
+            const label = path.slice(path.lastIndexOf('/') + 1);
+            if (idx === sampleIndex) fill_rect(0, y - 1, 128, 9, 1);
+            print(2, y, label.length > 24 ? label.slice(0, 24) : label,
+                  idx === sampleIndex ? 0 : 1);
+        }
+    }
+
+    fill_rect(0, 55, 128, 1, 1);
+    /* NOT "Back:exit" — in overtake mode Back belongs to the host and leaves
+     * the module altogether. The way out is the gesture that opened it. */
+    print(0, 57, 'Click:load  Sh+Slot:close', 1);
 }
 
 /* --------------------------------------------------------------- editing */
@@ -1168,6 +1222,15 @@ function paintAll(force) {
 function handlePadPress(note) {
     /* While the preset browser is open only CLEAR (delete) is live; the rest
      * of the surface would otherwise edit a pattern you cannot see. */
+    if (sampleMode) {
+        /* The closing gesture MUST get through this guard. Swallowing every
+         * pad while a modal is open is how a user ends up stuck in it with no
+         * way back — the browser opens on SHIFT + slot pad and has to close
+         * the same way. */
+        if (shiftHeld && note === PAD_SLOT) { closeSampleBrowser(); return; }
+        announce('Sample browser open. Shift and slot pad to close.');
+        return;
+    }
     if (presetMode && note !== PAD_CLEAR) {
         announce('Preset browser open');
         return;
@@ -1204,6 +1267,14 @@ function handlePadPress(note) {
                 attrMode = attrMode === MODE_PROB ? MODE_NONE : MODE_PROB;
                 announce(attrMode === MODE_PROB ? 'Probability mode' : 'Mode off');
                 needsRedraw = true;
+                return;
+            case PAD_SLOT:
+                /* SHIFT + slot pad opens the sample browser. Without a gesture
+                 * the whole SRC machine set is unreachable on hardware, which
+                 * is exactly how Mono shipped a preset browser that never
+                 * listed a file. */
+                if (sampleMode) closeSampleBrowser();
+                else openSampleBrowser();
                 return;
             case PAD_MONITOR:
                 toggleMonitor();
@@ -1358,6 +1429,19 @@ function onMidiMessageInternal(data) {
         if (d1 === MoveMainKnob) {
             const delta = decodeDelta(d2);
             if (delta === 0) return;
+            if (sampleMode) {
+                if (!samples.length) return;
+                let v = sampleIndex + (delta > 0 ? 1 : -1);
+                if (v < 0) v = 0;
+                if (v >= samples.length) v = samples.length - 1;
+                if (v !== sampleIndex) {
+                    sampleIndex = v;
+                    const pth = samples[sampleIndex];
+                    announce(pth.slice(pth.lastIndexOf('/') + 1));
+                    needsRedraw = true;
+                }
+                return;
+            }
             if (presetMode) {
                 let v = presetIndex + (delta > 0 ? 1 : -1);
                 if (v < 0) v = 0;
@@ -1398,6 +1482,11 @@ function onMidiMessageInternal(data) {
                     enterPresetMode();
                 }
                 needsRedraw = true;
+                return;
+            }
+            if (sampleMode) {
+                if (samples.length) loadSampleFile(samples[sampleIndex]);
+                else announce('No WAV files found');
                 return;
             }
             if (presetMode) {
@@ -1499,7 +1588,8 @@ globalThis.tick = function () {
     }
 
     if (needsRedraw) {
-        if (presetMode) drawPresets();
+        if (sampleMode) drawSampleBrowser();
+        else if (presetMode) drawPresets();
         else drawUI();
         needsRedraw = false;
     }

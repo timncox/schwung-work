@@ -267,7 +267,7 @@ const cc   = (num, val) => [0xB0, num, val];
 const noteOn  = (n) => [0x90, n, 127];
 const noteOff = (n) => [0x80, n, 0];
 
-const KNOB1 = 71, JOG = 14, SHIFT = 49, STEP1 = 16;
+const KNOB1 = 71, JOG = 14, SHIFT = 49, STEP1 = 16, JOG_CLICK = 3;
 
 /* --------------------------------------------------------------- tests */
 
@@ -1118,6 +1118,68 @@ async function testEveryMachineIsReachableFromThePalette() {
           `pad — the palette is smaller than the machine list`);
 }
 
+
+/* Everything below the surface can be right while the feature is unreachable.
+ * loadSampleFile existed, was tested, and had NO gesture wiring it to the pads
+ * — so on hardware the whole SRC machine set was silent and there was no way
+ * to fix that from the Move. These drive the GESTURE, not the function. */
+async function testSampleBrowserIsReachableAndLoads() {
+    console.log('the sample browser opens from the surface and loads a file');
+    const ctx = await loadUI();
+    ctx.host.init();
+    ctx.vfs.dirs.add('/data/UserData/Samples');
+    ctx.vfs.binaries.set('/data/UserData/Samples/a.wav', makeWav({ frames: 400 }));
+    ctx.vfs.binaries.set('/data/UserData/Samples/b.wav', makeWav({ frames: 800 }));
+
+    /* SHIFT + slot pad opens it */
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    ctx.host.onMidiMessageInternal(noteOn(70));
+    ctx.host.onMidiMessageInternal(noteOff(70));
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+    ctx.host.tick();
+
+    const shown = ctx.screen.map((x) => x.text).join(' ');
+    check(/SAMPLES/.test(shown), `browser did not draw; screen was "${shown}"`);
+    check(/a\.wav|b\.wav/.test(shown), `browser listed no files; screen was "${shown}"`);
+
+    /* jog click loads the highlighted one */
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(JOG_CLICK, 127));
+    const begin = ctx.writes.find((w) => w.key === 'sample_begin');
+    const ended = ctx.writes.some((w) => w.key === 'sample_end');
+    check(!!begin, 'jog click in the browser transferred nothing');
+    check(ended, 'the transfer never committed');
+
+    /* jog scrolls to the other file and loads that one instead */
+    ctx.host.onMidiMessageInternal(cc(JOG, 1));
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(JOG_CLICK, 127));
+    const second = ctx.writes.find((w) => w.key === 'sample_begin');
+    check(second && `${second.val}` !== `${begin.val}`,
+          `scrolling did not change which file loads (both declared ${begin && begin.val})`);
+}
+
+async function testSampleBrowserClosesTheWayItOpened() {
+    console.log('the browser closes with the gesture that opened it');
+    const ctx = await loadUI();
+    ctx.host.init();
+    ctx.vfs.dirs.add('/data/UserData/Samples');
+    ctx.vfs.binaries.set('/data/UserData/Samples/a.wav', makeWav({ frames: 400 }));
+
+    const openClose = () => {
+        ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+        ctx.host.onMidiMessageInternal(noteOn(70));
+        ctx.host.onMidiMessageInternal(noteOff(70));
+        ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+        ctx.host.tick();
+    };
+    openClose();
+    openClose();
+    const shown = ctx.screen.map((x) => x.text).join(' ');
+    check(!/SAMPLES/.test(shown),
+          `the browser would not close — a user could get stuck in it`);
+}
+
 /* ------------------------------------------------------------------ run */
 
 const tests = [
@@ -1135,6 +1197,8 @@ const tests = [
     testMachineColorTableCoversEveryMachine,
     testPaletteNeverShadowsTheFunctionPads,
     testEveryMachineIsReachableFromThePalette,
+    testSampleBrowserIsReachableAndLoads,
+    testSampleBrowserClosesTheWayItOpened,
     testWavLoadRoundTrip,
     testWavVariantsAndChunkParsing,
     testOversizedSampleIsTruncated,
