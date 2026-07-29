@@ -1792,6 +1792,54 @@ static void test_remote_ui_poll_digest(void) {
     work_destroy(w);
 }
 
+/* The browser editor talks through two keys: rui_set for every write, and a
+ * flat mirror inside the state blob for the seed. schwung's manager parses
+ * that blob as a FLAT object and drops anything that is a JSON array, so the
+ * arrays the presets use are useless to it. */
+static void test_remote_ui_bridge(void) {
+    printf("rui_set dispatches writes and the state blob carries a flat mirror\n");
+    work_t *w = work_create(&host);
+
+    /* one key writes anything */
+    work_set_param(w, "rui_set", "mix:33");
+    char v[64];
+    work_get_param(w, "mix", v, sizeof v);
+    CHECK(atoi(v) == 33, "rui_set did not reach mix (%s)", v);
+
+    work_set_param(w, "rui_set", "fx2_p3:99");
+    work_get_param(w, "fx2_p3", v, sizeof v);
+    CHECK(atoi(v) == 99, "rui_set did not reach fx2_p3 (%s)", v);
+
+    /* malformed writes must be ignored rather than reaching something else */
+    work_set_param(w, "rui_set", "nocolon");
+    work_set_param(w, "rui_set", ":42");
+    work_set_param(w, "rui_set", "rui_set:mix:1");   /* no recursion */
+    work_get_param(w, "mix", v, sizeof v);
+    CHECK(atoi(v) == 33, "a malformed rui_set changed mix to %s", v);
+
+    /* the flat mirror: strings, not arrays, or the seed drops them */
+    static char blob[65536];
+    work_set_param(w, "machine1", "15");
+    work_get_param(w, "state", blob, sizeof blob);
+    CHECK(strstr(blob, "\"fp1\":\"") != NULL, "no flat parameter mirror in the blob");
+    CHECK(strstr(blob, "\"fvf\":\"") != NULL, "no flat voice-filter mirror");
+    CHECK(strstr(blob, "\"fn1\":\"Roomtone Reverb\"") != NULL,
+          "the blob does not name slot 1's machine for the browser");
+
+    /* and the flat fields must not disturb a reload */
+    work_t *r = work_create(&host);
+    work_set_param(r, "state", blob);
+    work_get_param(r, "mix", v, sizeof v);
+    CHECK(atoi(v) == 33, "mix came back as %s after a reload", v);
+    work_get_param(r, "fx2_p3", v, sizeof v);
+    CHECK(atoi(v) == 99, "fx2_p3 came back as %s after a reload", v);
+
+    work_get_param(w, "rui_play", v, sizeof v);
+    CHECK(strchr(v, ':') != NULL, "rui_play is \"%s\", expected on:tick:bpm", v);
+
+    work_destroy(w); work_destroy(r);
+}
+
 static void test_sample_transfer(void) {
     printf("a sample transfers in chunks and lands byte-exact\n");
     work_t *w = work_create(&host);
@@ -2486,6 +2534,7 @@ int main(void) {
 
     test_state_carries_the_sample_path();
     test_remote_ui_poll_digest();
+    test_remote_ui_bridge();
     test_voice_filter();
     test_sample_transfer();
     test_sample_bounds();

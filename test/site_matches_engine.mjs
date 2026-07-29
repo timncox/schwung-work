@@ -167,5 +167,24 @@ for (const fn of [81, 82, 83]) {
           `in the palette`);
 }
 
+/* No retired machine name may appear anywhere on the site.
+ *
+ * The rename replaced the machine NAMES but missed the pad map's abbreviation
+ * table, which still held rules like .replace("One Shot","Single") and
+ * .replace("Drive ","Sat ") — so the surface map quietly went on showing the
+ * old names after everything else had moved. A grep for the retired words is
+ * the cheapest guard that covers the whole page, prose included. */
+{
+  const retired = ['Rumsklang', 'Supervoid', 'Dirtshaper', 'Grainer', 'Warble',
+                   'Wavefinder', 'Subtracks', 'Saturator', 'Sat Delay',
+                   'Single Player', 'Multi Player', 'Steel Box', 'Phase 98',
+                   'Chrono', 'Daisy', 'Panoramic', 'Frequency Warper',
+                   'Infinite Flanger', 'Filter Folder', 'Degrader',
+                   'Tonverk', 'Elektron'];
+  const found = retired.filter((w) => html.includes(w));
+  check(found.length === 0,
+        `the manual still contains retired names: ${found.join(', ')}`);
+}
+
 console.log(`\n${checks} checks, ${failures} failed`);
 process.exit(failures ? 1 : 0);

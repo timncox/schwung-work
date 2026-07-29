@@ -3431,6 +3431,23 @@ void work_set_param(work_t *w, const char *key, const char *val) {
         }
     }
 
+    /* The browser editor writes EVERYTHING through this one key, as
+      * "<key>:<value>". Not a convenience: the remote UI's writes cross the
+      * same blocking param channel as everything else, and one well-known key
+      * means the manager needs no list of ours. Same shape smack uses. */
+    if (strcmp(key, "rui_set") == 0) {
+        const char *colon = strchr(val, ':');
+        if (!colon || colon == val) return;
+        char k[32];
+        size_t n = (size_t)(colon - val);
+        if (n >= sizeof(k)) return;
+        memcpy(k, val, n);
+        k[n] = '\0';
+        if (strcmp(k, "rui_set") == 0) return;        /* no recursion */
+        work_set_param(w, k, colon + 1);
+        return;
+    }
+
     if (strncmp(key, "vf_", 3) == 0) {
         const char *f = key + 3;
         int v = iclamp(atoi(val), 0, 127);
@@ -3685,6 +3702,14 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
      * the whole state blob on every poll — that blob serialises every step and
      * lock, and the param channel it crosses is the one whose cost caused
      * every UI bug in this module. Order is rev:on:tick:bpm. */
+    /* Transport only, for the browser's playhead: on:tick:bpm. Separate from
+     * rui_poll because the manager pushes this one while the sequencer runs
+     * without doing a full state read. */
+    if (strcmp(key, "rui_play") == 0)
+        return nclamp(snprintf(buf, buf_len, "%d:%d:%d",
+                               w->seq_on ? 1 : 0, w->seq_pos,
+                               (int)(w->bpm + 0.5f)), cap);
+
     if (strcmp(key, "rui_poll") == 0)
         return nclamp(snprintf(buf, buf_len, "%u:%d:%d:%d",
                                (unsigned)w->rui_rev, w->seq_on ? 1 : 0,
@@ -3940,6 +3965,39 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
                                 w->vfilt.base, w->vfilt.width, w->vfilt.reso,
                                 w->vfilt.env, w->vfilt.attack, w->vfilt.decay,
                                 w->vfilt.track), cap);
+        /* Flat mirrors of the arrays above, as comma-separated STRINGS.
+          * schwung's remote UI seeds a browser page by parsing this blob as a
+          * flat object and keeping only scalar fields — a JSON array is
+          * dropped on the floor. Rather than change the array form, which
+          * every saved preset depends on, the same values go out again as
+          * strings under an "f" prefix. apply_state ignores them, so they
+          * cost nothing on the way back in. */
+        for (int sl = 0; sl < WORK_SLOTS; ++sl) {
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                    ",\"fp%d\":\"", sl + 1), cap);
+            for (int i = 0; i < WORK_PARAMS; ++i)
+                n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s%d",
+                                        i ? "," : "", w->cfg[sl].p[i]), cap);
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "\""), cap);
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                    ",\"fe%d\":\"", sl + 1), cap);
+            for (int i = 0; i < WORK_PARAMS; ++i)
+                n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s%d",
+                                        i ? "," : "", w->eff[sl][i]), cap);
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "\""), cap);
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                    ",\"fn%d\":\"%s\"", sl + 1,
+                                    MACHINE_NAME[w->cfg[sl].machine]), cap);
+        }
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                ",\"fvf\":\"%d,%d,%d,%d,%d,%d,%d\"",
+                                w->vfilt.base, w->vfilt.width, w->vfilt.reso,
+                                w->vfilt.env, w->vfilt.attack, w->vfilt.decay,
+                                w->vfilt.track), cap);
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                ",\"fseq\":\"%d,%d,%d,%d\"",
+                                w->seq_on, CURPAT(w)->len, w->seq_pos,
+                                w->cur_pattern), cap);
         for (int l = 0; l < WORK_LFOS; ++l) {
             work_lfo_cfg_t *L = &w->lfo[l];
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),

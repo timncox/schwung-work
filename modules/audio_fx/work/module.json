@@ -2,7 +2,7 @@
   "id": "work",
   "name": "Work",
   "abbrev": "WORK",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Twenty-one FX machines in three insert slots with three FX LFOs",
   "dsp": "work.so",
   "ui_chain": "ui_chain.js",
