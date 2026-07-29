@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Work &amp; Overwork — operation manual</title>
-<meta name="description" content="Operation manual for Work and Overwork: twenty Tonverk-inspired FX machines for the Ableton Move, as a Schwung module.">
+<meta name="description" content="Operation manual for Work and Overwork: twenty-six Tonverk-inspired machines for the Ableton Move &mdash; twenty-one FX and five sample sources &mdash; as a Schwung module.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:ital,wght@0,400..700;1,400..700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -34,6 +34,7 @@
   --fam-space:#3A5A93;
   --fam-tape:#1F5754;
   --fam-none:#67675F;
+  --fam-src:#8A2F52;
   --fam-gran:#9A3A6B;
 
   --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
@@ -258,7 +259,8 @@ footer a{color:var(--rust)}
       <li><a href="#plock">The p-lock gesture</a></li>
       <li><a href="#surface">Surface map</a></li>
       <li><a href="#machines">Machines</a></li>
-      <li><a href="#sequencer">Sequencer</a></li>
+      <li><a href="#samples">Samples</a>
+    <a href="#sequencer">Sequencer</a></li>
       <li><a href="#install">Install</a></li>
     </ul>
   </nav>
@@ -269,7 +271,7 @@ footer a{color:var(--rust)}
 <section id="overview">
   <div class="sechead"><span class="secnum">01</span><h2>Overview</h2><span class="note">two builds, one engine</span></div>
   <p class="lede"><strong>Work</strong> is the <code>audio_fx</code> build. It drops into a Signal Chain slot or a Master FX slot and processes whatever is upstream.</p>
-  <p class="lede"><strong>Overwork</strong> is the <code>overtake</code> build. It takes over Move&rsquo;s whole surface and runs the same twenty machines on the live input &mdash; mic, line, or USB-C &mdash; with a step sequencer driving parameter locks.</p>
+  <p class="lede"><strong>Overwork</strong> is the <code>overtake</code> build. It takes over Move&rsquo;s whole surface and runs the same twenty-six machines on the live input &mdash; mic, line, or USB-C &mdash; with a step sequencer driving parameter locks.</p>
 
   <h3>Why the surface maps so cleanly</h3>
   <p>Tonverk is an eight-encoder-per-page instrument with sixteen trig keys. Move has eight knobs and sixteen dedicated step buttons. The mapping isn&rsquo;t an approximation &mdash; it&rsquo;s the same instrument shape, so the gesture that defines Elektron sequencing survives intact.</p>
@@ -401,7 +403,7 @@ footer a{color:var(--rust)}
   <div class="panel" id="panel-ow" role="tabpanel" aria-labelledby="tab-ow" tabindex="0">
     <p class="rowlabel">Step buttons 1&ndash;16 &mdash; the pattern page&rsquo;s trigs</p>
     <div class="steprow" id="mapSteps" aria-hidden="true"></div>
-    <p class="rowlabel">Pads &mdash; rows 1&ndash;3 are the 21-machine palette; row 4 is transport, and Shift turns its last four into the step-attribute modes</p>
+    <p class="rowlabel">Pads &mdash; rows 1&ndash;3 are the machine palette (hold Shift for machines 22 and up); row 4 is transport, and Shift turns its last four into the step-attribute modes</p>
     <div class="padgrid" id="mapPads"></div>
     <p class="padinfo" id="padInfo" role="status" aria-live="polite">Select a pad to read what it does.</p>
     <h3>Step LED colours</h3>
@@ -436,13 +438,59 @@ footer a{color:var(--rust)}
 </section>
 
 <section id="machines">
-  <div class="sechead"><span class="secnum">05</span><h2>The machines</h2><span class="note">20 · knob labels A&ndash;H</span></div>
-  <p>Machine order is the preset format and is append-only. Loading a machine installs its own defaults, and switching machines clears that slot so no reverb tail leaks into whatever loads next.</p>
+  <div class="sechead"><span class="secnum">05</span><h2>The machines</h2><span class="note">26 · knob labels A&ndash;H</span></div>
+  <p>Twenty-one process what reaches the slot; five are <em>sources</em> — they replace the slot’s input with a sample instead of treating it, which is what lets a Work slot originate audio rather than only colour it. Machine order is the preset format and is append-only. Loading a machine installs its own defaults, and switching machines clears that slot so no reverb tail leaks into whatever loads next.</p>
   <div class="machines" id="machineList"></div>
 </section>
 
+<section id="samples">
+  <div class="sechead"><span class="secnum">06</span><h2>Samples</h2><span class="note">8 seconds &middot; stereo</span></div>
+  <p class="lede">Five machines read a sample rather than the slot&rsquo;s input. One sample is loaded at a time and every source machine shares it, so switching between Single Player, Subtracks and Wavefinder auditions the same audio three ways.</p>
+
+  <div class="grid2">
+    <div>
+      <h3>Loading one</h3>
+      <p>In <strong>Overwork</strong>, hold <strong>Shift</strong> and press the <strong>slot pad</strong> (row 4, third from the left). The jog scrolls, a jog click loads, and the same Shift + slot pad closes the browser.</p>
+      <p>The browser walks <code>UserLibrary/Samples</code> and <code>UserLibrary/Recordings</code>, four levels deep &mdash; deep enough to reach Schwung&rsquo;s own resampler and skipback folders, which file by date.</p>
+      <table>
+        <caption>What loads</caption>
+        <thead><tr><th scope="col">Accepts</th><th scope="col">Becomes</th></tr></thead>
+        <tbody>
+          <tr><td>8, 16, 24, 32-bit PCM and float WAV</td><td>16-bit</td></tr>
+          <tr><td>mono</td><td>duplicated to both channels</td></tr>
+          <tr><td>more than two channels</td><td>first two kept</td></tr>
+          <tr><td>any sample rate</td><td>unchanged &mdash; see below</td></tr>
+          <tr><td>longer than 8 seconds</td><td>truncated</td></tr>
+        </tbody>
+      </table>
+      <p><strong>Sample rate is not converted.</strong> A 48&nbsp;kHz file plays about a tone sharp, because playback follows the file rather than resampling it. That is what a sampler does, and what <code>TUNE</code> is for.</p>
+    </div>
+    <div>
+      <h3>What a source machine is</h3>
+      <p>Every machine before Single Player treats what arrives at the slot. A source machine <em>replaces</em> it. Put one in FX&nbsp;1 and the slot stops being an insert and starts being an instrument, with FX&nbsp;2 still processing what it makes.</p>
+      <p>With no sample loaded a source machine is silent rather than noisy &mdash; an empty slot makes no sound, it does not pass its input through.</p>
+      <h3>Triggering</h3>
+      <p>A full trig fires the voice; a <em>lock</em> trig deliberately does not, matching Elektron&rsquo;s trigless lock. An incoming note fires it too, so the machines are playable from a keyboard or Move&rsquo;s pads with the sequencer stopped.</p>
+      <p>Notes set pitch, with <strong>note 60 as unity</strong> &mdash; C3 plays the sample as recorded and everything else transposes from there.</p>
+      <table>
+        <caption>Voices</caption>
+        <thead><tr><th scope="col">Machine</th><th scope="col">Voices</th></tr></thead>
+        <tbody>
+          <tr><td>Single Player</td><td>one</td></tr>
+          <tr><td>Multi Player, Subtracks</td><td>eight, oldest stolen first</td></tr>
+          <tr><td>Wavefinder</td><td>free-running, needs no trig</td></tr>
+          <tr><td>Shape</td><td>none &mdash; it makes no sound of its own</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <h3>What Tonverk does that this does not</h3>
+  <p>Three of the five are adaptations, and the machine pages above say which. <strong>Multi Player</strong> has no multi-sampled instruments &mdash; there is one buffer, so every note plays it transposed. <strong>Subtracks</strong> has the playback controls but not the eight sequencer subtracks and supertrack that give it its name; Work is a two-slot chain, not an eight-track sampler. <strong>Wavefinder</strong> has no SD card and no wavetable slots, so the loaded sample <em>is</em> the wavetable, read as a series of 2048-frame waves. <strong>Shape</strong> alone needed no adaptation, because a Work slot is exactly the bus insert the manual puts it on.</p>
+</section>
+
 <section id="sequencer">
-  <div class="sechead"><span class="secnum">06</span><h2>Sequencer</h2><span class="note">Overwork · 64 steps</span></div>
+  <div class="sechead"><span class="secnum">07</span><h2>Sequencer</h2><span class="note">Overwork · 64 steps</span></div>
   <div class="grid2">
     <div>
       <h3>Trig conditions</h3>
@@ -523,7 +571,7 @@ footer a{color:var(--rust)}
 </section>
 
 <section id="install">
-  <div class="sechead"><span class="secnum">07</span><h2>Install</h2><span class="note">schwung-manager</span></div>
+  <div class="sechead"><span class="secnum">08</span><h2>Install</h2><span class="note">schwung-manager</span></div>
   <div class="install">
     <ol>
       <li>Open <strong>schwung-manager</strong> on your Move &mdash; usually <code>move.local:7700</code>.</li>
@@ -564,7 +612,8 @@ footer a{color:var(--rust)}
     mod:   {name:"modulation", css:"--fam-mod"},
     space: {name:"space",      css:"--fam-space"},
     tape:  {name:"tape",       css:"--fam-tape"},
-    gran:  {name:"granular",   css:"--fam-gran"}
+    gran:  {name:"granular",   css:"--fam-gran"},
+    src:   {name:"source",     css:"--fam-src"}
   };
 
   var MACHINES = [
@@ -753,7 +802,7 @@ footer a{color:var(--rust)}
     83:{t:"LOCKS", d:"Clear every parameter lock on the step you are holding."},
     68:{t:"PLAY",  d:"Start and stop the sequencer."},
     69:{t:"FILL",  d:"Fill. Tap to latch, hold for momentary. Gates the FILL and !FIL conditions."},
-    70:{t:"SLOT",  d:"Focus FX slot 1 or 2 — the palette and the knobs follow it."},
+    70:{t:"SLOT",  d:"Focus FX slot 1 or 2 — the palette and the knobs follow it. Shift + this pad opens the sample browser."},
     71:{t:"PAGE",  d:"Cycle the pattern page, sixteen steps at a time, up to 64."},
     72:{t:"EDIT",  d:"Cycle the knob page: FX, LFO 1, LFO 2, Global. <b>Shift</b> makes it Condition mode \u2014 the jog then sets a held step\u2019s trig condition."},
     73:{t:"COPY",  d:"Copy the visible pattern page. <b>Shift</b> makes it Micro-timing mode."},

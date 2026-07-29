@@ -106,5 +106,32 @@ for (const rel of manifests) {
           `pushed this file over the size limit before`);
 }
 
+
+/* Every machine names a FAMILY, and the page looks that name up in FAM to
+ * colour the card. A machine whose family is not in FAM throws on `fam.css`
+ * and the ENTIRE machine list renders empty — not just that one card. The
+ * five Phase 3 machines shipped with `f:"src"` before FAM had a `src` entry,
+ * so the manual site was blank and no test noticed, because this file only
+ * ever parsed the table without rendering it. */
+const famBlock = html.slice(html.indexOf('var FAM = {'),
+                            html.indexOf('};', html.indexOf('var FAM = {')) + 1);
+const families = new Set([...famBlock.matchAll(/^\s*([a-z]+):/gm)].map((m) => m[1]));
+if (m) {
+    const site = eval('[' + m[1] + ']');
+    const orphans = [...new Set(site.filter((x) => !families.has(x.f)).map((x) => x.f))];
+    check(orphans.length === 0,
+          `machine families ${orphans.join(', ')} are not in FAM — every machine ` +
+          `card would fail to render, leaving the page blank`);
+
+    /* and each family needs the CSS variable it points at */
+    const missingCss = [];
+    for (const fam of families) {
+        const cssm = famBlock.match(new RegExp(fam + ':\\s*\\{[^}]*css:"(--[a-z-]+)"'));
+        if (cssm && !html.includes(cssm[1] + ':')) missingCss.push(cssm[1]);
+    }
+    check(missingCss.length === 0,
+          `family colours ${missingCss.join(', ')} are used but never defined in CSS`);
+}
+
 console.log(`\n${checks} checks, ${failures} failed`);
 process.exit(failures ? 1 : 0);
