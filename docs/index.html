@@ -185,6 +185,16 @@ p{margin:0 0 14px;max-width:68ch}
 }
 .tabs button[aria-selected="true"]{background:var(--ink);color:var(--paper)}
 .panel{border:2px solid var(--ink);border-top:0;background:rgba(255,253,248,.72);padding:22px 18px}
+.shifttoggle{
+  font:600 .72rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink-2);background:transparent;border:1.5px solid var(--rule);
+  border-radius:999px;padding:.5rem 1rem;margin:0 0 .9rem;cursor:pointer;
+  transition:background .15s,border-color .15s,color .15s;
+}
+.shifttoggle:hover{border-color:var(--rust);color:var(--ink)}
+.shifttoggle[aria-pressed="true"]{
+  background:var(--rust);border-color:var(--rust);color:#fff;
+}
 .padgrid{display:grid;grid-template-columns:repeat(8,1fr);gap:6px;max-width:560px}
 .pad{
   aspect-ratio:1;border:1.5px solid var(--ink);background:var(--paper-2);
@@ -404,6 +414,7 @@ footer a{color:var(--rust)}
     <p class="rowlabel">Step buttons 1&ndash;16 &mdash; the pattern page&rsquo;s trigs</p>
     <div class="steprow" id="mapSteps" aria-hidden="true"></div>
     <p class="rowlabel">Pads &mdash; rows 1&ndash;3 are the machine palette (hold Shift for machines 22 and up); row 4 is transport, and Shift turns its last four into the step-attribute modes</p>
+    <button type="button" id="shiftToggle" class="shifttoggle" aria-pressed="false">Hold SHIFT</button>
     <div class="padgrid" id="mapPads"></div>
     <p class="padinfo" id="padInfo" role="status" aria-live="polite">Select a pad to read what it does.</p>
     <h3>Step LED colours</h3>
@@ -793,59 +804,116 @@ footer a{color:var(--rust)}
     mapSteps.appendChild(d);
   }
 
-  /* pads 68-99, drawn rows 1-4 from the TOP: 92-99, 84-91, 76-83, 68-75 */
-  var PALETTE_ORDER = [92,93,94,95,96,97,98,99, 84,85,86,87,88,89,90,91, 76,77,78,79];
+  /* pads 68-99, drawn rows 1-4 from the TOP: 92-99, 84-91, 76-83, 68-75.
+   *
+   * Rows 1-3 are the machine palette, minus the three pads that carry undo,
+   * memorize and song. That leaves 21 slots for 26 machines, which is why
+   * SHIFT reaches an upper bank — five machines, including every sample
+   * player, are ONLY reachable that way. Hold the Shift toggle below to see
+   * what the surface becomes. */
+  var PALETTE_ORDER = [92,93,94,95,96,97,98,99, 84,85,86,87,88,89,90,91,
+                       76,77,78,79,80];
+
+  /* the plain layer */
   var SPECIAL = {
-    80:{t:"COND",  d:"Condition mode. With this lit, the jog sets a held step’s trig condition."},
-    81:{t:"MICRO", d:"Micro-timing mode. The jog nudges a held step by up to ±23 twenty-fourths of a step."},
-    82:{t:"RTRG",  d:"Retrig mode. The jog sets a held step’s retrig rate."},
-    83:{t:"LOCKS", d:"Clear every parameter lock on the step you are holding."},
+    81:{t:"UNDO",  d:"Undo the last pattern edit. <b>Shift</b> redoes it."},
+    82:{t:"MEMO",  d:"Memorize the pattern; hold to recall what you memorized."},
+    83:{t:"SONG",  d:"Song mode on and off — chains patterns with repeats."},
     68:{t:"PLAY",  d:"Start and stop the sequencer."},
     69:{t:"FILL",  d:"Fill. Tap to latch, hold for momentary. Gates the FILL and !FIL conditions."},
-    70:{t:"SLOT",  d:"Focus FX slot 1 or 2 — the palette and the knobs follow it. Shift + this pad opens the sample browser."},
+    70:{t:"SLOT",  d:"Focus FX slot 1 or 2 — the palette and the knobs follow it."},
     71:{t:"PAGE",  d:"Cycle the pattern page, sixteen steps at a time, up to 64."},
-    72:{t:"EDIT",  d:"Cycle the knob page: FX, LFO 1, LFO 2, Global. <b>Shift</b> makes it Condition mode \u2014 the jog then sets a held step\u2019s trig condition."},
-    73:{t:"COPY",  d:"Copy the visible pattern page. <b>Shift</b> makes it Micro-timing mode."},
-    74:{t:"PASTE", d:"Paste onto the visible pattern page. <b>Shift</b> makes it Retrig mode."},
-    75:{t:"CLEAR", d:"Tap clears the visible page; hold clears the whole pattern. <b>Shift</b> clears every lock on the step you are holding."}
+    72:{t:"EDIT",  d:"Cycle the knob page: FX, LFO 1-3, Mod Env, Global."},
+    73:{t:"COPY",  d:"Copy the visible pattern page."},
+    74:{t:"PASTE", d:"Paste onto the visible pattern page."},
+    75:{t:"CLEAR", d:"Tap clears the visible page; hold clears the whole pattern."}
+  };
+
+  /* what row 4 becomes while SHIFT is held */
+  var SHIFTED = {
+    68:{t:"REC",   d:"Arm live record. Knob moves then write locks onto whichever step is playing."},
+    69:{t:"MON",   d:"Monitor — mute or unmute the live input. Auto-muted when the speakers are live with nothing in the input jack."},
+    70:{t:"SMPL",  d:"Open the sample browser. Jog scrolls, click loads, this same gesture closes it."},
+    71:{t:"PROB",  d:"Probability mode. The jog sets a held step’s chance of firing, 1 to 100%."},
+    72:{t:"COND",  d:"Condition mode. The jog sets a held step’s trig condition."},
+    73:{t:"MICRO", d:"Micro-timing mode. The jog nudges a held step by up to ±23 twenty-fourths of a step."},
+    74:{t:"RTRG",  d:"Retrig mode. The jog sets a held step’s retrig rate."},
+    75:{t:"LOCKS", d:"Clear every parameter lock on the step you are holding."},
+    81:{t:"REDO",  d:"Redo the edit you just undid."}
   };
 
   var padsEl = document.getElementById("mapPads");
   var padInfo = document.getElementById("padInfo");
   var ROWS = [[92,99],[84,91],[76,83],[68,75]];
+  var shiftView = false;
 
-  ROWS.forEach(function(r){
-    for (var n=r[0]; n<=r[1]; n++){
-      var pi = PALETTE_ORDER.indexOf(n);
-      var b = document.createElement("button");
-      b.type = "button";
-      b.className = "pad";
-      var label, desc, color;
-      if (pi >= 0 && pi < MACHINES.length){
-        var m = MACHINES[pi];
-        label = m.n.replace(" ± Filter"," ±").replace(" Reverb","").replace(" Filter"," Flt").replace("Frequency ","Freq ").replace("Infinite ","Inf ").replace("Panoramic ","Pan ").replace("Multimode","Multi").replace("Low-Pass Filter","LPF").replace("Saturator ","Sat ");
-        desc = "<b>Palette — " + m.n + "</b>. Tap to load it into the focused slot. " + m.d;
-        color = "var(" + FAM[m.f].css + ")";
-        b.style.borderColor = color;
-        b.style.borderWidth = "2.5px";
-      } else if (SPECIAL[n]){
-        label = SPECIAL[n].t;
-        desc = "<b>" + SPECIAL[n].t + "</b>. " + SPECIAL[n].d;
-        b.style.borderColor = "var(--rust)";
-        b.style.borderWidth = "2.5px";
-        b.style.background = "rgba(228,87,46,.10)";
-      } else {
-        label = "—";
-        desc = "Unused.";
+  function padFor(n){
+    var pi = PALETTE_ORDER.indexOf(n);
+    var table = shiftView ? SHIFTED : SPECIAL;
+
+    /* SHIFT moves the palette to the upper bank */
+    if (pi >= 0){
+      var idx = pi + (shiftView ? PALETTE_ORDER.length : 0);
+      if (idx < MACHINES.length){
+        var m = MACHINES[idx];
+        return {
+          label: m.n.replace(" ± Filter"," ±").replace(" Reverb","").replace(" Filter"," Flt")
+                    .replace("Frequency ","Freq ").replace("Infinite ","Inf ")
+                    .replace("Panoramic ","Pan ").replace("Multimode","Multi")
+                    .replace("Low-Pass Filter","LPF").replace("Saturator ","Sat ")
+                    .replace("Single Player","Single").replace("Multi Player","Multi P")
+                    .replace("Wavefinder","WaveFnd"),
+          desc: "<b>Palette — " + m.n + "</b>. " +
+                (shiftView ? "Hold Shift and tap" : "Tap") +
+                " to load it into the focused slot. " + m.d,
+          color: "var(" + FAM[m.f].css + ")"
+        };
       }
-      b.innerHTML = "<span>" + label + "</span>";
-      b.setAttribute("aria-label", "Pad " + n + ": " + label);
-      (function(text){
-        b.addEventListener("click", function(){ padInfo.innerHTML = text; });
-      })(desc + " <span style='color:var(--ink-3)'>(pad " + n + ")</span>");
-      padsEl.appendChild(b);
+      if (shiftView) return {label:"—", desc:"Nothing here — the machine list ends before this pad."};
     }
-  });
+    if (table[n]) return {label: table[n].t, desc: "<b>" + table[n].t + "</b>. " + table[n].d, special:true};
+    if (!shiftView && SPECIAL[n]) return {label: SPECIAL[n].t, desc: "<b>" + SPECIAL[n].t + "</b>. " + SPECIAL[n].d, special:true};
+    if (shiftView && SPECIAL[n]) return {label: SPECIAL[n].t, desc: "<b>" + SPECIAL[n].t + "</b>. Unchanged by Shift. " + SPECIAL[n].d, special:true, dim:true};
+    return {label:"—", desc:"Unused."};
+  }
+
+  function drawPads(){
+    padsEl.innerHTML = "";
+    ROWS.forEach(function(r){
+      for (var n=r[0]; n<=r[1]; n++){
+        var info = padFor(n);
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "pad";
+        if (info.color){ b.style.borderColor = info.color; b.style.borderWidth = "2.5px"; }
+        else if (info.special){
+          b.style.borderColor = "var(--rust)";
+          b.style.borderWidth = "2.5px";
+          b.style.background = "rgba(228,87,46,.10)";
+          if (info.dim) b.style.opacity = ".45";
+        }
+        b.innerHTML = "<span>" + info.label + "</span>";
+        b.setAttribute("aria-label", "Pad " + n + ": " + info.label +
+                       (shiftView ? ", with Shift held" : ""));
+        (function(text){
+          b.addEventListener("click", function(){ padInfo.innerHTML = text; });
+        })(info.desc + " <span style='color:var(--ink-3)'>(pad " + n + ")</span>");
+        padsEl.appendChild(b);
+      }
+    });
+  }
+
+  var shiftBtn = document.getElementById("shiftToggle");
+  if (shiftBtn){
+    shiftBtn.addEventListener("click", function(){
+      shiftView = !shiftView;
+      shiftBtn.setAttribute("aria-pressed", shiftView ? "true" : "false");
+      shiftBtn.textContent = shiftView ? "SHIFT held — showing the upper bank"
+                                       : "Hold SHIFT";
+      drawPads();
+    });
+  }
+  drawPads();
 
   /* ---------------- tabs ---------------- */
   var tabs = [document.getElementById("tab-ow"), document.getElementById("tab-wk")];

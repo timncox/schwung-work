@@ -133,5 +133,39 @@ if (m) {
           `family colours ${missingCss.join(', ')} are used but never defined in CSS`);
 }
 
+
+/* The surface map is a second copy of the pad layout, and it drifted badly:
+ * it still showed pads 80-83 as COND/MICRO/RTRG/LOCKS, which was the layout
+ * BEFORE Grainer needed row 3 for the palette. It also had no SHIFT layer at
+ * all, while five machines — every sample player — are reachable only that
+ * way. Both were invisible because nothing compared the map to the UI. */
+const paletteOrder = html.match(/var PALETTE_ORDER = \[([\s\S]*?)\];/);
+check(!!paletteOrder, 'the surface map has no PALETTE_ORDER');
+if (paletteOrder) {
+    const pads = paletteOrder[1].split(',').map((x) => parseInt(x.trim(), 10))
+                                .filter((n) => Number.isFinite(n));
+    /* mirrors PALETTE_SLOTS in ui_overtake.js: rows 1-3 minus undo/memo/song */
+    const ui = [92,93,94,95,96,97,98,99,84,85,86,87,88,89,90,91,76,77,78,79,80];
+    check(JSON.stringify(pads) === JSON.stringify(ui),
+          `the map's palette pads differ from the UI's:\n      map ${JSON.stringify(pads)}` +
+          `\n      ui  ${JSON.stringify(ui)}`);
+
+    /* every machine must be reachable across the plain and Shift layers */
+    const engineCount = engineNames.length;
+    check(pads.length * 2 >= engineCount,
+          `${pads.length} palette pads over two layers cannot reach ` +
+          `${engineCount} machines`);
+    check(html.includes('shiftToggle'),
+          'the surface map has no SHIFT layer, but machines past ' +
+          `${pads.length} are only reachable with Shift held`);
+}
+
+/* the function pads must NOT be listed as palette slots */
+for (const fn of [81, 82, 83]) {
+    check(!paletteOrder || !paletteOrder[1].includes(String(fn)),
+          `pad ${fn} is a function pad (undo/memo/song) but the map lists it ` +
+          `in the palette`);
+}
+
 console.log(`\n${checks} checks, ${failures} failed`);
 process.exit(failures ? 1 : 0);
