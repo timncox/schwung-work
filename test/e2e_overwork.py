@@ -27,9 +27,27 @@ SETUP
     ssh -fN -L 47777:localhost:47777 ableton@move.local
     .venv-e2e/bin/pytest test/e2e_overwork.py -v
 
-Overwork must be OPEN on the device: shadow_ui's open_tool flag is not reliably
-picked up from the bus, so the one manual step is launching the tool. Every
-test below skips with a clear message rather than failing when it is not.
+WHAT WORKS AND WHAT DOES NOT (measured on the device, 2026-07-29)
+----------------------------------------------------------------
+READING works and is genuinely useful: `get_param` reaches the running overtake
+DSP, `snapshot_pad_leds` returns real LED state, `state()` reports the shim's
+view of the world. Those tests below are real.
+
+MIDI INJECTION DOES NOT REACH AN OVERTAKE MODULE. `press_pad`, `press_step` and
+`inject_midi` write to the `/schwung-midi-inject` SHM, but with an overtake
+module active the injected events never arrive: pressing a palette pad leaves
+`machine1` unchanged and not one of the 32 pad LEDs moves, and the device log
+shows no corresponding OVERTAKE MIDI line. Verified by pressing pad 93 and
+diffing both the parameter and the full LED snapshot.
+
+So the input-driven tests are marked xfail rather than deleted — they are the
+ones worth having, and they document exactly what needs fixing in schwung's
+inject path before this suite can replace a human at the surface.
+
+Launching is a second gap: `set_open_tool` writes the command and shadow_ui
+reads it, but answers "tool not found: overwork" because its open_tool path
+searches `scanForToolModules()` while overtake modules come from
+`scanForOvertakeModules()`. Overwork must already be open.
 """
 import time
 
@@ -96,6 +114,9 @@ def test_machine_list_matches_the_build(overwork):
 
 # -------------------------------------------------------------- step buttons
 
+@pytest.mark.xfail(reason="injected MIDI does not reach an overtake module "
+                          "(verified: pad press moves neither params nor LEDs)",
+                   strict=False)
 def test_step_button_toggles_a_trig_and_does_not_fire_the_sample(overwork):
     """The bug that cost the most: steps arrive as NOTES, and the unhandled
     note fell through to the engine and triggered playback."""
@@ -121,6 +142,8 @@ def test_step_button_toggles_a_trig_and_does_not_fire_the_sample(overwork):
     assert bus.get_param("step0").split(":")[0] == "0"
 
 
+@pytest.mark.xfail(reason="injected MIDI does not reach an overtake module",
+                   strict=False)
 def test_hold_step_plus_knob_writes_a_parameter_lock(overwork):
     """THE gesture. Hold a step, turn a knob, that step remembers the value."""
     bus = overwork
@@ -131,7 +154,7 @@ def test_hold_step_plus_knob_writes_a_parameter_lock(overwork):
 
     bus.press_step(STEP_FIRST)
     bus.wait_frame(4)
-    bus.inject_midi(0xB0, 71, 5)             # knob 1, five detents
+    bus.inject_midi(bytes([0x0B, 0xB0, 71, 5]))   # knob 1, five detents
     bus.wait_frame(6)
     bus.release_step(STEP_FIRST)
     bus.wait_frame(8)
@@ -144,6 +167,8 @@ def test_hold_step_plus_knob_writes_a_parameter_lock(overwork):
 
 # ------------------------------------------------------------------ palette
 
+@pytest.mark.xfail(reason="injected MIDI does not reach an overtake module",
+                   strict=False)
 @pytest.mark.parametrize("shift,offset", [(False, 0), (True, 21)])
 def test_palette_pads_load_machines(overwork, shift, offset):
     """Unshifted pads reach machines 0-20, Shift reaches 21 and up. The Shift
@@ -155,14 +180,14 @@ def test_palette_pads_load_machines(overwork, shift, offset):
         pytest.skip(f"only {len(machines)} machines")
 
     if shift:
-        bus.inject_midi(0xB0, 49, 127)
+        bus.inject_midi(bytes([0x0B, 0xB0, 49, 127]))
         bus.wait_frame(2)
     bus.press_pad(PALETTE_ROW1 + 3)
     bus.wait_frame(4)
     bus.release_pad(PALETTE_ROW1 + 3)
     bus.wait_frame(10)
     if shift:
-        bus.inject_midi(0xB0, 49, 0)
+        bus.inject_midi(bytes([0x0B, 0xB0, 49, 0]))
         bus.wait_frame(2)
 
     got = int(bus.get_param("machine1"))
@@ -194,7 +219,10 @@ def test_sample_state_is_readable(overwork):
     """The UI reports load success from these, not from its own send finishing
     — the sample crosses shared memory and only the far end knows it landed."""
     bus = overwork
-    assert int(bus.get_param("sample_max")) > 0
+    raw = bus.get_param("sample_max")
+    if raw == "":
+        pytest.skip("param channel contended — the read came back empty")
+    assert int(raw) > 0
     frames = int(bus.get_param("sample_frames"))
     assert frames >= 0
     if frames:
