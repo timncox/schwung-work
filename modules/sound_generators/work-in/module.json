@@ -2,7 +2,7 @@
   "id": "work-in",
   "name": "Work In",
   "abbrev": "WKIN",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Twenty-one Tonverk-inspired FX machines on the live input, as a chain slot source",
   "dsp": "dsp.so",
   "ui_chain": "ui_chain.js",

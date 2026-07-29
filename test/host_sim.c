@@ -836,8 +836,13 @@ static void test_ui_hierarchy_labels(void) {
     CHECK(strstr(buf, "\"TUNE\"") != NULL, "Chrono Pitch's TUNE label missing");
     CHECK(strstr(buf, "\"FDBK\"") != NULL, "Chrono Pitch's FDBK label missing");
     CHECK(strstr(buf, "\"N.HPF\"") != NULL, "Warble's N.HPF label missing");
-    CHECK(strstr(buf, "\"FX 1: Chrono Pitch\"") != NULL,
-          "slot 1 link does not name the loaded machine");
+    /* The level LINK must NOT name a machine: the Shadow UI captures the
+     * hierarchy once, so a machine name baked into it goes stale the moment
+     * the machine changes. */
+    CHECK(strstr(buf, "FX 1: ") == NULL,
+          "the slot link names a machine, which will go stale in the cache");
+    CHECK(strstr(buf, "\"FX 1 Parameters\"") != NULL,
+          "slot 1 link is missing");
     /* No knob anywhere should be labelled with a bare letter — that was the
      * original complaint: "I don't know what each does". */
     for (char c = 'A'; c <= 'H'; ++c) {
@@ -860,11 +865,11 @@ static void test_ui_hierarchy_labels(void) {
     CHECK(braces == 0, "unbalanced braces in hierarchy (%d)", braces);
     CHECK(brackets == 0, "unbalanced brackets in hierarchy (%d)", brackets);
 
-    /* the labels must FOLLOW a machine change */
+    /* Compact form (small buffer): the labels follow the loaded machine. */
     set_slot(w, 0, WORK_FX_FBANK);
     work_get_param(w, "ui_hierarchy", buf, sizeof(buf));
-    CHECK(strstr(buf, "\"FX 1: Filterbank\"") != NULL,
-          "hierarchy did not follow the machine change");
+    CHECK(strstr(buf, "\"90Hz\"") != NULL,
+          "compact hierarchy did not follow the machine change");
     CHECK(strstr(buf, "\"TUNE\"") == NULL,
           "stale Chrono Pitch label survived the machine change");
 
@@ -873,6 +878,45 @@ static void test_ui_hierarchy_labels(void) {
     work_get_param(w, "ui_hierarchy", buf, sizeof(buf));
     CHECK(strstr(buf, "(no parameters)") != NULL,
           "Bypass produced an empty parameter level");
+
+    /* ROOMY form (the chain path has a 64 kB buffer): every machine's labels
+     * are present at once, each gated on the slot's machine select, so the
+     * Shadow UI can swap them live instead of showing the previous machine
+     * until you back out and re-enter. */
+    {
+        static char big[65536];
+        int bn = work_get_param(w, "ui_hierarchy", big, sizeof(big));
+        CHECK(bn > 20000, "roomy hierarchy is only %d bytes — did it fall back?", bn);
+        CHECK(bn < (int)sizeof(big) - 1, "roomy hierarchy filled the buffer (%d)", bn);
+
+        CHECK(strstr(big, "visible_if") != NULL,
+              "roomy hierarchy has no visible_if gating");
+        /* labels from machines OTHER than the loaded one must be present */
+        CHECK(strstr(big, "\"TUNE\"") != NULL, "Chrono Pitch's TUNE missing from the roomy form");
+        CHECK(strstr(big, "\"90Hz\"") != NULL, "Filterbank's 90Hz missing from the roomy form");
+        CHECK(strstr(big, "\"PPONG\"") != NULL, "Saturator Delay's PPONG missing");
+        CHECK(strstr(big, "\"SPEED\"") != NULL, "Warble's SPEED missing");
+
+        /* the gate must reference the slot's own machine select */
+        CHECK(strstr(big, "{\"param\":\"fx1\",\"equals\":1}") != NULL,
+              "slot 1 entries are not gated on fx1");
+        CHECK(strstr(big, "{\"param\":\"fx2\",\"equals\":1}") != NULL,
+              "slot 2 entries are not gated on fx2");
+
+        /* knobs stay the eight shared keys — the filter picks the visible set */
+        CHECK(strstr(big, "\"knobs\":[\"fx1_p1\",\"fx1_p2\"") != NULL,
+              "slot 1 knob mapping is not the eight shared keys");
+
+        int braces = 0, brackets = 0, instr = 0;
+        for (const char *c = big; *c; ++c) {
+            if (*c == '"' && (c == big || c[-1] != '\\')) instr = !instr;
+            if (instr) continue;
+            if (*c == '{') braces++; else if (*c == '}') braces--;
+            else if (*c == '[') brackets++; else if (*c == ']') brackets--;
+        }
+        CHECK(braces == 0 && brackets == 0,
+              "roomy hierarchy is unbalanced (braces %d brackets %d)", braces, brackets);
+    }
 
     /* and the usual short-buffer canary */
     for (int capsz = 8; capsz <= 4096; capsz *= 4) {

@@ -2829,7 +2829,6 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
      * labels are emitted, not all twenty machines' worth. */
     if (strcmp(key, "ui_hierarchy") == 0) {
         int n = 0;
-        int m1 = w->cfg[0].machine, m2 = w->cfg[1].machine;
 
         n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
             "{\"levels\":{\"root\":{\"name\":\"Work\",\"params\":["
@@ -2844,39 +2843,79 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
                                     i ? "," : "", MACHINE_NAME[i]), cap);
         n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
             "]},{\"key\":\"mix\",\"name\":\"Dry/Wet\",\"type\":\"int\",\"min\":0,\"max\":127},"
-            "{\"level\":\"fx1p\",\"label\":\"FX 1: %s\"},"
-            "{\"level\":\"fx2p\",\"label\":\"FX 2: %s\"},"
+            "{\"level\":\"fx1p\",\"label\":\"FX 1 Parameters\"},"
+            "{\"level\":\"fx2p\",\"label\":\"FX 2 Parameters\"},"
             "{\"level\":\"lfo1\",\"label\":\"FX LFO 1\"},"
             "{\"level\":\"lfo2\",\"label\":\"FX LFO 2\"},"
             "{\"level\":\"lfo3\",\"label\":\"FX LFO 3\"}],"
-            "\"knobs\":[\"fx1\",\"fx2\",\"mix\"]}", MACHINE_NAME[m1], MACHINE_NAME[m2]), cap);
+            "\"knobs\":[\"fx1\",\"fx2\",\"mix\"]}"), cap);
 
-        /* One level per slot, named after the machine, carrying its real
-         * knob labels. Unused knobs are omitted rather than shown blank. */
+        /* Per-slot parameter levels.
+         *
+         * THE PROBLEM this solves: the Shadow UI captures the hierarchy ONCE,
+         * in enterHierarchyEditorWith(), and never re-fetches it. Emitting only
+         * the loaded machine's labels therefore left the settings page showing
+         * the PREVIOUS machine until you backed out and re-entered — which is
+         * exactly what Tim hit on hardware.
+         *
+         * The way out is `visible_if`, which the Shadow UI DOES re-evaluate
+         * live: refreshHierarchyVisibility() runs after every parameter edit,
+         * and the condition is resolved against the current value via
+         * getSlotParam(). So emit EVERY machine's labels, each gated on the
+         * slot's machine select, and the visible set swaps the moment the
+         * machine changes — no re-entry.
+         *
+         * The parameter KEYS are the same for every machine (fx1_p1..p8), so
+         * `knobs` still lists just those eight; the filter keeps whichever
+         * eight named entries are currently visible.
+         *
+         * That form costs ~35 kB, which is fine for the chain path
+         * (SHADOW_PARAM_VALUE_LEN is 64 kB) but not for the overtake host's
+         * 16 kB get_param buffer. So the shape follows the caller's buffer:
+         * anything that cannot hold the full form gets the compact
+         * current-machine one, which is all our own overtake UI ever needs. */
+        int roomy = (buf_len >= 40000);
+
         for (int s = 0; s < WORK_SLOTS; ++s) {
-            int mc = w->cfg[s].machine;
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                ",\"fx%dp\":{\"name\":\"%s\",\"params\":[", s + 1, MACHINE_NAME[mc]), cap);
+                ",\"fx%dp\":{\"name\":\"FX %d\",\"params\":[", s + 1, s + 1), cap);
             int first = 1;
-            for (int i = 0; i < WORK_PARAMS; ++i) {
-                if (!PARAM_NAME[mc][i][0]) continue;
-                n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                    "%s{\"key\":\"fx%d_p%d\",\"name\":\"%s\",\"type\":\"int\",\"min\":0,\"max\":127}",
-                    first ? "" : ",", s + 1, i + 1, PARAM_NAME[mc][i]), cap);
-                first = 0;
+
+            if (roomy) {
+                for (int mc = 0; mc < WORK_FX_COUNT; ++mc) {
+                    for (int i = 0; i < WORK_PARAMS; ++i) {
+                        const char *nm = PARAM_NAME[mc][i];
+                        if (!nm[0]) {
+                            if (i || PARAM_NAME[mc][0][0]) continue;
+                            nm = "(no parameters)";
+                        }
+                        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                            "%s{\"key\":\"fx%d_p%d\",\"name\":\"%s\",\"type\":\"int\","
+                            "\"min\":0,\"max\":127,"
+                            "\"visible_if\":{\"param\":\"fx%d\",\"equals\":%d}}",
+                            first ? "" : ",", s + 1, i + 1, nm, s + 1, mc), cap);
+                        first = 0;
+                    }
+                }
+            } else {
+                int mc = w->cfg[s].machine;
+                for (int i = 0; i < WORK_PARAMS; ++i) {
+                    if (!PARAM_NAME[mc][i][0]) continue;
+                    n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                        "%s{\"key\":\"fx%d_p%d\",\"name\":\"%s\",\"type\":\"int\",\"min\":0,\"max\":127}",
+                        first ? "" : ",", s + 1, i + 1, PARAM_NAME[mc][i]), cap);
+                    first = 0;
+                }
+                if (first)
+                    n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                        "{\"key\":\"fx%d_p1\",\"name\":\"(no parameters)\",\"type\":\"int\","
+                        "\"min\":0,\"max\":127}", s + 1), cap);
             }
-            if (first)  /* Bypass has no parameters — say so rather than be empty */
-                n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                    "{\"key\":\"fx%d_p1\",\"name\":\"(no parameters)\",\"type\":\"int\","
-                    "\"min\":0,\"max\":127}", s + 1), cap);
+
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "],\"knobs\":["), cap);
-            first = 1;
-            for (int i = 0; i < WORK_PARAMS; ++i) {
-                if (!PARAM_NAME[mc][i][0]) continue;
+            for (int i = 0; i < WORK_PARAMS; ++i)
                 n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s\"fx%d_p%d\"",
-                                        first ? "" : ",", s + 1, i + 1), cap);
-                first = 0;
-            }
+                                        i ? "," : "", s + 1, i + 1), cap);
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "]}"), cap);
         }
 
