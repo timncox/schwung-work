@@ -73,5 +73,38 @@ const modVer = JSON.parse(
 check(html.includes(`v${modVer}`),
       `site does not mention the shipped version v${modVer}`);
 
+/* ---------------------------------------------------------------- manifests
+ *
+ * THE 8192-BYTE CLIFF. schwung's module manager rejects any module.json over
+ * 8192 bytes outright — parse_module_json() in src/host/module_manager.c:
+ *
+ *     if (len > 8192) { printf("mm: module.json too large: %s\n", ...); return -1; }
+ *
+ * A rejected manifest means the module never appears at all. Work shipped over
+ * that limit from v0.1.0 (11 kB) and reached 78 kB once a full static
+ * ui_hierarchy was baked in, so the FX build could not be opened on hardware.
+ *
+ * The hierarchy belongs in the DSP: the host tries get_param("ui_hierarchy")
+ * FIRST (shadow_chain_mgmt.c) and reads it into a 64 KB buffer, falling back to
+ * module.json only if the DSP returns nothing. So the manifest stays small and
+ * the labels stay correct.
+ */
+const MANIFEST_LIMIT = 8192;
+const manifests = [
+    'modules/audio_fx/work/module.json',
+    'modules/sound_generators/work-in/module.json',
+    'modules/overtake/overwork/module.json'
+];
+for (const rel of manifests) {
+    const bytes = fs.statSync(path.join(root, rel)).size;
+    check(bytes <= MANIFEST_LIMIT,
+          `${rel} is ${bytes} B — over the host's ${MANIFEST_LIMIT} B limit, so the ` +
+          `module will not load at all`);
+    const m = JSON.parse(fs.readFileSync(path.join(root, rel), 'utf8'));
+    check(!m.capabilities || !m.capabilities.ui_hierarchy,
+          `${rel} embeds a ui_hierarchy — it belongs in the DSP, and it is what ` +
+          `pushed this file over the size limit before`);
+}
+
 console.log(`\n${checks} checks, ${failures} failed`);
 process.exit(failures ? 1 : 0);

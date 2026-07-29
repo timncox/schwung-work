@@ -4,16 +4,15 @@ LDLIBS = -lm
 
 .PHONY: test test-ui test-site contract module-json bench sanitize arm clean
 
-# module.json's ui_hierarchy is GENERATED from PARAM_NAME[][] in work_core.c,
-# so adding or renaming a machine parameter cannot leave the Shadow UI showing
-# a stale label. Run this after touching that table.
+# The parameter hierarchy is served by the DSP at get_param("ui_hierarchy"),
+# which the host tries FIRST and reads into a 64 KB buffer. It must NOT go into
+# module.json: the module manager rejects any manifest over 8192 bytes outright
+# (module_manager.c parse_module_json), and a rejected manifest means the module
+# never appears at all. This target only refreshes the reference dump that the
+# site test compares against.
 module-json: build/gen_hierarchy
 	./build/gen_hierarchy > build/hierarchy.json
-	@python3 -c "import json; \
-	h=json.load(open('build/hierarchy.json')); \
-	[ (lambda p: (json.dump({**json.load(open(p)), 'capabilities': {**json.load(open(p))['capabilities'], 'ui_hierarchy': h}}, open(p,'w'), indent=2, ensure_ascii=False), open(p,'a').write(chr(10))))(p) \
-	  for p in ['modules/audio_fx/work/module.json','modules/sound_generators/work-in/module.json'] ]; \
-	print('module.json ui_hierarchy regenerated:', len(h['levels']), 'levels')"
+	@echo "hierarchy reference regenerated (module.json intentionally left alone)"
 
 build/gen_hierarchy: src/work_core.c src/work_core.h test/gen_hierarchy.c
 	@mkdir -p build
