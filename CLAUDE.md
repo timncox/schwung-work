@@ -171,11 +171,23 @@ returns a `[names, errno]` tuple including `.` and `..`, and `os.rename` /
 the naive flat-array reading against that mock and asserts it FAILS, so the
 mock cannot quietly become too forgiving to catch the bug that broke Mono.
 
-**Nothing is hardware-verified.** `make bench` on a Mac puts the heaviest
+**Verified on hardware, 2026-07-29** — and only this much:
+
+- FX machine selection through the whole 26-machine list (the knob-response fix).
+- The sample path end to end: browser, WAV parse, chunked transfer across the
+  param channel, and **Single Player firing from a sequencer trig**. Audio out
+  of the Move.
+
+**Still NOT verified by ear:** Multi Player, Subtracks, Wavefinder and Shape;
+polyphony and voice stealing; note-to-pitch tracking; anything about how the
+machines actually SOUND as opposed to producing signal.
+
+**CPU is still unmeasured on the A53.** `make bench` on a Mac puts the heaviest
 machine (Rumsklang Reverb) at ~164x realtime and two of them at ~93x. Belt
 benched 65x and was *extrapolated* to ~10-15% of an A53 core, so this looks
 affordable — but that is an extrapolation from a different module, not a
-measurement. Measure on device before claiming headroom.
+measurement. A source machine in slot 1 with a reverb in slot 2 is the
+combination to watch. Measure on device before claiming headroom.
 
 ## Roadmap
 
