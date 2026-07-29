@@ -35,7 +35,7 @@ int main(void) {
     /* root */
     printf("    \"root\": {\n      \"name\": \"Work\",\n      \"params\": [\n");
     for (int s = 0; s < 2; ++s) {
-        printf("        {\"key\": \"fx%d\", \"name\": \"FX %d Machine\", \"type\": \"enum\", \"options\": [", s + 1, s + 1);
+        printf("        {\"key\": \"machine%d\", \"name\": \"FX %d Machine\", \"type\": \"enum\", \"options\": [", s + 1, s + 1);
         for (int i = 0; i < WORK_FX_COUNT; ++i)
             printf("%s\"%s\"", i ? ", " : "", work_machine_name(i));
         printf("], \"default\": 0},\n");
@@ -47,7 +47,7 @@ int main(void) {
     printf("        {\"level\": \"lfo2\", \"label\": \"FX LFO 2\"},\n");
     printf("        {\"level\": \"lfo3\", \"label\": \"FX LFO 3\"},\n");
     printf("        {\"level\": \"menv\", \"label\": \"Modulation Envelope\"}\n");
-    printf("      ],\n      \"knobs\": [\"fx1\", \"fx2\", \"mix\"]\n    },\n");
+    printf("      ],\n      \"knobs\": [\"machine1\", \"machine2\", \"mix\"]\n    },\n");
 
     /* one selector level per slot, listing every machine */
     for (int s = 0; s < 2; ++s) {

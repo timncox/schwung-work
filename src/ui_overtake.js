@@ -262,8 +262,8 @@ function pageKnobs() {
     }
     /* EDIT_GLOBAL */
     return [
-        { key: 'fx1',     label: 'FX1',  lock: 16, min: 0, max: N_MACHINES - 1 },
-        { key: 'fx2',     label: 'FX2',  lock: 17, min: 0, max: N_MACHINES - 1 },
+        { key: 'machine1',     label: 'FX1',  lock: 16, min: 0, max: N_MACHINES - 1 },
+        { key: 'machine2',     label: 'FX2',  lock: 17, min: 0, max: N_MACHINES - 1 },
         { key: 'mix',     label: 'MIX',  lock: 18, min: 0, max: 127 },
         { key: 'seq_len', label: 'LEN',  lock: -1, min: 1, max: MAX_STEPS },
         { key: '', label: '', lock: -1, min: 0, max: 0 },
@@ -281,8 +281,8 @@ function fetchAll() {
     if (conds) condList = conds.split(',');
 
     for (let s = 0; s < 2; s++) {
-        const code = getNum(`fx${s + 1}`);
-        cfg[`fx${s + 1}`] = code;
+        const code = getNum(`machine${s + 1}`);
+        cfg[`machine${s + 1}`] = code;
         machineName[s] = machineList[code] || `#${code}`;
         const lab = getParam(`labels${s + 1}`);
         fxLabels[s] = lab ? lab.split(',') : [];
@@ -424,7 +424,7 @@ function adjustKnob(knob, delta) {
     if (v === cfg[k.key]) return;
 
     setNum(k.key, v);
-    if (k.key === 'fx1' || k.key === 'fx2') fetchAll();
+    if (k.key === 'machine1' || k.key === 'machine2') fetchAll();
     if (k.key === 'seq_len') seqLen = v;
 
     announceParameter(k.label, knobText(knob));
@@ -432,7 +432,7 @@ function adjustKnob(knob, delta) {
 }
 
 function loadMachine(code) {
-    setNum(`fx${focusSlot + 1}`, code);
+    setNum(`machine${focusSlot + 1}`, code);
     fetchAll();
     announce(`${machineList[code] || code} in FX ${focusSlot + 1}`);
 }
@@ -660,7 +660,7 @@ function knobText(i) {
     if (!k || !k.key) return '';
     const v = cfg[k.key] | 0;
 
-    if (k.key === 'fx1' || k.key === 'fx2') {
+    if (k.key === 'machine1' || k.key === 'machine2') {
         const nm = machineList[v] || `#${v}`;
         return nm.length > 6 ? nm.slice(0, 6) : nm;
     }
@@ -758,7 +758,7 @@ function paintPalette(force) {
         if (code < N_MACHINES) {
             color = MACHINE_COLOR[code];
             /* the machine loaded in the focused slot burns brighter */
-            if (code === (cfg[`fx${focusSlot + 1}`] | 0)) color = White;
+            if (code === (cfg[`machine${focusSlot + 1}`] | 0)) color = White;
         }
         setLED(PALETTE_PADS[i], color, force);
     }

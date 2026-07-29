@@ -898,14 +898,23 @@ static void test_ui_hierarchy_labels(void) {
         CHECK(strstr(big, "\"SPEED\"") != NULL, "Warble's SPEED missing");
 
         /* the gate must reference the slot's own machine select */
-        CHECK(strstr(big, "{\"param\":\"fx1\",\"equals\":1}") != NULL,
-              "slot 1 entries are not gated on fx1");
-        CHECK(strstr(big, "{\"param\":\"fx2\",\"equals\":1}") != NULL,
-              "slot 2 entries are not gated on fx2");
+        CHECK(strstr(big, "{\"param\":\"machine1\",\"equals\":1}") != NULL,
+              "slot 1 entries are not gated on machine1");
+        CHECK(strstr(big, "{\"param\":\"machine2\",\"equals\":1}") != NULL,
+              "slot 2 entries are not gated on machine2");
 
         /* knobs stay the eight shared keys — the filter picks the visible set */
         CHECK(strstr(big, "\"knobs\":[\"fx1_p1\",\"fx1_p2\"") != NULL,
               "slot 1 knob mapping is not the eight shared keys");
+
+        /* schwung's own component keys for chain FX slots are literally "fx1"
+         * and "fx2" (shadow_ui.js), so a parameter of ours by those names
+         * collides in the prefixed key space and visible_if fails OPEN —
+         * showing every machine's labels at once. Nothing gated may use them. */
+        CHECK(strstr(big, "\"param\":\"fx1\"") == NULL &&
+              strstr(big, "\"param\":\"fx2\"") == NULL,
+              "a visible_if gate uses fx1/fx2, which collide with schwung's "
+              "component keys and will fail open");
 
         int braces = 0, brackets = 0, instr = 0;
         for (const char *c = big; *c; ++c) {

@@ -317,7 +317,7 @@ async function testMachinePaletteLoadsMachines() {
 
     ctx.host.onMidiMessageInternal(noteOn(92));           /* palette index 0 */
     ctx.host.onMidiMessageInternal(noteOff(92));
-    let w = ctx.writes.find((x) => x.key === 'fx1');
+    let w = ctx.writes.find((x) => x.key === 'machine1');
     check(!!w && `${w.val}` === '0', `pad 92 should load machine 0 into FX1, got ${w && w.val}`);
 
     /* focus the other slot, then load again */
@@ -326,7 +326,7 @@ async function testMachinePaletteLoadsMachines() {
     ctx.host.onMidiMessageInternal(noteOff(70));
     ctx.host.onMidiMessageInternal(noteOn(99));           /* palette index 7 */
     ctx.host.onMidiMessageInternal(noteOff(99));
-    w = ctx.writes.find((x) => x.key === 'fx2');
+    w = ctx.writes.find((x) => x.key === 'machine2');
     check(!!w && `${w.val}` === '7', `pad 99 should load machine 7 into FX2, got ${w && w.val}`);
 }
 

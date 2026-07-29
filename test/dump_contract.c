@@ -54,8 +54,8 @@ int main(void) {
 
     /* A representative engine state: two machines loaded, a pattern with
      * trigs, locks, a condition and micro timing. */
-    work_set_param(w, "fx1", "1");            /* Chrono Pitch */
-    work_set_param(w, "fx2", "18");           /* Supervoid Reverb */
+    work_set_param(w, "machine1", "1");       /* Chrono Pitch */
+    work_set_param(w, "machine2", "18");      /* Supervoid Reverb */
     work_set_param(w, "seq_on", "1");
     work_set_param(w, "seq_len", "32");
     work_set_param(w, "step0", "1:0:0:0");
@@ -74,7 +74,7 @@ int main(void) {
 
     printf("{\n  \"get\": {");
     const char *simple[] = {
-        "machines", "conds", "fx1", "fx2", "labels1", "labels2",
+        "machines", "conds", "machine1", "machine2", "fx1", "fx2", "labels1", "labels2",
         "eff1", "eff2", "effm", "mix", "seq_on", "seq_len", "fill",
         "seq_pos", "meter", "state", "live_rec",
         "menv_dest", "menv_atk", "menv_hold", "menv_dec", "menv_depth",
@@ -121,7 +121,7 @@ int main(void) {
 
     /* Probe the writable keys with values that must change the read-back. */
     struct { const char *key; const char *probe; } probes[] = {
-        {"fx1", "5"}, {"fx2", "3"}, {"mix", "77"},
+        {"machine1", "5"}, {"machine2", "3"}, {"fx1", "7"}, {"fx2", "9"}, {"mix", "77"},
         {"seq_on", "0"}, {"seq_len", "9"}, {"fill", "1"}, {"seq_clear", "1"},
         {"fx1_p1", "42"}, {"fx2_p8", "13"},
         {"lfo1_dest", "4"}, {"lfo1_spd", "99"}, {"lfo1_wave", "3"},

@@ -72,8 +72,8 @@ const FX_KNOBS = (slot) => {
 };
 
 const PAGES = [
-    [ { key: 'fx1', label: 'FX 1', min: 0, max: 19,  step: 1 },
-      { key: 'fx2', label: 'FX 2', min: 0, max: 19,  step: 1 },
+    [ { key: 'machine1', label: 'FX 1', min: 0, max: 19,  step: 1 },
+      { key: 'machine2', label: 'FX 2', min: 0, max: 19,  step: 1 },
       { key: 'mix', label: 'MIX',  min: 0, max: 127, step: 1 } ],
     FX_KNOBS(1),
     FX_KNOBS(2),
@@ -123,7 +123,7 @@ function fetchAll() {
     if (list) machineList = list.split(',');
 
     for (let s = 0; s < 2; s++) {
-        const code = values[`fx${s + 1}`] | 0;
+        const code = values[`machine${s + 1}`] | 0;
         machineName[s] = machineList[code] || `#${code}`;
         const lab = getParam(`labels${s + 1}`);
         fxLabels[s] = lab ? lab.split(',') : [];
@@ -153,7 +153,7 @@ function knobValue(i) {
     if (!k) return '';
     const v = values[k.key] | 0;
 
-    if (k.key === 'fx1' || k.key === 'fx2') {
+    if (k.key === 'machine1' || k.key === 'machine2') {
         const nm = machineList[v] || `#${v}`;
         return nm.length > 6 ? nm.slice(0, 6) : nm;
     }
@@ -212,7 +212,7 @@ function adjustKnob(i, delta) {
 
     /* Selecting a machine reloads that slot's defaults in the DSP, so the
      * whole page has to be re-read rather than just this one knob. */
-    if (k.key === 'fx1' || k.key === 'fx2') fetchAll();
+    if (k.key === 'machine1' || k.key === 'machine2') fetchAll();
 
     announceParameter(knobLabel(i) || k.label, knobValue(i));
     needsRedraw = true;

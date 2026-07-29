@@ -2116,7 +2116,7 @@ static void nrpn_apply(work_t *w, int num, int value14) {
         return;
     }
     if (num == 24 || num == 25) {
-        snprintf(key, sizeof(key), "fx%d", num - 23);
+        snprintf(key, sizeof(key), "machine%d", num - 23);
         /* full range from 14 bits — the whole reason NRPN exists here */
         snprintf(val, sizeof(val), "%d", (value14 * (WORK_FX_COUNT - 1)) / 16383);
         work_set_param(w, key, val);
@@ -2152,7 +2152,7 @@ static void cc_apply(work_t *w, int cc, int v) {
         return;
     }
     if (cc == 24 || cc == 25) {                   /* machine select, scaled */
-        snprintf(key, sizeof(key), "fx%d", cc - 23);
+        snprintf(key, sizeof(key), "machine%d", cc - 23);
         snprintf(val, sizeof(val), "%d", (v * (WORK_FX_COUNT - 1) + 63) / 127);
         work_set_param(w, key, val);
         return;
@@ -2429,8 +2429,16 @@ void work_set_param(work_t *w, const char *key, const char *val) {
         return;
     }
 
-    if (strcmp(key, "fx1") == 0 || strcmp(key, "fx2") == 0) {
-        int s  = key[2] - '1';
+    /* Machine select. Named machine1/machine2, NOT fx1/fx2: schwung's own
+     * component keys for chain FX slots are literally "fx1" and "fx2"
+     * (shadow_ui.js), so a parameter of the same name collides in the
+     * prefixed key space — `fx1:fx1` — and a visible_if condition pointed at
+     * it failed to resolve. visible_if fails OPEN, so every machine's labels
+     * showed at once with Bypass's "(no parameters)" first. fx1/fx2 stay as
+     * aliases so nothing that already used them breaks. */
+    if (strcmp(key, "machine1") == 0 || strcmp(key, "machine2") == 0 ||
+        strcmp(key, "fx1") == 0 || strcmp(key, "fx2") == 0) {
+        int s  = (key[0] == 'm' ? key[7] : key[2]) - '1';
         int mc = parse_machine(val);
         if (mc >= 0 && mc != w->cfg[s].machine) {
             w->cfg[s].machine = (uint8_t)mc;
@@ -2658,8 +2666,10 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
     if (parse_slot_param(key, &slot, &idx))
         return nclamp(snprintf(buf, buf_len, "%d", w->cfg[slot].p[idx]), cap);
 
-    if (strcmp(key, "fx1") == 0 || strcmp(key, "fx2") == 0)
-        return nclamp(snprintf(buf, buf_len, "%d", w->cfg[key[2] - '1'].machine), cap);
+    if (strcmp(key, "machine1") == 0 || strcmp(key, "machine2") == 0 ||
+        strcmp(key, "fx1") == 0 || strcmp(key, "fx2") == 0)
+        return nclamp(snprintf(buf, buf_len, "%d",
+                      w->cfg[(key[0] == 'm' ? key[7] : key[2]) - '1'].machine), cap);
 
     if (strcmp(key, "mix") == 0)
         return nclamp(snprintf(buf, buf_len, "%d", w->mix), cap);
@@ -2832,12 +2842,12 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
 
         n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
             "{\"levels\":{\"root\":{\"name\":\"Work\",\"params\":["
-            "{\"key\":\"fx1\",\"name\":\"FX 1 Machine\",\"type\":\"enum\",\"options\":["), cap);
+            "{\"key\":\"machine1\",\"name\":\"FX 1 Machine\",\"type\":\"enum\",\"options\":["), cap);
         for (int i = 0; i < WORK_FX_COUNT; ++i)
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s\"%s\"",
                                     i ? "," : "", MACHINE_NAME[i]), cap);
         n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-            "]},{\"key\":\"fx2\",\"name\":\"FX 2 Machine\",\"type\":\"enum\",\"options\":["), cap);
+            "]},{\"key\":\"machine2\",\"name\":\"FX 2 Machine\",\"type\":\"enum\",\"options\":["), cap);
         for (int i = 0; i < WORK_FX_COUNT; ++i)
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s\"%s\"",
                                     i ? "," : "", MACHINE_NAME[i]), cap);
@@ -2848,7 +2858,7 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
             "{\"level\":\"lfo1\",\"label\":\"FX LFO 1\"},"
             "{\"level\":\"lfo2\",\"label\":\"FX LFO 2\"},"
             "{\"level\":\"lfo3\",\"label\":\"FX LFO 3\"}],"
-            "\"knobs\":[\"fx1\",\"fx2\",\"mix\"]}"), cap);
+            "\"knobs\":[\"machine1\",\"machine2\",\"mix\"]}"), cap);
 
         /* Per-slot parameter levels.
          *
@@ -2892,7 +2902,7 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
                         n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
                             "%s{\"key\":\"fx%d_p%d\",\"name\":\"%s\",\"type\":\"int\","
                             "\"min\":0,\"max\":127,"
-                            "\"visible_if\":{\"param\":\"fx%d\",\"equals\":%d}}",
+                            "\"visible_if\":{\"param\":\"machine%d\",\"equals\":%d}}",
                             first ? "" : ",", s + 1, i + 1, nm, s + 1, mc), cap);
                         first = 0;
                     }
