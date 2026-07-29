@@ -495,11 +495,17 @@ function fetchSteps() {
  * once per SPI frame. CHUNK_FRAMES keeps each message inside that and spreads
  * the cost over several frames rather than one enormous blocking write.
  */
+/* VERIFIED ON THE DEVICE, 2026-07-29 — these are not guesses. The Move keeps
+ * its library under UserLibrary, not at the top of UserData, and Schwung's own
+ * resampler and skipback write into DATED SUBDIRECTORIES
+ * (Samples/Schwung/Skipback/2026-07-28/...), so a flat scan of the base finds
+ * nothing at all. Hence the recursive walk below. */
 const SAMPLE_DIRS = [
-    '/data/UserData/Samples/Schwung',
-    '/data/UserData/Samples',
-    '/data/UserData/schwung/samples'
+    '/data/UserData/UserLibrary/Samples',
+    '/data/UserData/UserLibrary/Recordings'
 ];
+const SAMPLE_SCAN_DEPTH = 4;     /* Samples/Schwung/Skipback/<date>/x.wav */
+const SAMPLE_LIMIT = 200;        /* a browser, not an archive */
 const CHUNK_FRAMES = 8192;              /* 32 KB raw -> ~43 KB of base64 */
 
 const B64_CHARS =
@@ -662,21 +668,36 @@ function loadSampleFile(path) {
     return true;
 }
 
-/* Every .wav the sample directories hold, newest directory first. */
-function listSamples() {
-    const found = [];
-    for (const dir of SAMPLE_DIRS) {
-        let result;
-        try { result = os.readdir(dir); } catch (e) { continue; }
-        /* os.readdir returns a [names, errno] TUPLE and the listing includes
-         * "." and ".." — treating it as a flat array is the bug that broke
-         * Mono's preset browser. */
-        if (!result || result[1] !== 0) continue;
-        for (const f of result[0]) {
-            if (f === '.' || f === '..') continue;
-            if (/\.wav$/i.test(f)) found.push(`${dir}/${f}`);
+/* Every .wav under the sample directories, walking subdirectories.
+ *
+ * os.readdir returns a [names, errno] TUPLE and the listing includes "." and
+ * ".." — treating it as a flat array of filenames is the bug that broke Mono's
+ * preset browser. There is no stat binding to ask "is this a directory", so
+ * the walk uses readdir itself: a successful listing means a directory, and
+ * ENOTDIR on a file is simply how the recursion terminates. */
+function scanSampleDir(dir, depth, found) {
+    if (depth <= 0 || found.length >= SAMPLE_LIMIT) return;
+    let result;
+    try { result = os.readdir(dir); } catch (e) { return; }
+    if (!result || result[1] !== 0) return;
+
+    const subdirs = [];
+    for (const f of result[0]) {
+        if (f === '.' || f === '..') continue;
+        const full = `${dir}/${f}`;
+        if (/\.wav$/i.test(f)) {
+            if (found.length < SAMPLE_LIMIT) found.push(full);
+        } else if (f.indexOf('.') < 0) {
+            subdirs.push(full);         /* no extension — probably a directory */
         }
     }
+    /* Files first, then descend, so the shallowest samples head the list. */
+    for (const sub of subdirs) scanSampleDir(sub, depth - 1, found);
+}
+
+function listSamples() {
+    const found = [];
+    for (const dir of SAMPLE_DIRS) scanSampleDir(dir, SAMPLE_SCAN_DEPTH, found);
     return found;
 }
 

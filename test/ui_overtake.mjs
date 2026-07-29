@@ -64,9 +64,16 @@ function makeVFS() {
         failRenames(v) { renameFails = v; },
 
         readdir(path) {
+            /* A file is not a directory: the real os.readdir answers ENOTDIR,
+             * which is how the recursive sample scan terminates. Answering
+             * ENOENT instead would hide a walk that never bottoms out. */
+            if (files.has(path) || binaries.has(path)) return [[], 20];
             if (!dirs.has(path)) return [[], 2];            /* ENOENT */
             const names = ['.', '..'];                       /* real listings carry these */
-            for (const f of [...files.keys(), ...binaries.keys()]) {
+            /* Child DIRECTORIES as well as files — without them the mock
+             * cannot represent a tree, and a recursive walk has nothing to
+             * descend into, which looks exactly like a broken walk. */
+            for (const f of [...files.keys(), ...binaries.keys(), ...dirs]) {
                 if (f.startsWith(path + '/')) {
                     const rest = f.slice(path.length + 1);
                     if (!rest.includes('/') && !names.includes(rest)) names.push(rest);
@@ -1127,9 +1134,9 @@ async function testSampleBrowserIsReachableAndLoads() {
     console.log('the sample browser opens from the surface and loads a file');
     const ctx = await loadUI();
     ctx.host.init();
-    ctx.vfs.dirs.add('/data/UserData/Samples');
-    ctx.vfs.binaries.set('/data/UserData/Samples/a.wav', makeWav({ frames: 400 }));
-    ctx.vfs.binaries.set('/data/UserData/Samples/b.wav', makeWav({ frames: 800 }));
+    ctx.vfs.dirs.add('/data/UserData/UserLibrary/Samples');
+    ctx.vfs.binaries.set('/data/UserData/UserLibrary/Samples/a.wav', makeWav({ frames: 400 }));
+    ctx.vfs.binaries.set('/data/UserData/UserLibrary/Samples/b.wav', makeWav({ frames: 800 }));
 
     /* SHIFT + slot pad opens it */
     ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
@@ -1163,8 +1170,8 @@ async function testSampleBrowserClosesTheWayItOpened() {
     console.log('the browser closes with the gesture that opened it');
     const ctx = await loadUI();
     ctx.host.init();
-    ctx.vfs.dirs.add('/data/UserData/Samples');
-    ctx.vfs.binaries.set('/data/UserData/Samples/a.wav', makeWav({ frames: 400 }));
+    ctx.vfs.dirs.add('/data/UserData/UserLibrary/Samples');
+    ctx.vfs.binaries.set('/data/UserData/UserLibrary/Samples/a.wav', makeWav({ frames: 400 }));
 
     const openClose = () => {
         ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
@@ -1178,6 +1185,52 @@ async function testSampleBrowserClosesTheWayItOpened() {
     const shown = ctx.screen.map((x) => x.text).join(' ');
     check(!/SAMPLES/.test(shown),
           `the browser would not close — a user could get stuck in it`);
+}
+
+
+/* The Move keeps its library under UserLibrary, and Schwung's own resampler
+ * and skipback write into DATED SUBDIRECTORIES. A flat scan of the base
+ * directory finds nothing at all — verified against the device, where 96 WAVs
+ * live at Samples/Schwung/Skipback/<date>/. */
+async function testSampleScanFindsNestedFiles() {
+    console.log('samples in dated subdirectories are found');
+    const ctx = await loadUI();
+    ctx.host.init();
+
+    const deep = '/data/UserData/UserLibrary/Samples/Schwung/Skipback/2026-07-28';
+    for (const d of ['/data/UserData/UserLibrary/Samples',
+                     '/data/UserData/UserLibrary/Samples/Schwung',
+                     '/data/UserData/UserLibrary/Samples/Schwung/Skipback',
+                     deep,
+                     '/data/UserData/UserLibrary/Recordings']) ctx.vfs.dirs.add(d);
+    ctx.vfs.binaries.set(`${deep}/skip.wav`, makeWav({ frames: 200 }));
+    ctx.vfs.binaries.set('/data/UserData/UserLibrary/Recordings/rec.wav',
+                         makeWav({ frames: 200 }));
+
+    const found = ctx.host.listSamples();
+    check(found.includes(`${deep}/skip.wav`),
+          `the nested sample was not found; got ${JSON.stringify(found)}`);
+    check(found.includes('/data/UserData/UserLibrary/Recordings/rec.wav'),
+          `the recordings sample was not found; got ${JSON.stringify(found)}`);
+}
+
+/* A directory tree cannot be allowed to spin the walk forever, and the browser
+ * is a browser rather than an archive. */
+async function testSampleScanIsBounded() {
+    console.log('the sample scan is depth- and count-bounded');
+    const ctx = await loadUI();
+    ctx.host.init();
+    let dir = '/data/UserData/UserLibrary/Samples';
+    ctx.vfs.dirs.add(dir);
+    for (let i = 0; i < 12; i++) {
+        dir = `${dir}/level${i}`;
+        ctx.vfs.dirs.add(dir);
+        ctx.vfs.binaries.set(`${dir}/s.wav`, makeWav({ frames: 100 }));
+    }
+    const found = ctx.host.listSamples();
+    check(found.length > 0, 'the bounded scan found nothing at all');
+    check(found.length < 12,
+          `the scan descended all 12 levels (${found.length} files) — it must stop`);
 }
 
 /* ------------------------------------------------------------------ run */
@@ -1197,6 +1250,8 @@ const tests = [
     testMachineColorTableCoversEveryMachine,
     testPaletteNeverShadowsTheFunctionPads,
     testEveryMachineIsReachableFromThePalette,
+    testSampleScanFindsNestedFiles,
+    testSampleScanIsBounded,
     testSampleBrowserIsReachableAndLoads,
     testSampleBrowserClosesTheWayItOpened,
     testWavLoadRoundTrip,
