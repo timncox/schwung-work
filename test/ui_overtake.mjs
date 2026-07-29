@@ -144,6 +144,13 @@ function makeHost() {
         host_module_get_param(key) {
             roundTrips.push({ bulk: false, keys: [key] });
             reads.push(key);
+            /* work_get_param("state") appends the recorded sample path when
+             * there is one. Modelling only the PARSE side and not this one is
+             * how a save that silently drops the path still passes. */
+            if (key === 'state' && store.sample_path) {
+                const esc = `${store.sample_path}`.replace(/([\\"])/g, '\\$1');
+                return `${store.state}`.replace(/\}\s*$/, `,"smp":"${esc}"}`);
+            }
             if (key in store) return store[key];
             if (familyServed(key)) {
                 /* a member the fixture did not capture: answer the way the
@@ -224,6 +231,15 @@ function makeHost() {
             } else if (key === 'sample_clear') {
                 store.sample_frames = '0';
                 store.sample_name = '';
+                store.sample_path = '';
+            } else if (key === 'state') {
+                /* apply_state parses the recorded sample path back out of the
+                 * blob. Modelling it here is what lets a preset-load test see
+                 * what the engine would actually hand back — without it the
+                 * mock answers the fixture's stale path and a UI that
+                 * correctly reloads the audio looks like it did nothing. */
+                const m = /"smp":"((?:[^"\\]|\\.)*)"/.exec(`${val}`);
+                if (m) store.sample_path = m[1].replace(/\\(.)/g, '$1');
             }
             const fam = key.replace(/\d+/g, '#');
             const known = settable.has(key)
@@ -251,7 +267,13 @@ function makeHost() {
         console
     };
     host.globalThis = host;
-    return { host, vfs, writes, reads, roundTrips, unknownReads, unknownWrites, leds, screen, store };
+    /* What the screen reader was told. Some views draw a status the user sees
+     * and others only speak it, so a test that checks the screen alone cannot
+     * tell "nothing happened" from "it told you, elsewhere". */
+    const spoken = [];
+    host.__spoken = spoken;
+    return { host, vfs, writes, reads, roundTrips, unknownReads, unknownWrites,
+             leds, screen, store, spoken };
 }
 
 /* Stub the three schwung shared modules the UI imports. */
@@ -273,9 +295,9 @@ const STUBS = {
         export function setButtonLED(n,c,f){ globalThis.setButtonLED(n,c,f); }
     `,
     '/data/UserData/schwung/shared/screen_reader.mjs': `
-        export function announce(){}
-        export function announceParameter(){}
-        export function announceView(){}
+        export function announce(t){ globalThis.__spoken.push(String(t)); }
+        export function announceParameter(t){ globalThis.__spoken.push(String(t)); }
+        export function announceView(t){ globalThis.__spoken.push(String(t)); }
     `,
     'os': `
         export function readdir(p){ return globalThis.__vfs.readdir(p); }
@@ -845,6 +867,81 @@ async function testReaddirContractIsFaithful() {
     check(!threw && rc < 0, 'a failing rename must return -errno, not throw');
     ctx.vfs.failRenames(false);
     check(ctx.vfs.remove(`${PDIR}/nope.json`) < 0, 'removing a missing file must return -errno');
+}
+
+/* THE bug this feature exists to close: a source-machine preset restored every
+ * parameter, LFO, pattern and lock, and then played silence. The audio is not
+ * in the patch file — a few seconds of stereo does not fit a 64 KiB blob — so
+ * the patch records the PATH and the UI fetches the audio back. */
+async function testPresetRestoresItsSample() {
+    console.log('loading a preset fetches back the sample it was saved with');
+    const dir = '/data/UserData/UserLibrary/Samples';
+
+    /* --- save half: a patch with a sample must record where it came from --- */
+    const a = await loadUI();
+    a.host.init();
+    a.vfs.dirs.add(dir);
+    a.vfs.binaries.set(`${dir}/kit.wav`, makeWav({ frames: 600 }));
+    check(a.host.loadSampleFile(`${dir}/kit.wav`), 'the fixture sample did not load');
+    check(a.store.sample_path === `${dir}/kit.wav`,
+          `the engine was told the path was "${a.store.sample_path}"`);
+
+    openPresets(a);
+    a.host.onMidiMessageInternal(cc(3, 127));            /* "Save new" */
+    const file = [...a.vfs.files.keys()].find((f) => f.endsWith('.json'));
+    check(!!file, 'nothing was saved');
+    const saved = JSON.parse(a.vfs.files.get(file));
+    check(/"smp":"/.test(saved.state),
+          `the saved patch does not record its sample: ${saved.state.slice(0, 120)}`);
+
+    /* --- load half: a FRESH session holding nothing, which is what a reboot
+     * or someone else's preset actually looks like --- */
+    const b = await loadUI();
+    b.host.init();
+    b.vfs.dirs.add(dir);
+    b.vfs.binaries.set(`${dir}/kit.wav`, makeWav({ frames: 600 }));
+    b.host.host_module_set_param('sample_clear', '1');
+    b.host.host_ensure_dir(PDIR);
+    b.host.host_write_file(`${PDIR}/kitpatch.json`, JSON.stringify(saved));
+
+    openPresets(b);
+    b.writes.length = 0;
+    b.host.onMidiMessageInternal(cc(3, 127));            /* click loads index 1 */
+
+    check(b.writes.some((w) => w.key === 'state'),
+          `the click did not load a preset; writes were ${JSON.stringify(b.writes.map((w) => w.key))}`);
+    check(b.writes.some((w) => w.key === 'sample_begin'),
+          'the preset loaded but never fetched its audio back');
+    check(parseInt(b.store.sample_frames, 10) === 600,
+          `engine holds ${b.store.sample_frames} frames after the preset load`);
+}
+
+/* A preset whose file has moved must say so and leave what is loaded alone.
+ * Dropping the current sample would turn "this patch's file moved" into
+ * "everything is silent now", which is the worse of the two failures. */
+async function testPresetWithAMissingSampleIsSurvivable() {
+    console.log('a preset naming a sample that is gone reports it and keeps the old one');
+    const ctx = await loadUI();
+    ctx.host.init();
+    const dir = '/data/UserData/UserLibrary/Samples';
+    ctx.vfs.dirs.add(dir);
+    ctx.vfs.binaries.set(`${dir}/here.wav`, makeWav({ frames: 500 }));
+    check(ctx.host.loadSampleFile(`${dir}/here.wav`), 'the fixture sample did not load');
+
+    ctx.host.host_ensure_dir(PDIR);
+    ctx.host.host_write_file(`${PDIR}/gone.json`, JSON.stringify({
+        name: 'Gone',
+        state: `{"v":1,"mix":64,"smp":"${dir}/vanished.wav"}`
+    }));
+    openPresets(ctx);
+    ctx.host.onMidiMessageInternal(cc(3, 127));          /* click loads index 1 */
+    ctx.host.tick();
+
+    check(parseInt(ctx.store.sample_frames, 10) === 500,
+          'the missing file wiped the sample that was already loaded');
+    const said = ctx.spoken.join(' | ');
+    check(/Missing/i.test(said),
+          `nothing reported the missing file; it said "${said}"`);
 }
 
 async function testPresetSaveThenList() {
@@ -1590,6 +1687,8 @@ const tests = [
     testLfo3AndEnvelopePages,
     testReaddirContractIsFaithful,
     testPresetSaveThenList,
+    testPresetRestoresItsSample,
+    testPresetWithAMissingSampleIsSurvivable,
     testPresetLoadRestoresState,
     testPresetDelete,
     testPresetSurvivesRenameFailure,

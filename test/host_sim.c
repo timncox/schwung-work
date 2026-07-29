@@ -1556,6 +1556,58 @@ static void send_sample(work_t *w, const int16_t *pcm, int frames, int chunk_fra
     work_set_param(w, "sample_end", "1");
 }
 
+/* A preset that restores every parameter, LFO, pattern and lock of a source
+ * patch and then plays SILENCE reads as a broken module, not as a missing
+ * file. The blob carries the path so the UI can reload the audio. */
+static void test_state_carries_the_sample_path(void) {
+    printf("a preset remembers which sample the patch wants\n");
+    work_t *w = work_create(&host);
+
+    const char *path = "/data/UserData/UserLibrary/Samples/2026-07-29/take 3.wav";
+    work_set_param(w, "sample_path", path);
+
+    static char blob[65536];
+    work_get_param(w, "state", blob, sizeof blob);
+    CHECK(strstr(blob, "\"smp\":\"") != NULL,
+          "the state blob does not mention the sample at all");
+
+    work_t *v = work_create(&host);
+    work_set_param(v, "state", blob);
+    char got[256];
+    work_get_param(v, "sample_path", got, sizeof got);
+    CHECK(strcmp(got, path) == 0,
+          "path came back as \"%s\", sent \"%s\"", got, path);
+
+    /* A patch with no sample must not grow a key, or every FX-only preset
+     * pays for a feature it does not use. */
+    work_t *u = work_create(&host);
+    work_get_param(u, "state", blob, sizeof blob);
+    CHECK(strstr(blob, "\"smp\"") == NULL,
+          "an FX-only patch emitted a sample key");
+
+    /* Quotes and backslashes have to survive, or one badly named file makes
+     * the whole blob unparseable and takes the patch down with it. */
+    work_t *t = work_create(&host);
+    const char *odd = "/samples/a \"quoted\\name\".wav";
+    work_set_param(t, "sample_path", odd);
+    work_get_param(t, "state", blob, sizeof blob);
+    work_t *r = work_create(&host);
+    work_set_param(r, "state", blob);
+    work_get_param(r, "sample_path", got, sizeof got);
+    CHECK(strcmp(got, odd) == 0,
+          "awkward path came back as \"%s\", sent \"%s\"", got, odd);
+    /* and the rest of the blob still parses — mix is written after it */
+    work_set_param(t, "mix", "42");
+    work_get_param(t, "state", blob, sizeof blob);
+    work_t *r2 = work_create(&host);
+    work_set_param(r2, "state", blob);
+    work_get_param(r2, "mix", got, sizeof got);
+    CHECK(atoi(got) == 42, "mix survived an escaped path as %s", got);
+
+    work_destroy(w); work_destroy(v); work_destroy(u);
+    work_destroy(t); work_destroy(r); work_destroy(r2);
+}
+
 static void test_sample_transfer(void) {
     printf("a sample transfers in chunks and lands byte-exact\n");
     work_t *w = work_create(&host);
@@ -2246,6 +2298,7 @@ int main(void) {
     test_feedback_monitor();
     test_hw_input_flag();
 
+    test_state_carries_the_sample_path();
     test_sample_transfer();
     test_sample_bounds();
     test_single_player();

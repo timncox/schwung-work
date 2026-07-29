@@ -2998,6 +2998,20 @@ static void apply_state(work_t *w, const char *json) {
 
     if ((q = strstr(json, "\"mix\":")) != NULL) w->mix = (uint8_t)iclamp(atoi(q + 6), 0, 127);
 
+    /* The sample path the patch expects. The engine does NOT load it — it has
+     * no filesystem and work_set_param runs on the audio thread. It only
+     * carries the string so the UI can see, after a preset load, that the
+     * audio in memory is not the audio this patch wants, and reload it. */
+    if ((q = strstr(json, "\"smp\":\"")) != NULL) {
+        const char *c = q + 7;
+        size_t i = 0;
+        while (*c && *c != '"' && i < sizeof(w->sample_path) - 1) {
+            if (*c == '\\' && c[1]) c++;      /* unescape \" and \\ */
+            w->sample_path[i++] = *c++;
+        }
+        w->sample_path[i] = '\0';
+    }
+
     for (int s = 0; s < WORK_SLOTS; ++s) {
         char key[16];
         snprintf(key, sizeof(key), "\"m%d\":", s + 1);
@@ -3647,6 +3661,27 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
         int n = 0;
         n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
                                 "{\"v\":1,\"mix\":%d", w->mix), cap);
+        /* The sample PATH, not the audio. A source-machine patch that restored
+         * every parameter and then played silence read as a broken module, so
+         * the blob records which file the patch expects and the UI reloads it.
+         * Emitted only when set, so a patch with no sample is unchanged. */
+        if (w->sample_path[0]) {
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                    ",\"smp\":\""), cap);
+            for (const char *c = w->sample_path; *c && n < cap; ++c) {
+                /* Only \" and \\ need escaping; anything below 0x20 would make
+                 * the blob invalid JSON, and a control character in a path is
+                 * corruption rather than a name, so it is dropped. */
+                if ((unsigned char)*c < 0x20) continue;
+                if (*c == '"' || *c == '\\')
+                    n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                            "\\%c", *c), cap);
+                else
+                    n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                            "%c", *c), cap);
+            }
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "\""), cap);
+        }
         for (int s = 0; s < WORK_SLOTS; ++s) {
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
                                     ",\"m%d\":%d,\"p%d\":[", s + 1,

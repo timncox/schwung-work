@@ -141,7 +141,10 @@ int main(void) {
         {"song_len", "8"}, {"song_row2", "5:3:0"}, {"trigtype4", "1"},
         {"transform", "reverse"}, {"quantize", "127"}, {"monitor", "0"}, {"hw_input", "1"},
         {"step5", "1:2:3:1"}, {"locks5", "1=64"}, {"lock5_2", "31"},
-        {"state", "{\"v\":1,\"mix\":64}"}
+        {"state", "{\"v\":1,\"mix\":64}"},
+        /* The path a preset records so the UI can reload the audio. The
+         * transfer keys below are write-only and live in `commands`. */
+        {"sample_path", "/data/UserData/UserLibrary/Samples/probe.wav"}
     };
     int sfirst = 1;
     for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); ++i) {
@@ -153,7 +156,9 @@ int main(void) {
      * cannot see them. They are still legal writes — list them separately
      * rather than letting the harness flag them as unknown keys. */
     printf("\n  ],\n  \"commands\": [\"seq_clear\", \"undo\", \"redo\", "
-           "\"memorize\", \"recall\", \"transform\", \"quantize\"]\n}\n");
+           "\"memorize\", \"recall\", \"transform\", \"quantize\", "
+           "\"sample_begin\", \"sample_chunk\", \"sample_end\", "
+           "\"sample_clear\"]\n}\n");
 
     work_destroy(w);
     return 0;

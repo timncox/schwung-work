@@ -248,6 +248,7 @@ let sampleIndex = 0;
 let sampleLoaded = '';       /* name the ENGINE reports holding              */
 let sampleFrames = 0;
 let sampleStatus = '';       /* last transfer result, shown on screen        */
+let samplePath   = '';       /* file the ENGINE says this patch wants        */
 
 let presetMode  = false;
 let presetIndex = 0;         /* 0 = "Save new", 1..n = a stored preset      */
@@ -711,9 +712,13 @@ function sendSample(name, wav, maxFrames) {
 function refreshSampleState() {
     sampleFrames = parseInt(getParam('sample_frames'), 10) || 0;
     sampleLoaded = sampleFrames > 0 ? getParam('sample_name') : '';
+    samplePath   = getParam('sample_path') || '';
 }
 
-function loadSampleFile(path) {
+/* `quiet` is set when a PRESET is doing the loading rather than the user. The
+ * browser is not open then, so painting it would overwrite whatever view the
+ * preset landed on, and closing it on success would be closing nothing. */
+function loadSampleFile(path, quiet) {
     const name = path.slice(path.lastIndexOf('/') + 1).replace(/\.wav$/i, '');
 
     /* Every failure below sets a status the SCREEN shows. announce() alone
@@ -721,8 +726,7 @@ function loadSampleFile(path) {
      * successful one looked exactly the same: nothing happened. */
     sampleStatus = `Reading ${name}...`;
     needsRedraw = true;
-    drawSampleBrowser();
-    flushDisplay();
+    if (!quiet) { drawSampleBrowser(); flushDisplay(); }
 
     const b64 = typeof host_read_file_base64 === 'function'
         ? host_read_file_base64(path) : null;
@@ -747,11 +751,18 @@ function loadSampleFile(path) {
         announce(sampleStatus); needsRedraw = true; return false;
     }
 
+    /* Record WHERE it came from, so saving this patch saves a patch that can
+     * find its audio again. The engine only carries the string — it has no
+     * filesystem, and work_set_param runs on the audio thread. */
+    host_module_set_param('sample_path', path);
+    samplePath = path;
+
     const secs = (sampleFrames / 44100).toFixed(1);
     sampleStatus = sent < wav.frames
         ? `Loaded ${name}, cut to ${secs}s`
         : `Loaded ${name}, ${secs}s`;
     announce(sampleStatus);
+    if (quiet) return true;
 
     /* Close on success. Leaving the browser open after a load left every pad
      * inert with no sign why — you had picked your sample and the surface
@@ -1151,8 +1162,36 @@ function loadPreset(entry) {
 
     host_module_set_param('state', payload.state);
     fetchAll();
+    restoreSample();
     announce(`Loaded ${entry.name}`);
     needsRedraw = true;
+}
+
+/* Bring back the audio a just-loaded preset expects.
+ *
+ * A preset stores the sample PATH, never the samples — a few seconds of stereo
+ * audio does not belong in a patch file, and the blob crosses a 64 KiB channel.
+ * So a source-machine preset restored every parameter, LFO, pattern and lock
+ * and then played silence, which reads as a broken module rather than as a
+ * patch whose audio has not been fetched yet.
+ *
+ * A missing file is reported and nothing else: the previous sample stays
+ * loaded, because dropping it would turn "this preset's file moved" into
+ * "everything is silent now". */
+function restoreSample() {
+    const want = getParam('sample_path') || '';
+    if (!want) { samplePath = ''; return; }
+    /* Ask what the ENGINE is holding rather than trusting our own mirror. The
+     * path alone is not enough: clear the sample and load a preset naming that
+     * same file and the mirror still says we have it, so nothing reloads and
+     * the patch plays silence — the exact bug this function exists to fix. */
+    const held = parseInt(getParam('sample_frames'), 10) || 0;
+    if (want === samplePath && held > 0) return;
+    if (!loadSampleFile(want, true)) {
+        const file = want.slice(want.lastIndexOf('/') + 1);
+        sampleStatus = `Missing ${file}`;
+        announce(sampleStatus);
+    }
 }
 
 function deletePreset(entry) {
