@@ -2783,6 +2783,27 @@ static void cc_apply(work_t *w, int cc, int v) {
     if (cc == 66) { work_set_param(w, "live_rec", v >= 64 ? "1" : "0"); return; }
 }
 
+/* Which note-ons may fire a voice.
+ *
+ * Move's SURFACE sends control presses as notes, not just its pads:
+ *   notes 0-9    capacitive knob touch
+ *   notes 16-31  the sixteen step buttons
+ *   notes 68-99  the pad grid
+ * Pressing a step button therefore FIRED THE SAMPLE instead of placing a trig
+ * — reported from hardware, and the same wrong assumption that put the UI's
+ * step handler in the CC branch where nothing ever reached it.
+ *
+ * Filtering on note NUMBER would be wrong: an external keyboard sends the
+ * whole range, and note 60 is the sampler's own unity pitch. So the rule is by
+ * SOURCE, matching how CCs are already handled — anything external plays,
+ * while Move's own surface only plays from the PAD range. That keeps the chain
+ * build's pads playing the sample and stops the step buttons doing it. */
+static int note_may_trigger(int note, int source) {
+    if (source == MOVE_MIDI_SOURCE_EXTERNAL ||
+        source == MOVE_MIDI_SOURCE_FX_BROADCAST) return 1;
+    return note >= 68 && note <= 99;
+}
+
 void work_on_midi(work_t *w, const uint8_t *msg, int len, int source) {
     if (!w || !msg || len < 1) return;
 
@@ -2827,7 +2848,8 @@ void work_on_midi(work_t *w, const uint8_t *msg, int len, int source) {
                 }
                 break;
             }
-            if (len >= 3 && (msg[0] & 0xF0) == 0x90 && msg[2] > 0) {
+            if (len >= 3 && (msg[0] & 0xF0) == 0x90 && msg[2] > 0 &&
+                note_may_trigger(msg[1], source)) {
                 /* Remember the note so a polyphonic SRC machine can pitch its
                  * voice by it. 60 is unity, matching the sampler convention. */
                 w->note_pending = 1;

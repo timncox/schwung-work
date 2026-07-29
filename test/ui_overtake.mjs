@@ -298,6 +298,14 @@ async function loadUI() {
 
 /* MIDI helpers matching what the shim delivers */
 const cc   = (num, val) => [0xB0, num, val];
+/* Move's step buttons are NOTES 16-31, not CCs. The harness sent them as CCs,
+ * which is why every step-related check passed while the sequencer could not
+ * be played on hardware at all — the mock encoded my assumption instead of the
+ * device's contract. Confirmed from the device log: status=144 d1=20 d2=127.
+ * schwung's hardware notes: "Pads notes 68-99. Steps notes 16-31." */
+const step     = (n, val) => [0x90, 16 + n, val];
+const stepDown = (n) => step(n, 127);
+const stepUp   = (n) => step(n, 0);
 const noteOn  = (n) => [0x90, n, 127];
 const noteOff = (n) => [0x80, n, 0];
 
@@ -325,7 +333,7 @@ async function testHoldStepPlusKnobLocks() {
     ctx.host.init();
     ctx.writes.length = 0;
 
-    ctx.host.onMidiMessageInternal(cc(STEP1 + 2, 127));   /* hold step 3 */
+    ctx.host.onMidiMessageInternal(stepDown(2));   /* hold step 3 */
     ctx.host.onMidiMessageInternal(cc(KNOB1, 1));         /* knob 1, +1  */
 
     const lockWrites = ctx.writes.filter((w) => /^lock\d+_\d+$/.test(w.key));
@@ -341,7 +349,7 @@ async function testHoldStepPlusKnobLocks() {
 
     /* releasing after a lock must NOT also toggle the trig off */
     ctx.writes.length = 0;
-    ctx.host.onMidiMessageInternal(cc(STEP1 + 2, 0));
+    ctx.host.onMidiMessageInternal(stepUp(2));
     const stepWrites = ctx.writes.filter((w) => /^step\d+$/.test(w.key));
     check(stepWrites.length === 0,
           `release after locking should not rewrite the step, got ${JSON.stringify(stepWrites)}`);
@@ -356,7 +364,7 @@ async function testLockNudgeStartsFromLock() {
 
     /* step 4 (index 3) has lock 0 = 100 in the fixture; base fx1_p1 is 76 */
     ctx.writes.length = 0;
-    ctx.host.onMidiMessageInternal(cc(STEP1 + 3, 127));
+    ctx.host.onMidiMessageInternal(stepDown(3));
     ctx.host.onMidiMessageInternal(cc(KNOB1, 1));
 
     const w = ctx.writes.find((x) => x.key === 'lock3_0');
@@ -373,8 +381,8 @@ async function testPlainTapTogglesTrig() {
     ctx.host.init();
     ctx.writes.length = 0;
 
-    ctx.host.onMidiMessageInternal(cc(STEP1 + 5, 127));
-    ctx.host.onMidiMessageInternal(cc(STEP1 + 5, 0));
+    ctx.host.onMidiMessageInternal(stepDown(5));
+    ctx.host.onMidiMessageInternal(stepUp(5));
 
     const stepWrites = ctx.writes.filter((w) => /^step\d+$/.test(w.key));
     check(stepWrites.length === 1, `expected one step write, got ${stepWrites.length}`);
@@ -391,7 +399,7 @@ async function testShiftEscapesTheLockGesture() {
     ctx.host.init();
     ctx.writes.length = 0;
 
-    ctx.host.onMidiMessageInternal(cc(STEP1 + 2, 127));
+    ctx.host.onMidiMessageInternal(stepDown(2));
     ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
     ctx.host.onMidiMessageInternal(cc(KNOB1, 1));
 
@@ -455,7 +463,7 @@ async function testJogSetsLengthAndStepAttrs() {
     ctx.host.onMidiMessageInternal(noteOn(72));
     ctx.host.onMidiMessageInternal(noteOff(72));
     ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
-    ctx.host.onMidiMessageInternal(cc(STEP1 + 1, 127));
+    ctx.host.onMidiMessageInternal(stepDown(1));
     ctx.host.onMidiMessageInternal(cc(JOG, 1));
 
     const stepWrite = ctx.writes.find((w) => w.key === 'step1');
@@ -561,7 +569,7 @@ async function testProbabilityMode() {
     ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
 
     ctx.writes.length = 0;
-    ctx.host.onMidiMessageInternal(cc(STEP1 + 4, 127));   /* hold step 5 */
+    ctx.host.onMidiMessageInternal(stepDown(4));   /* hold step 5 */
     ctx.host.onMidiMessageInternal(cc(JOG, 127));          /* jog down    */
     const w = ctx.writes.find((x) => x.key === 'prob4');
     check(!!w, `jog in probability mode did not write prob4; got ${JSON.stringify(ctx.writes)}`);
@@ -1456,10 +1464,40 @@ async function testRealInputStillWorksThroughTheFilter() {
     check(ctx.writes.length > 0, 'the filter swallowed a real pad press');
 }
 
+
+/* Move's step buttons are NOTES 16-31. This handler lived in the CC branch,
+ * so on hardware nothing reached it: the sequencer could not be played from
+ * the surface at all, and the note fell through to the engine which fired the
+ * sample. Every step check passed because the harness sent CCs too. */
+async function testStepsArriveAsNotes() {
+    console.log('step buttons work as notes, the way the hardware sends them');
+    const ctx = await loadUI();
+    ctx.host.init();
+
+    /* the exact message the device logs: status=144 d1=20 d2=127 */
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal([0x90, 20, 127]);
+    ctx.host.onMidiMessageInternal([0x90, 20, 0]);
+    const toggled = ctx.writes.find((w) => /^step\d+$/.test(w.key));
+    check(!!toggled, `a step note toggled no trig; wrote ${JSON.stringify(ctx.writes)}`);
+    check(toggled && toggled.key === 'step4',
+          `note 20 toggled ${toggled && toggled.key}, expected step4 (20 - 16)`);
+
+    /* and the p-lock gesture, which is the whole point of the module */
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal([0x90, 16, 127]);      /* hold step 1 */
+    ctx.host.onMidiMessageInternal(cc(KNOB1, 3));         /* turn a knob  */
+    ctx.host.onMidiMessageInternal([0x90, 16, 0]);        /* release      */
+    const locked = ctx.writes.find((w) => /^lock\d+_\d+$/.test(w.key));
+    check(!!locked,
+          `hold-step + knob wrote no lock; got ${JSON.stringify(ctx.writes)}`);
+}
+
 /* ------------------------------------------------------------------ run */
 
 const tests = [
     testInitReadsOnlyServedKeys,
+    testStepsArriveAsNotes,
     testHoldStepPlusKnobLocks,
     testLockNudgeStartsFromLock,
     testPlainTapTogglesTrig,

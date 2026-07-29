@@ -2065,6 +2065,69 @@ static void test_source_machine_ignores_the_input(void) {
     work_destroy(w);
 }
 
+
+/* Reported from hardware: "when I hit step button it triggers the sample".
+ * Move's surface sends step buttons as NOTES 16-31, and any note-on fired a
+ * voice — so the sequencer's own keys played the sound instead of editing the
+ * pattern. Filtering on note NUMBER would break an external keyboard, whose
+ * range includes 60, the sampler's unity pitch. The rule is by SOURCE. */
+static void test_surface_control_notes_do_not_fire_voices(void) {
+    printf("Move's step buttons do not trigger the sample; a keyboard does\n");
+    work_t *w = work_create(&host);
+
+    const int frames = 4000;
+    static int16_t pcm[4000 * 2];
+    make_ramp(pcm, frames);
+    send_sample(w, pcm, frames, 800);
+    work_set_param(w, "machine1", "21");
+    work_set_param(w, "machine2", "0");
+    work_set_param(w, "mix", "127");
+    work_set_param(w, "fx1_p7", "127");
+
+    int16_t in[BLOCK * 2] = {0}, out[BLOCK * 2];
+
+    /* A step button: note 20, from Move's own surface. */
+    uint8_t step[3] = { 0x90, 20, 127 };
+    work_on_midi(w, step, 3, MOVE_MIDI_SOURCE_INTERNAL);
+    int64_t fired = 0;
+    for (int b = 0; b < 8; ++b) {
+        work_process(w, in, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) fired += llabs(out[i]);
+    }
+    CHECK(fired == 0, "a step button fired the sample (energy %lld)",
+          (long long)fired);
+
+    /* Move's PADS are playable, so an internal pad note must still fire. */
+    uint8_t pad[3] = { 0x90, 72, 100 };
+    work_on_midi(w, pad, 3, MOVE_MIDI_SOURCE_INTERNAL);
+    int64_t padded = 0;
+    for (int b = 0; b < 8; ++b) {
+        work_process(w, in, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) padded += llabs(out[i]);
+    }
+    CHECK(padded > 0, "a pad note did not fire the sample");
+
+    /* And an EXTERNAL keyboard must reach the whole range, including the low
+     * notes that overlap Move's control numbers. */
+    work_destroy(w);
+    w = work_create(&host);
+    send_sample(w, pcm, frames, 800);
+    work_set_param(w, "machine1", "21");
+    work_set_param(w, "machine2", "0");
+    work_set_param(w, "mix", "127");
+    work_set_param(w, "fx1_p7", "127");
+    uint8_t low[3] = { 0x90, 36, 100 };
+    work_on_midi(w, low, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+    int64_t ext = 0;
+    for (int b = 0; b < 8; ++b) {
+        work_process(w, in, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) ext += llabs(out[i]);
+    }
+    CHECK(ext > 0, "an external keyboard note below 68 was ignored");
+
+    work_destroy(w);
+}
+
 int main(void) {
     printf("Work engine — host simulator\n\n");
 
@@ -2129,6 +2192,8 @@ int main(void) {
     test_shape_shelves();
 
     test_source_machine_ignores_the_input();
+
+    test_surface_control_notes_do_not_fire_voices();
 
     printf("\n%d checks, %d failed\n", tests_run, tests_failed);
     return tests_failed ? 1 : 0;

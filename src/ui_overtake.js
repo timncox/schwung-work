@@ -63,7 +63,15 @@ const PRESET_DIR = '/data/UserData/schwung/presets/overwork';
 
 /* ------------------------------------------------------------- constants */
 
-const STEP_FIRST = 16;          /* step buttons are CC 16-31 */
+/* Move's step buttons are NOTES 16-31, not CCs — schwung's hardware notes say
+ * so ("Pads notes 68-99. Steps notes 16-31.") and the device confirms it:
+ *   status=144 d1=20 d2=127
+ * This handler lived in the CC branch, so nothing ever reached it and the
+ * sequencer could not be played from the surface at all. Worse, the note fell
+ * through to the engine, which fired the sample — pressing a step TRIGGERED
+ * THE SOUND instead of placing a trig. The harness encoded the same wrong
+ * assumption, which is why every UI check passed against it. */
+const STEP_FIRST = 16;          /* step buttons are NOTES 16-31 */
 const STEP_COUNT = 16;
 const PAGE_STEPS = 16;
 const MAX_STEPS  = 64;
@@ -1475,6 +1483,35 @@ function handlePadRelease(note) {
     }
 }
 
+
+/* Step buttons. Press latches the hold; release either commits the hold's
+ * edits or, if nothing happened, toggles the trig. Notes, not CCs — see
+ * STEP_FIRST. */
+function handleStepNote(note, velocity) {
+    /* SHIFT + a step selects that pattern from the bank. */
+    if (shiftHeld && velocity > 0) {
+        const p = note - STEP_FIRST;
+        host_module_set_param('pattern', `${p}`);
+        curPattern = p;
+        fetchAll();
+        announceView(`Pattern ${p + 1}`);
+        return;
+    }
+    const idx = patPage * PAGE_STEPS + (note - STEP_FIRST);
+    if (velocity > 0) {
+        heldStep = idx;
+        heldUsed = false;
+        const st = steps[idx];
+        announce(`Step ${idx + 1}${st.active ? '' : ' empty'}${st.nlocks ? `, ${st.nlocks} locks` : ''}`);
+        needsRedraw = true;
+    } else if (heldStep === idx) {
+        if (!heldUsed) toggleStep(idx);
+        heldStep = -1;
+        heldUsed = false;
+        needsRedraw = true;
+    }
+}
+
 function onMidiMessageInternal(data) {
     /* Drop what is not ours before touching any state.
      *
@@ -1503,34 +1540,6 @@ function onMidiMessageInternal(data) {
         if (d1 === MoveShift) {
             shiftHeld = d2 >= 64;
             paintTransport(false);      /* row 4 swaps to the mode layer */
-            return;
-        }
-
-        /* Step buttons arrive as CC. Press latches the hold; release either
-         * commits the hold's edits or, if nothing happened, toggles the trig. */
-        if (d1 >= STEP_FIRST && d1 < STEP_FIRST + STEP_COUNT) {
-            /* SHIFT + a step selects that pattern from the bank. */
-            if (shiftHeld && d2 >= 64) {
-                const p = d1 - STEP_FIRST;
-                host_module_set_param('pattern', `${p}`);
-                curPattern = p;
-                fetchAll();
-                announceView(`Pattern ${p + 1}`);
-                return;
-            }
-            const idx = patPage * PAGE_STEPS + (d1 - STEP_FIRST);
-            if (d2 >= 64) {
-                heldStep = idx;
-                heldUsed = false;
-                const st = steps[idx];
-                announce(`Step ${idx + 1}${st.active ? '' : ' empty'}${st.nlocks ? `, ${st.nlocks} locks` : ''}`);
-                needsRedraw = true;
-            } else if (heldStep === idx) {
-                if (!heldUsed) toggleStep(idx);
-                heldStep = -1;
-                heldUsed = false;
-                needsRedraw = true;
-            }
             return;
         }
 
@@ -1628,6 +1637,13 @@ function onMidiMessageInternal(data) {
         return;
     }
 
+    /* Steps come first: they share the note channel with the pads and sit
+     * below them (16-31 against 68-99). */
+    if (d1 >= STEP_FIRST && d1 < STEP_FIRST + STEP_COUNT) {
+        if (status === 0x90) { handleStepNote(d1, d2); return; }
+        if (status === 0x80) { handleStepNote(d1, 0); return; }
+        return;
+    }
     if (status === 0x90 && d2 > 0) { handlePadPress(d1); return; }
     if (status === 0x80 || (status === 0x90 && d2 === 0)) { handlePadRelease(d1); return; }
 }
