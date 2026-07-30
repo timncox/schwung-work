@@ -321,6 +321,9 @@ typedef struct {
      * of either loads sounding exactly as it did. */
     uint8_t              level;        /* 0..127, 127 = unity   */
     uint8_t              pan;          /* 0..127, 64 = centre   */
+    float                lgain, rgain; /* resolved once per block from those   */
+
+    uint8_t              src_trig_pending;  /* this track's trig wants a voice */
 
     /* Effective values, recomputed per block as
      *   base (cfg) -> parameter locks from the current step -> FX LFOs
@@ -450,8 +453,6 @@ struct work {
      * failure this exists to prevent: the preset would load, sound wrong, and
      * say nothing. Empty when the blob needed no translation. */
     char                 load_note[64];
-
-    uint8_t              src_trig_pending;  /* a trig wants a voice started */
 
     /* transport */
     float                bpm;
@@ -636,10 +637,16 @@ static float step_frames(const work_t *w) {
 /* Every machine has the same shape: it reads L/R, writes L/R, and may use the
  * slot's buffers. `p` is the post-LFO effective parameter array. */
 typedef struct {
-    work_t      *w;
-    work_slot_t *s;
+    work_t        *w;
+    /* The track this stage belongs to. Explicit, because the render path walks
+     * EVERY track while the parameter path addresses the SELECTED one: a
+     * machine reaching for TRK(w) would read whichever track the UI happens to
+     * be pointed at, and eight tracks would quietly share track 0's sample and
+     * voice filter. */
+    work_track_t  *tr;
+    work_slot_t   *s;
     const uint8_t *p;
-    int          frames;
+    int            frames;
 } mctx_t;
 
 /* --- helper shared by the three reverbs -------------------------------------
@@ -1750,9 +1757,8 @@ static void m_grainer(mctx_t *m, float *l, float *r) {
     s->dl[s->dw * 2]     = *l;
     s->dl[s->dw * 2 + 1] = *r;
 
-    work_t     *w      = m->w;
-    const int   frames = TRK(w)->sample_frames;
-    const int   from_sample = (frames > 4 && TRK(w)->sample != NULL);
+    const int   frames = m->tr->sample_frames;
+    const int   from_sample = (frames > 4 && m->tr->sample != NULL);
 
     float rate  = powf(2.0f, pbi(p[0]) * 2.0f);                  /* TUNE +/-2 oct */
     float size  = fclampf(0.01f + p01(p[2]) * 1.2f, 0.01f, 1.4f) * (float)WORK_SR;
@@ -1825,10 +1831,10 @@ static void m_grainer(mctx_t *m, float *l, float *r) {
             if (i0 < 0) i0 = 0;
             if (i0 >= frames - 1) i0 = frames - 2;
             float fr = scaled - (float)i0;
-            const float a0 = TRK(w)->sample[i0 * 2]           / 32768.0f;
-            const float a1 = TRK(w)->sample[(i0 + 1) * 2]     / 32768.0f;
-            const float b0 = TRK(w)->sample[i0 * 2 + 1]       / 32768.0f;
-            const float b1 = TRK(w)->sample[(i0 + 1) * 2 + 1] / 32768.0f;
+            const float a0 = m->tr->sample[i0 * 2]           / 32768.0f;
+            const float a1 = m->tr->sample[(i0 + 1) * 2]     / 32768.0f;
+            const float b0 = m->tr->sample[i0 * 2 + 1]       / 32768.0f;
+            const float b1 = m->tr->sample[(i0 + 1) * 2 + 1] / 32768.0f;
             wl += (a0 + (a1 - a0) * fr) * win * s->grain[g].gl;
             wr += (b0 + (b1 - b0) * fr) * win * s->grain[g].gr;
         } else {
@@ -1957,16 +1963,16 @@ static int machine_is_source(int machine);
 
 /* Refresh every voice filter's coefficients for this block. Called once per
  * work_process, never from the per-sample loop. */
-static void vfilt_prepare(work_t *w, int frames) {
-    const int on = vfilt_active(&TRK(w)->eff_vfilt);
+static void vfilt_prepare(work_track_t *tr, int frames) {
+    const int on = vfilt_active(&tr->eff_vfilt);
     for (int i = 0; i < WORK_STAGES; ++i) {
-        work_slot_t *s = &TRK(w)->slot[i];
-        s->vf_on = on && machine_is_source(TRK(w)->eff_machine[i]);
+        work_slot_t *s = &tr->slot[i];
+        s->vf_on = on && machine_is_source(tr->eff_machine[i]);
         if (!s->vf_on) continue;
-        vfilt_block(&TRK(w)->eff_vfilt, &s->sp_filt, s->sp_note, frames, &s->sp_hp, &s->sp_lp);
+        vfilt_block(&tr->eff_vfilt, &s->sp_filt, s->sp_note, frames, &s->sp_hp, &s->sp_lp);
         for (int v = 0; v < WORK_VOICES; ++v) {
             if (s->voice[v].stage == 0) continue;
-            vfilt_block(&TRK(w)->eff_vfilt, &s->voice[v].filt, s->voice[v].note, frames,
+            vfilt_block(&tr->eff_vfilt, &s->voice[v].filt, s->voice[v].note, frames,
                         &s->v_hp[v], &s->v_lp[v]);
         }
     }
@@ -1996,17 +2002,19 @@ static work_voice_t *voice_alloc(work_slot_t *s) {
 /* Read the sample at a fractional frame, clamped. Every SRC machine goes
  * through this: the cursor is never trusted against sample_frames, because a
  * transfer can shorten the sample between blocks. */
-static void sample_read(const work_t *w, double pos, float *l, float *r) {
-    const int frames = TRK(w)->sample_frames;
-    if (frames < 2 || !TRK(w)->sample) { *l = 0.0f; *r = 0.0f; return; }
+/* Reads THIS TRACK's sample. The buffer belongs to the track, not the engine —
+ * eight tracks each load their own audio. */
+static void sample_read(const work_track_t *tr, double pos, float *l, float *r) {
+    const int frames = tr->sample_frames;
+    if (frames < 2 || !tr->sample) { *l = 0.0f; *r = 0.0f; return; }
     int i0 = (int)pos;
     if (i0 < 0) i0 = 0;
     if (i0 > frames - 2) i0 = frames - 2;
     const float fr = (float)(pos - (double)i0);
-    const float a0 = TRK(w)->sample[i0 * 2]           / 32768.0f;
-    const float a1 = TRK(w)->sample[(i0 + 1) * 2]     / 32768.0f;
-    const float b0 = TRK(w)->sample[i0 * 2 + 1]       / 32768.0f;
-    const float b1 = TRK(w)->sample[(i0 + 1) * 2 + 1] / 32768.0f;
+    const float a0 = tr->sample[i0 * 2]           / 32768.0f;
+    const float a1 = tr->sample[(i0 + 1) * 2]     / 32768.0f;
+    const float b0 = tr->sample[i0 * 2 + 1]       / 32768.0f;
+    const float b1 = tr->sample[(i0 + 1) * 2 + 1] / 32768.0f;
     *l = a0 + (a1 - a0) * fr;
     *r = b0 + (b1 - b0) * fr;
 }
@@ -2035,11 +2043,10 @@ static void pan_gains(uint8_t p, float *gl, float *gr) {
  */
 static void m_multi(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
-    work_t      *w = m->w;
     const uint8_t *p = m->p;
 
-    const int frames = TRK(w)->sample_frames;
-    if (frames < 2 || !TRK(w)->sample) { *l = 0.0f; *r = 0.0f; return; }
+    const int frames = m->tr->sample_frames;
+    if (frames < 2 || !m->tr->sample) { *l = 0.0f; *r = 0.0f; return; }
 
     int start = (int)((double)p[4] / 127.0 * (frames - 1));
     int len   = (int)((double)p[5] / 127.0 * (frames - start));
@@ -2066,7 +2073,7 @@ static void m_multi(mctx_t *m, float *l, float *r) {
         const float vib = sinf(v->vib_ph * 6.28318531f) * vdep * v->vib_fade;
 
         float sl, sr;
-        sample_read(w, v->pos, &sl, &sr);
+        sample_read(m->tr, v->pos, &sl, &sr);
         if (s->vf_on) vfilt_run(&v->filt, &s->v_hp[i], &s->v_lp[i], &sl, &sr);
         ol += sl * v->env * v->gain;
         orr += sr * v->env * v->gain;
@@ -2108,11 +2115,10 @@ enum { SUB_FWD = 0, SUB_REV, SUB_FWD_LOOP, SUB_REV_LOOP };
 
 static void m_subtracks(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
-    work_t      *w = m->w;
     const uint8_t *p = m->p;
 
-    const int frames = TRK(w)->sample_frames;
-    if (frames < 2 || !TRK(w)->sample) { *l = 0.0f; *r = 0.0f; return; }
+    const int frames = m->tr->sample_frames;
+    if (frames < 2 || !m->tr->sample) { *l = 0.0f; *r = 0.0f; return; }
 
     const int mode = iclamp((int)p[1] * 4 / 128, 0, 3);
 
@@ -2137,7 +2143,7 @@ static void m_subtracks(mctx_t *m, float *l, float *r) {
         if (v->stage == 0) continue;
 
         float sl, sr;
-        sample_read(w, v->pos, &sl, &sr);
+        sample_read(m->tr, v->pos, &sl, &sr);
         if (s->vf_on) vfilt_run(&v->filt, &s->v_hp[i], &s->v_lp[i], &sl, &sr);
         ol += sl * v->env * v->gain;
         orr += sr * v->env * v->gain;
@@ -2208,11 +2214,10 @@ static float wf_anim_shape(int shape, float t, float *sh, uint32_t *rng) {
 
 static void m_wavefinder(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
-    work_t      *w = m->w;
     const uint8_t *p = m->p;
 
-    const int frames = TRK(w)->sample_frames;
-    if (frames < WF_WAVE * 2 || !TRK(w)->sample) { *l = 0.0f; *r = 0.0f; return; }
+    const int frames = m->tr->sample_frames;
+    if (frames < WF_WAVE * 2 || !m->tr->sample) { *l = 0.0f; *r = 0.0f; return; }
 
     const int waves = frames / WF_WAVE;
     const float tune = powf(2.0f, ((float)p[0] - 64.0f) / 32.0f);
@@ -2249,8 +2254,8 @@ static void m_wavefinder(mctx_t *m, float *l, float *r) {
         while (s->wf_ph[o] >= (double)WF_WAVE) s->wf_ph[o] -= (double)WF_WAVE;
 
         float al, ar, bl, br;
-        sample_read(w, (double)(w0 * WF_WAVE) + s->wf_ph[o], &al, &ar);
-        sample_read(w, (double)((w0 + 1) * WF_WAVE) + s->wf_ph[o], &bl, &br);
+        sample_read(m->tr, (double)(w0 * WF_WAVE) + s->wf_ph[o], &al, &ar);
+        sample_read(m->tr, (double)((w0 + 1) * WF_WAVE) + s->wf_ph[o], &bl, &br);
 
         const float vl = al + (bl - al) * wfr;
         const float vr = ar + (br - ar) * wfr;
@@ -2387,10 +2392,9 @@ static void m_shape(mctx_t *m, float *l, float *r) {
  * running concurrently only ever moves sample_fill, which this never reads. */
 static void m_single(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
-    work_t      *w = m->w;
 
-    const int frames = TRK(w)->sample_frames;
-    if (frames <= 0 || !TRK(w)->sample) { *l = 0.0f; *r = 0.0f; return; }
+    const int frames = m->tr->sample_frames;
+    if (frames <= 0 || !m->tr->sample) { *l = 0.0f; *r = 0.0f; return; }
 
     /* window into the sample */
     int start = (int)((double)m->p[1] / 127.0 * (frames - 1));
@@ -2426,10 +2430,10 @@ static void m_single(mctx_t *m, float *l, float *r) {
     if (i0 >= frames) i0 = frames - 1;
     if (i1 >= frames) i1 = frames - 1;
 
-    const float a_l = TRK(w)->sample[i0 * 2]     / 32768.0f;
-    const float a_r = TRK(w)->sample[i0 * 2 + 1] / 32768.0f;
-    const float b_l = TRK(w)->sample[i1 * 2]     / 32768.0f;
-    const float b_r = TRK(w)->sample[i1 * 2 + 1] / 32768.0f;
+    const float a_l = m->tr->sample[i0 * 2]     / 32768.0f;
+    const float a_r = m->tr->sample[i0 * 2 + 1] / 32768.0f;
+    const float b_l = m->tr->sample[i1 * 2]     / 32768.0f;
+    const float b_r = m->tr->sample[i1 * 2 + 1] / 32768.0f;
 
     float ol = a_l + (b_l - a_l) * fr;
     float orr = a_r + (b_r - a_r) * fr;
@@ -2583,8 +2587,8 @@ static void song_advance(work_t *w) {
  * trig starts, not to the next one. "Each firing trig is a complete snapshot"
  * is the documented rule; this is what makes it true of the voice as well as
  * the parameters. */
-static void work_src_trigger(work_t *w, int note, int vel) {
-    const int frames = TRK(w)->sample_frames;
+static void work_src_trigger(work_track_t *tr, int note, int vel) {
+    const int frames = tr->sample_frames;
     if (frames <= 0) return;
 
     /* 60 is unity, the sampler convention: a C3 trig plays at the recorded
@@ -2594,10 +2598,10 @@ static void work_src_trigger(work_t *w, int note, int vel) {
     const float gain  = vel > 0 ? (float)vel / 127.0f : 1.0f;
 
     for (int i = 0; i < WORK_STAGES; ++i) {
-        work_slot_t *s = &TRK(w)->slot[i];
-        switch (TRK(w)->eff_machine[i]) {
+        work_slot_t *s = &tr->slot[i];
+        switch (tr->eff_machine[i]) {
         case WORK_FX_ONESHOT: {
-            int start = (int)((double)TRK(w)->eff[i][1] / 127.0 * (frames - 1));
+            int start = (int)((double)tr->eff[i][1] / 127.0 * (frames - 1));
             s->sp_pos   = start;
             s->sp_env   = 0.0f;
             s->sp_stage = 1;
@@ -2606,7 +2610,7 @@ static void work_src_trigger(work_t *w, int note, int vel) {
             break;
         }
         case WORK_FX_POLYSAMPLE: {
-            int start = (int)((double)TRK(w)->eff[i][4] / 127.0 * (frames - 1));
+            int start = (int)((double)tr->eff[i][4] / 127.0 * (frames - 1));
             work_voice_t *v = voice_alloc(s);
             v->pos = start; v->env = 0.0f; v->stage = 1;
             v->rate = pitch; v->gain = gain; v->dir = 1;
@@ -2615,9 +2619,9 @@ static void work_src_trigger(work_t *w, int note, int vel) {
             break;
         }
         case WORK_FX_SLICER: {
-            const int mode = iclamp((int)TRK(w)->eff[i][1] * 4 / 128, 0, 3);
-            int start = (int)((double)TRK(w)->eff[i][2] / 127.0 * (frames - 1));
-            int len   = (int)((double)TRK(w)->eff[i][3] / 127.0 * (frames - start));
+            const int mode = iclamp((int)tr->eff[i][1] * 4 / 128, 0, 3);
+            int start = (int)((double)tr->eff[i][2] / 127.0 * (frames - 1));
+            int len   = (int)((double)tr->eff[i][3] / 127.0 * (frames - start));
             if (len < 2) len = 2;
             if (start + len > frames) len = frames - start;
             work_voice_t *v = voice_alloc(s);
@@ -2702,7 +2706,7 @@ static void seq_run(work_t *w, int frames) {
          * loading one, and every step that carries a MACHINE LOCK. The second
          * is the one that matters: locking a machine onto a step is meant to
          * make that step sound like the new machine, not to make it silent. */
-        w->src_trig_pending = 1;
+        TRK(w)->src_trig_pending = 1;
     }
 }
 
@@ -2725,14 +2729,14 @@ static void vfilt_set_field(work_vfilt_cfg_t *v, int field, uint8_t value) {
 
 /* Build the effective parameter set for this block: base, then the locks the
  * current trig latched, then the FX LFOs on top. */
-static void build_effective(work_t *w, int frames) {
+static void build_effective(work_t *w, work_track_t *tr, int frames) {
     for (int s = 0; s < WORK_STAGES; ++s)
         for (int i = 0; i < WORK_PARAMS; ++i)
-            TRK(w)->eff[s][i] = TRK(w)->cfg[s].p[i];
-    for (int s = 0; s < WORK_STAGES; ++s) TRK(w)->eff_machine[s] = TRK(w)->cfg[s].machine;
-    TRK(w)->eff_level = TRK(w)->level;
-    TRK(w)->eff_pan   = TRK(w)->pan;
-    TRK(w)->eff_vfilt = TRK(w)->vfilt;
+            tr->eff[s][i] = tr->cfg[s].p[i];
+    for (int s = 0; s < WORK_STAGES; ++s) tr->eff_machine[s] = tr->cfg[s].machine;
+    tr->eff_level = tr->level;
+    tr->eff_pan   = tr->pan;
+    tr->eff_vfilt = tr->vfilt;
     w->eff_mix = w->mix;
 
     if (w->seq_on && w->held_mask) {
@@ -2741,15 +2745,15 @@ static void build_effective(work_t *w, int frames) {
             uint8_t v = w->held[i];
             int knob = 0;
             int stage = work_lock_decode(i, &knob);
-            if (stage >= 0)              { TRK(w)->eff[stage][knob] = v; continue; }
-            if (i == WORK_LOCK_LEVEL)    { TRK(w)->eff_level = v;        continue; }
-            if (i == WORK_LOCK_PAN)      { TRK(w)->eff_pan   = v;        continue; }
+            if (stage >= 0)              { tr->eff[stage][knob] = v; continue; }
+            if (i == WORK_LOCK_LEVEL)    { tr->eff_level = v;        continue; }
+            if (i == WORK_LOCK_PAN)      { tr->eff_pan   = v;        continue; }
 
             /* The voice filter's seven fields, in the order the edit page shows
              * them. Locking these is what makes a sampled patch move per step
              * without spending one of the machine's eight knobs on a filter. */
             int vf = work_lock_decode_vfilt(i);
-            if (vf >= 0) { vfilt_set_field(&TRK(w)->eff_vfilt, vf, v); continue; }
+            if (vf >= 0) { vfilt_set_field(&tr->eff_vfilt, vf, v); continue; }
 
             /* A machine lock goes through the SAME family gate as
              * work_set_param. A lock is a way to change a machine, not a way
@@ -2763,7 +2767,7 @@ static void build_effective(work_t *w, int frames) {
              * is worse than one that left the lock on the floor. */
             int ms = work_lock_decode_machine(i);
             if (ms >= 0 && work_machine_fits_stage(ms, v))
-                TRK(w)->eff_machine[ms] = v;
+                tr->eff_machine[ms] = v;
         }
     }
 
@@ -2771,46 +2775,46 @@ static void build_effective(work_t *w, int frames) {
      * LFOs so an LFO on the same destination rides the envelope's output. */
     {
         float dt = (float)frames / (float)WORK_SR;
-        float atk = pexp(TRK(w)->menv.attack, 0.001f, 4.0f);
-        float hld = pexp(TRK(w)->menv.hold,   0.001f, 4.0f);
-        float dec = pexp(TRK(w)->menv.decay,  0.005f, 8.0f);
+        float atk = pexp(tr->menv.attack, 0.001f, 4.0f);
+        float hld = pexp(tr->menv.hold,   0.001f, 4.0f);
+        float dec = pexp(tr->menv.decay,  0.005f, 8.0f);
 
-        if (TRK(w)->menv_stage == 1.0f) {
-            TRK(w)->menv_t += dt;
-            TRK(w)->menv_val = TRK(w)->menv_t / atk;
-            if (TRK(w)->menv_val >= 1.0f) { TRK(w)->menv_val = 1.0f; TRK(w)->menv_stage = 2.0f; TRK(w)->menv_t = 0.0f; }
-        } else if (TRK(w)->menv_stage == 2.0f) {
-            TRK(w)->menv_t += dt;
-            TRK(w)->menv_val = 1.0f;
-            if (TRK(w)->menv_t >= hld) { TRK(w)->menv_stage = 3.0f; TRK(w)->menv_t = 0.0f; }
-        } else if (TRK(w)->menv_stage == 3.0f) {
-            TRK(w)->menv_t += dt;
-            TRK(w)->menv_val = 1.0f - TRK(w)->menv_t / dec;
-            if (TRK(w)->menv_val <= 0.0f) { TRK(w)->menv_val = 0.0f; TRK(w)->menv_stage = 0.0f; }
+        if (tr->menv_stage == 1.0f) {
+            tr->menv_t += dt;
+            tr->menv_val = tr->menv_t / atk;
+            if (tr->menv_val >= 1.0f) { tr->menv_val = 1.0f; tr->menv_stage = 2.0f; tr->menv_t = 0.0f; }
+        } else if (tr->menv_stage == 2.0f) {
+            tr->menv_t += dt;
+            tr->menv_val = 1.0f;
+            if (tr->menv_t >= hld) { tr->menv_stage = 3.0f; tr->menv_t = 0.0f; }
+        } else if (tr->menv_stage == 3.0f) {
+            tr->menv_t += dt;
+            tr->menv_val = 1.0f - tr->menv_t / dec;
+            if (tr->menv_val <= 0.0f) { tr->menv_val = 0.0f; tr->menv_stage = 0.0f; }
         }
 
-        if (TRK(w)->menv.dest >= 0 && TRK(w)->menv.dest < WORK_STAGES * WORK_PARAMS) {
-            int slot = TRK(w)->menv.dest / WORK_PARAMS;
-            int idx  = TRK(w)->menv.dest % WORK_PARAMS;
-            int out  = TRK(w)->eff[slot][idx] +
-                       (int)(TRK(w)->menv_val * pbi(TRK(w)->menv.depth) * 127.0f);
-            TRK(w)->eff[slot][idx] = (uint8_t)iclamp(out, 0, 127);
+        if (tr->menv.dest >= 0 && tr->menv.dest < WORK_STAGES * WORK_PARAMS) {
+            int slot = tr->menv.dest / WORK_PARAMS;
+            int idx  = tr->menv.dest % WORK_PARAMS;
+            int out  = tr->eff[slot][idx] +
+                       (int)(tr->menv_val * pbi(tr->menv.depth) * 127.0f);
+            tr->eff[slot][idx] = (uint8_t)iclamp(out, 0, 127);
         }
     }
 
     for (int n = 0; n < WORK_LFOS; ++n) {
-        work_lfo_cfg_t *L = &TRK(w)->lfo[n];
+        work_lfo_cfg_t *L = &tr->lfo[n];
 
         /* Multiplier scales speed; both stay on the tempo grid */
         float steps = pexp(L->speed, 64.0f, 0.125f);
         float mult  = powf(2.0f, (float)(L->mult / 16) - 4.0f);
         float per   = fmaxf(steps * mult * step_frames(w), 1.0f);
-        TRK(w)->lfo_ph[n] += (float)frames / per;
-        while (TRK(w)->lfo_ph[n] >= 1.0f) TRK(w)->lfo_ph[n] -= 1.0f;
+        tr->lfo_ph[n] += (float)frames / per;
+        while (tr->lfo_ph[n] >= 1.0f) tr->lfo_ph[n] -= 1.0f;
 
         if (L->dest < 0 || L->dest >= WORK_STAGES * WORK_PARAMS) continue;
 
-        float ph = TRK(w)->lfo_ph[n] + p01(L->phase);
+        float ph = tr->lfo_ph[n] + p01(L->phase);
         if (ph >= 1.0f) ph -= 1.0f;
 
         float v;
@@ -2821,16 +2825,16 @@ static void build_effective(work_t *w, int frames) {
             case 3: v = 1.0f - 2.0f * ph; break;                            /* saw  */
             case 4: v = 2.0f * ph - 1.0f; break;                            /* ramp */
             case 5: v = expf(-3.0f * ph) * 2.0f - 1.0f; break;              /* exp  */
-            default: v = rnd_bi(&TRK(w)->rng); break;                            /* rand */
+            default: v = rnd_bi(&tr->rng); break;                            /* rand */
         }
 
         int slot = L->dest / WORK_PARAMS;
         int idx  = L->dest % WORK_PARAMS;
         /* Modulate around the LOCKED value, not the base one — otherwise a
          * p-lock and an LFO pointed at the same parameter fight each other. */
-        int base = TRK(w)->eff[slot][idx];
+        int base = tr->eff[slot][idx];
         int out  = base + (int)(v * pbi(L->depth) * 127.0f);
-        TRK(w)->eff[slot][idx] = (uint8_t)iclamp(out, 0, 127);
+        tr->eff[slot][idx] = (uint8_t)iclamp(out, 0, 127);
     }
 }
 
@@ -3005,59 +3009,72 @@ void work_process(work_t *w, const int16_t *in, int16_t *out, int frames) {
     w->cc_frames += (uint64_t)frames;   /* clock for the CC duplicate guard */
 
     seq_run(w, frames);
-    build_effective(w, frames);
 
-    vfilt_prepare(w, frames);
+    /* Per-track preparation, once per block. Everything from here to the render
+     * is per track and must NOT reach for TRK(w): that macro answers "the track
+     * the UI is pointed at", which is the selected one, not the one being
+     * prepared. */
+    for (int t = 0; t < WORK_TRACKS; ++t) {
+        work_track_t *tr = &w->trk[t];
 
-    /* A machine change resets that slot's state so a reverb tail or delay
-     * line from the previous machine cannot leak into the new one. This uses
-     * the EFFECTIVE machine, so a per-step machine lock swaps cleanly too. */
-    for (int i = 0; i < WORK_STAGES; ++i) {
-        if (TRK(w)->slot[i].last_machine != TRK(w)->eff_machine[i]) {
-            int keep = TRK(w)->eff_machine[i];
-            slot_reset(&TRK(w)->slot[i]);
-            TRK(w)->slot[i].last_machine = keep;
-        }
-    }
+        build_effective(w, tr, frames);
+        vfilt_prepare(tr, frames);
 
-    /* NOW start the voice a sequencer trig asked for. Doing it inside seq_run
-     * put it before the reset above, which then wiped it. */
-    if (w->src_trig_pending) {
-        work_src_trigger(w, 60, 0);
-        w->src_trig_pending = 0;
-    }
-
-    /* Multimode Filter envelope gate, from note events seen since last block */
-    if (TRK(w)->note_pending) {
+        /* A machine change resets that slot's state so a reverb tail or delay
+         * line from the previous machine cannot leak into the new one. This
+         * uses the EFFECTIVE machine, so a per-step machine lock swaps cleanly
+         * too. */
         for (int i = 0; i < WORK_STAGES; ++i) {
-            TRK(w)->slot[i].env_stage = 1.0f;
-            for (int n = 0; n < WORK_LFOS; ++n)
-                if (TRK(w)->lfo[n].trig) TRK(w)->lfo_ph[n] = 0.0f;
+            if (tr->slot[i].last_machine != tr->eff_machine[i]) {
+                int keep = tr->eff_machine[i];
+                slot_reset(&tr->slot[i]);
+                tr->slot[i].last_machine = keep;
+            }
         }
-        /* A played note fires the SRC voice too, so Work is usable from a
-         * keyboard or Move's own pads without the sequencer running. */
-        work_src_trigger(w, TRK(w)->note_num, TRK(w)->note_vel);
-        TRK(w)->note_pending = 0;
+
+        /* NOW start the voice a sequencer trig asked for. Doing it inside
+         * seq_run put it before the reset above, which then wiped it. */
+        if (tr->src_trig_pending) {
+            work_src_trigger(tr, 60, 0);
+            tr->src_trig_pending = 0;
+        }
+
+        /* Multimode Filter envelope gate, from notes seen since last block */
+        if (tr->note_pending) {
+            for (int i = 0; i < WORK_STAGES; ++i) {
+                tr->slot[i].env_stage = 1.0f;
+                for (int n = 0; n < WORK_LFOS; ++n)
+                    if (tr->lfo[n].trig) tr->lfo_ph[n] = 0.0f;
+            }
+            /* A played note fires the SRC voice too, so Work is usable from a
+             * keyboard or Move's own pads without the sequencer running. */
+            work_src_trigger(tr, tr->note_num, tr->note_vel);
+            tr->note_pending = 0;
+        }
+
+        /* Level and pan resolve once per block, not per sample: they are
+         * block-rate controls (a lock lands on a step boundary), and two trig
+         * calls per sample per track would be eight of them for no audible
+         * gain.
+         *
+         * Constant power, normalised so CENTRE IS UNITY rather than -3 dB.
+         * That normalisation is not a stylistic choice: bypass has to be
+         * bit-transparent, and a -3 dB centre would put a 4358-LSB dent in it.
+         * Hard left or right is correspondingly +3 dB, the usual bargain for a
+         * 0 dB centre.
+         *
+         * pbi() rather than p01() because pan is a BIPOLAR control: it has an
+         * exact zero at 64, where p01 would give 0.50394 and leave centre 0.4%
+         * off unity — inaudible, and still enough to fail transparency by
+         * ~130 LSB. */
+        const float lvl = p01(tr->eff_level);
+        const float ang = (pbi(tr->eff_pan) + 1.0f) * 0.25f * 3.14159265f;
+        tr->lgain = lvl * cosf(ang) * 1.41421356f;
+        tr->rgain = lvl * sinf(ang) * 1.41421356f;
     }
 
     float gmix = p01(w->eff_mix);
 
-    /* Level and pan resolve once per block, not per sample: they are block-rate
-     * controls (a lock lands on a step boundary), and two trig calls per sample
-     * per track would be eight of them at eight tracks for no audible gain.
-     *
-     * Constant power, normalised so CENTRE IS UNITY rather than -3 dB. That
-     * normalisation is not a stylistic choice: bypass has to be bit-transparent,
-     * and a -3 dB centre would put a 4358-LSB dent in it. Hard left or right is
-     * correspondingly +3 dB, which is the usual bargain for a 0 dB centre.
-     *
-     * pbi() rather than p01() because pan is a BIPOLAR control: it has an exact
-     * zero at 64, where p01 would give 0.50394 and leave centre 0.4% off unity
-     * — inaudible, and still enough to fail transparency by ~130 LSB. */
-    const float lvl = p01(TRK(w)->eff_level);
-    const float ang = (pbi(TRK(w)->eff_pan) + 1.0f) * 0.25f * 3.14159265f;
-    const float lgain = lvl * cosf(ang) * 1.41421356f;
-    const float rgain = lvl * sinf(ang) * 1.41421356f;
 
     /* Muting at the INPUT rather than the output is deliberate, and differs
      * from Smack: Smack has a recorded loop that stays audible with the live
@@ -3080,31 +3097,48 @@ void work_process(work_t *w, const int16_t *in, int16_t *out, int frames) {
      * input matters. */
     if (machine_is_source(TRK(w)->eff_machine[0])) in_gain = 0.0f;
 
+    /* The track being rendered. Named here rather than reached for through
+     * TRK() so a machine cannot reach the wrong one. */
     for (int f = 0; f < frames; ++f) {
         float dry_l = (float)in[f * 2]     * (1.0f / 32768.0f) * in_gain;
         float dry_r = (float)in[f * 2 + 1] * (1.0f / 32768.0f) * in_gain;
-        float l = dry_l, r = dry_r;
 
-        for (int i = 0; i < WORK_STAGES; ++i) {
-            mctx_t m = { w, &TRK(w)->slot[i], TRK(w)->eff[i], frames };
-            run_machine(&m, TRK(w)->eff_machine[i], &l, &r);
-            l = sane(l);
-            r = sane(r);
+        /* Every track renders and the results SUM, which is what makes them
+         * tracks rather than one deep chain. */
+        float wet_l = 0.0f, wet_r = 0.0f;
+        for (int t = 0; t < WORK_TRACKS; ++t) {
+            work_track_t *tr = &w->trk[t];
+
+            /* Only track 1 is fed the live input. The rest start from silence,
+             * because they are SOURCE tracks: they generate.
+             *
+             * This is not a limitation, it is what keeps the module usable as
+             * an insert. Handing the input to all eight and summing would make
+             * eight bypassed tracks eight times as loud as the signal that
+             * arrived — bypass would stop being transparent the moment a track
+             * count went up, and every existing patch would clip. */
+            float l = (t == 0) ? dry_l : 0.0f;
+            float r = (t == 0) ? dry_r : 0.0f;
+
+            for (int i = 0; i < WORK_STAGES; ++i) {
+                mctx_t m = { w, tr, &tr->slot[i], tr->eff[i], frames };
+                run_machine(&m, tr->eff_machine[i], &l, &r);
+                l = sane(l);
+                r = sane(r);
+            }
+
+            /* Track level and pan, at the routing end — after the stages,
+             * because they place the WHOLE track in the mix rather than
+             * trimming what one stage produced. */
+            wet_l += l * tr->lgain;
+            wet_r += r * tr->rgain;
         }
 
-        l = dry_l * (1.0f - gmix) + l * gmix;
-        r = dry_r * (1.0f - gmix) + r * gmix;
-
-        /* Track level and pan, at the routing end of the chain — after the
-         * stages and after the dry/wet, because they place the WHOLE track in
-         * the mix rather than trimming what one stage produced.
-         *
-         * Constant-power pan, so sweeping across centre does not dip: at 64 both
-         * gains are 1/sqrt(2), which is why the pair is normalised rather than
-         * left at 0.5/0.5. Level is linear in the parameter for now — a dB law
-         * belongs with the eight-track mixer, where levels get compared. */
-        l *= lgain;
-        r *= rgain;
+        /* The global dry/wet applies ONCE, to the summed tracks against the
+         * input — not per track, which would blend the dry signal in eight
+         * times over. */
+        float l = dry_l * (1.0f - gmix) + wet_l * gmix;
+        float r = dry_r * (1.0f - gmix) + wet_r * gmix;
 
         int vl = (int)lrintf(fclampf(l, -1.0f, 1.0f) * 32767.0f);
         int vr = (int)lrintf(fclampf(r, -1.0f, 1.0f) * 32767.0f);
