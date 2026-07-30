@@ -559,9 +559,15 @@ mock cannot quietly become too forgiving to catch the bug that broke Mono.
   param channel, and **One Shot firing from a sequencer trig**. Audio out
   of the Move.
 
+**Verified by ear, 2026-07-30** — and only this much: ONE track running
+Granulator as its source into two insert effects, on the v0.9.0 build, judged
+"working great". That covers the source-into-two-inserts path and the effects
+on it. It does not cover eight tracks at once, or any machine not named here.
+
 **Still NOT verified by ear:** Polysample, Slicer, Wavescan and Tilt;
-polyphony and voice stealing; note-to-pitch tracking; anything about how the
-machines actually SOUND as opposed to producing signal.
+polyphony and voice stealing; note-to-pitch tracking; more than one track
+sounding at a time; anything about how the machines actually SOUND as opposed
+to producing signal.
 
 **CPU, measured on the A53.** `make bench-tracks-arm` cross-compiles
 `test/bench_tracks.c`; copy it to the Move and run it there. A "track" is
