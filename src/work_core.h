@@ -25,6 +25,10 @@
 
 #define WORK_SR          44100
 #define WORK_SLOTS       3      /* insert FX 1, 2 and 3, in series */
+/* Tracks. The reference device has eight; this is the axis the engine grows
+ * along, NOT the slot count. Still 1 here: work_track_t has been split out of
+ * struct work but nothing yet instantiates more than one. DESIGN-8TRACK.md. */
+#define WORK_TRACKS      1
 #define WORK_PARAMS      8      /* knob A-H, one per Move encoder */
 #define WORK_LFOS        3      /* FX LFO 1, 2 and 3 (3 added in v0.3.0) */
 
