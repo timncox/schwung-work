@@ -186,6 +186,9 @@ p{margin:0 0 14px;max-width:68ch}
 .tabs button[aria-selected="true"]{background:var(--ink);color:var(--paper)}
 .panel{border:2px solid var(--ink);border-top:0;background:rgba(255,253,248,.72);padding:22px 18px}
 .shifttoggle{
+.stagepick{display:flex;align-items:center;gap:8px;margin:14px 0 4px;font-family:var(--mono);font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-2)}
+.stagebtn{font:inherit;letter-spacing:inherit;text-transform:inherit;padding:4px 10px;cursor:pointer;border:1.5px solid var(--ink);background:transparent;color:var(--ink-2)}
+.stagebtn[aria-pressed="true"]{background:var(--ink);color:var(--paper)}
   font:600 .72rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;
   color:var(--ink-2);background:transparent;border:1.5px solid var(--rule);
   border-radius:999px;padding:.5rem 1rem;margin:0 0 .9rem;cursor:pointer;
@@ -214,6 +217,7 @@ p{margin:0 0 14px;max-width:68ch}
 .machine h3{margin:0 0 2px;font-size:.98rem;font-weight:700;letter-spacing:-.005em;display:flex;align-items:baseline;gap:8px}
 .machine .idx{font-family:var(--mono);font-size:.68rem;color:var(--ink-3);font-weight:500}
 .machine .fam{font-family:var(--mono);font-size:.58rem;letter-spacing:.12em;text-transform:uppercase;font-weight:600}
+.machine .stage{font-family:var(--mono);font-size:.58rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);display:block;margin-top:3px}
 .machine p{font-size:.86rem;color:var(--ink-2);margin:6px 0 10px;line-height:1.5}
 .params{display:flex;flex-wrap:wrap;gap:4px;margin:0;padding:0;list-style:none}
 .params li{font-family:var(--mono);font-size:.62rem;padding:2px 6px;border:1px solid var(--rule);color:var(--ink-2);background:rgba(237,232,220,.7)}
@@ -252,7 +256,7 @@ footer a{color:var(--rust)}
   <div class="titleblock">
     <div class="tb-main">
       <h1>Work <span class="amp">&amp;</span><span class="over">Overwork</span></h1>
-      <p class="tagline">Twenty-six machines for the Ableton Move &mdash; twenty-one effects and five sample sources &mdash; in three insert slots with three FX LFOs. Overwork adds the whole surface and a 64-step sequencer that parameter-locks them.</p>
+      <p class="tagline">Twenty-six machines for the Ableton Move &mdash; twenty-one effects and six sources &mdash; in a source stage and two insert slots, with three FX LFOs. Overwork adds the whole surface and a 64-step sequencer that parameter-locks them.</p>
       <span class="stamp">Playing on hardware</span>
     </div>
     <div class="tb-side">
@@ -301,12 +305,13 @@ footer a{color:var(--rust)}
 </section>
 
 <section id="flow">
-  <div class="sechead"><span class="secnum">02</span><h2>Signal flow</h2><span class="note">three inserts in series</span></div>
-  <p>All three slots run in series. Each holds one machine. The FX LFOs reach any slot parameter, and in Overwork the sequencer&rsquo;s parameter locks sit between the base value and the LFOs.</p>
+  <div class="sechead"><span class="secnum">02</span><h2>Signal flow</h2><span class="note">a source, then two inserts</span></div>
+  <p>Three stages in series, each holding one machine. The first is the <strong>source stage</strong>: it takes a sample machine, so loading one costs you no insert. The two <strong>insert slots</strong> after it take effects. The FX LFOs reach any stage parameter, and in Overwork the sequencer&rsquo;s parameter locks sit between the base value and the LFOs.</p>
+  <p>A stage only accepts machines from its own family, and says so rather than substituting something near enough: you cannot put a reverb in the source stage or a sampler in an insert. That is what makes the pads predictable &mdash; the palette shows the machines the focused stage will actually take.</p>
   <div class="flow">
     <svg viewBox="-10 -4 908 270" role="img" aria-labelledby="flowtitle flowdesc">
       <title id="flowtitle">Work signal flow diagram</title>
-      <desc id="flowdesc">Audio enters at IN, passes through FX slots 1, 2 and 3 in series, then a global dry/wet mix, then OUT. A resolution chain feeds the slots: base parameter values are overridden by the sequencer's parameter locks, which are then modulated by the FX LFOs.</desc>
+      <desc id="flowdesc">Audio enters at IN, passes through the source stage and then insert FX 1 and 2 in series, then a global dry/wet mix, then OUT. A resolution chain feeds the stages: base parameter values are overridden by the sequencer's parameter locks, which are then modulated by the FX LFOs.</desc>
 
       <rect class="box" x="14" y="96" width="78" height="48"/>
       <text class="lbl" x="53" y="125" text-anchor="middle">IN</text>
@@ -316,22 +321,22 @@ footer a{color:var(--rust)}
       <path d="M140 120 l-9 -4 v8 z" fill="var(--ink-2)" stroke="none"/>
 
       <rect class="box" x="146" y="88" width="130" height="64"/>
-      <text class="lbl" x="211" y="114" text-anchor="middle">FX SLOT 1</text>
-      <text x="211" y="132" text-anchor="middle">1 of 26 machines</text>
+      <text class="lbl" x="211" y="114" text-anchor="middle">SRC</text>
+      <text x="211" y="132" text-anchor="middle">1 of 6 sources</text>
 
       <line x1="276" y1="120" x2="324" y2="120"/>
       <path d="M324 120 l-9 -4 v8 z" fill="var(--ink-2)" stroke="none"/>
 
       <rect class="box" x="330" y="88" width="130" height="64"/>
-      <text class="lbl" x="395" y="114" text-anchor="middle">FX SLOT 2</text>
-      <text x="395" y="132" text-anchor="middle">1 of 26 machines</text>
+      <text class="lbl" x="395" y="114" text-anchor="middle">INSERT FX 1</text>
+      <text x="395" y="132" text-anchor="middle">1 of 21 effects</text>
 
       <line x1="460" y1="120" x2="500" y2="120"/>
       <path d="M500 120 l-9 -4 v8 z" fill="var(--ink-2)" stroke="none"/>
 
       <rect class="box" x="506" y="88" width="130" height="64"/>
-      <text class="lbl" x="571" y="114" text-anchor="middle">FX SLOT 3</text>
-      <text x="571" y="132" text-anchor="middle">1 of 26 machines</text>
+      <text class="lbl" x="571" y="114" text-anchor="middle">INSERT FX 2</text>
+      <text x="571" y="132" text-anchor="middle">1 of 21 effects</text>
 
       <line x1="636" y1="120" x2="676" y2="120"/>
       <path d="M676 120 l-9 -4 v8 z" fill="var(--ink-2)" stroke="none"/>
@@ -365,7 +370,7 @@ footer a{color:var(--rust)}
       <path d="M211 152 l-4 9 h8 z" fill="var(--teal)" stroke="none"/>
 
       <text x="146" y="192" font-size="10">RESOLUTION ORDER, RECOMPUTED EVERY BLOCK</text>
-      <text x="664" y="176" font-size="10">to every slot</text>
+      <text x="664" y="176" font-size="10">to every stage</text>
     </svg>
   </div>
   <p>A lock <em>sets</em> the value; the LFO then moves around whatever the lock set. Pointing a lock and an LFO at the same parameter is well defined, not a fight.</p>
@@ -417,7 +422,13 @@ footer a{color:var(--rust)}
   <div class="panel" id="panel-ow" role="tabpanel" aria-labelledby="tab-ow" tabindex="0">
     <p class="rowlabel">Step buttons 1&ndash;16 &mdash; the pattern page&rsquo;s trigs</p>
     <div class="steprow" id="mapSteps" aria-hidden="true"></div>
-    <p class="rowlabel">Pads &mdash; rows 1&ndash;3 are the machine palette (hold Shift for machines 22 and up); row 4 is transport, and Shift turns its last four into the step-attribute modes</p>
+    <p class="rowlabel">Pads &mdash; rows 1&ndash;3 are the machine palette for the focused stage; row 4 is transport, and Shift turns its last four into the step-attribute modes</p>
+    <div class="stagepick" role="group" aria-label="Focused stage">
+      <span>Focused stage:</span>
+      <button type="button" class="stagebtn" data-stage="0" aria-pressed="true">SRC</button>
+      <button type="button" class="stagebtn" data-stage="1" aria-pressed="false">FX 1</button>
+      <button type="button" class="stagebtn" data-stage="2" aria-pressed="false">FX 2</button>
+    </div>
     <button type="button" id="shiftToggle" class="shifttoggle" aria-pressed="false">Hold SHIFT</button>
     <div class="padgrid" id="mapPads"></div>
     <p class="padinfo" id="padInfo" role="status" aria-live="polite">Select a pad to read what it does.</p>
@@ -454,18 +465,19 @@ footer a{color:var(--rust)}
 
 <section id="machines">
   <div class="sechead"><span class="secnum">05</span><h2>The machines</h2><span class="note">26 · knob labels A&ndash;H</span></div>
-  <p>Twenty-one process what reaches the slot; five are <em>sources</em> — they replace the slot’s input with a sample instead of treating it, which is what lets a Work slot originate audio rather than only colour it. Machine order is the preset format and is append-only. Loading a machine installs its own defaults, and switching machines clears that slot so no reverb tail leaks into whatever loads next.</p>
+  <p>Every machine belongs to a <em>family</em>, and a family decides which stage will take it. Twenty-one <strong>effects</strong> process what reaches them and load into either insert. Six <strong>sources</strong> load into the source stage; five of them replace the input with a sample instead of treating it, which is what lets Work originate audio rather than only colour it. Bypass belongs to both, because every stage needs a way to be empty.</p>
+  <p>Each card below says where its machine loads. Machine order is the preset format and is append-only. Loading a machine installs its own defaults, and switching machines clears that stage so no reverb tail leaks into whatever loads next.</p>
   <div class="machines" id="machineList"></div>
 </section>
 
 <section id="samples">
   <div class="sechead"><span class="secnum">06</span><h2>Samples</h2><span class="note">8 seconds &middot; stereo</span></div>
-  <p class="lede">Five machines read a sample rather than the slot&rsquo;s input. One sample is loaded at a time and every source machine shares it, so switching between One Shot, Slicer and Wavescan auditions the same audio three ways.</p>
+  <p class="lede">Five machines read a sample rather than their input, and all five live in the source stage. One sample is loaded at a time and every one of them shares it, so switching between One Shot, Slicer and Wavescan auditions the same audio three ways &mdash; and none of it costs you an insert.</p>
 
   <div class="grid2">
     <div>
       <h3>Loading one</h3>
-      <p>In <strong>Overwork</strong>, hold <strong>Shift</strong> and press the <strong>slot pad</strong> (row 4, third from the left). The jog scrolls, a jog click loads, and the same Shift + slot pad closes the browser.</p>
+      <p>In <strong>Overwork</strong>, hold <strong>Shift</strong> and press the <strong>stage pad</strong> (row 4, third from the left). The jog scrolls, a jog click loads, and the same Shift + stage pad closes the browser.</p>
       <p>The browser walks <code>UserLibrary/Samples</code> and <code>UserLibrary/Recordings</code>, four levels deep &mdash; deep enough to reach Schwung&rsquo;s own resampler and skipback folders, which file by date.</p>
       <table>
         <caption>What loads</caption>
@@ -482,8 +494,8 @@ footer a{color:var(--rust)}
     </div>
     <div>
       <h3>What a source machine is</h3>
-      <p>Every machine before One Shot treats what arrives at the slot. A source machine <em>replaces</em> it. Put one in FX&nbsp;1 and the slot stops being an insert and starts being an instrument, with FX&nbsp;2 still processing what it makes.</p>
-      <p>With no sample loaded a source machine is silent rather than noisy &mdash; an empty slot makes no sound, it does not pass its input through.</p>
+      <p>An effect treats what arrives at it. A source machine <em>replaces</em> it. Load one into the source stage and Work stops being an insert and starts being an instrument, with both inserts still free to process what it makes.</p>
+      <p>With no sample loaded a source machine is silent rather than noisy &mdash; an empty source stage makes no sound, it does not pass its input through. <strong>Granulator is the exception</strong>, and deliberately: with no sample it granulates the live input, so it works as either a source or an effect on whatever is upstream.</p>
       <h3>Triggering</h3>
       <p>A full trig fires the voice; a <em>lock</em> trig deliberately does not &mdash; that is what makes it a lock trig. An incoming note fires it too, so the machines are playable from a keyboard or Move&rsquo;s pads with the sequencer stopped.</p>
       <p>Notes set pitch, with <strong>note 60 as unity</strong> &mdash; C3 plays the sample as recorded and everything else transposes from there.</p>
@@ -494,14 +506,14 @@ footer a{color:var(--rust)}
           <tr><td>One Shot</td><td>one</td></tr>
           <tr><td>Polysample, Slicer</td><td>eight, oldest stolen first</td></tr>
           <tr><td>Wavescan</td><td>free-running, needs no trig</td></tr>
-          <tr><td>Shape</td><td>none &mdash; it makes no sound of its own</td></tr>
+          <tr><td>Granulator</td><td>free-running grains, needs no trig</td></tr>
         </tbody>
       </table>
     </div>
   </div>
 
   <h3>Where the source machines stop</h3>
-  <p>All five read the one loaded sample, and that single buffer is the limit worth knowing about. <strong>Polysample</strong> is polyphonic and has real vibrato, but there are no multi-sampled instruments &mdash; every note plays the same buffer transposed. <strong>Slicer</strong> gives you the playback controls, not eight sample tracks; Work is a two-slot chain, not a multitrack sampler. <strong>Wavescan</strong> has no wavetable library, so the loaded sample <em>is</em> the wavetable, read as a series of 2048-frame waves &mdash; load a wavetable file and it behaves as one, load a drum loop and you get something else. <strong>Tilt</strong> is the one with nothing missing: it wants a bus insert, and a Work slot is exactly that.</p>
+  <p>All five read the one loaded sample, and that single buffer is the limit worth knowing about. <strong>Polysample</strong> is polyphonic and has real vibrato, but there are no multi-sampled instruments &mdash; every note plays the same buffer transposed. <strong>Slicer</strong> gives you the playback controls, not eight sample tracks; Work is one source stage and two inserts, not a multitrack sampler. <strong>Wavescan</strong> has no wavetable library, so the loaded sample <em>is</em> the wavetable, read as a series of 2048-frame waves &mdash; load a wavetable file and it behaves as one, load a drum loop and you get something else.</p>
 </section>
 
 <section id="sequencer">
@@ -532,11 +544,11 @@ footer a{color:var(--rust)}
           <tr><td>Condition</td><td>19 options, above</td></tr>
           <tr><td>Micro-timing</td><td>&plusmn;23 twenty-fourths of a step</td></tr>
           <tr><td>Retrig</td><td>off, 1/4, 1/8, 1/16, 1/32</td></tr>
-          <tr><td>Parameter locks</td><td>19 lockable parameters</td></tr>
+          <tr><td>Parameter locks</td><td>28 lockable parameters</td></tr>
         </tbody>
       </table>
       <h3>Lockable parameters</h3>
-      <p>Sixteen slot parameters &mdash; eight per slot &mdash; plus both machine selects and the global dry/wet. Locking a machine select swaps the machine for that step.</p>
+      <p>Twenty-four stage parameters &mdash; eight each for SRC, FX&nbsp;1 and FX&nbsp;2 &mdash; plus all three machine selects and the global dry/wet. Locking a machine select swaps that stage&rsquo;s machine for that step, within its own family: a lock cannot put a reverb in the source stage any more than a pad can.</p>
       <div class="callout">
         <strong>Retrig, precisely</strong>
         Retrig restarts the FX LFOs and the filter envelope. It does <em>not</em> stutter the audio &mdash; the Decimator&rsquo;s <code>FREZ</code> parameter is the machine for that.
@@ -632,33 +644,40 @@ footer a{color:var(--rust)}
     src:   {name:"source",     css:"--fam-src"}
   };
 
+  /* Each machine carries TWO classifications and they answer different
+     questions. `f` is the display family — what kind of machine it is, which
+     colours the card. `s` is the STAGE the engine will let it load into:
+     "src", "fx", or "both" for Bypass. They were conflated once: Tilt is a
+     bus-insert shelving EQ that shipped tagged as a source, and Granulator is
+     a source that reads as "granular". test/site_matches_engine.mjs checks `s`
+     against the families the engine itself serves. */
   var MACHINES = [
-    {n:"Bypass", f:"none", d:"Passes the slot through untouched.", p:[]},
-    {n:"Clock Pitch", f:"pitch", d:"Granular pitch shifter with feedback, so held notes climb or fall in steps rather than sitting at one interval.", p:["TUNE","WIN","FDBK","DEP","HPF","LPF","SPD","MIX"]},
-    {n:"Comb Filter", f:"filt", d:"Tuned stereo comb. FREQ is bipolar and its sign flips the comb’s polarity — positive feedback plucks like a string, negative sounds hollow and tube-like.", p:["SPD","DEP","SPH","DTUN","FREQ","FDBK","LPF","MIX"]},
-    {n:"Compressor", f:"dyn", d:"Feed-forward peak compressor, eight ratios from 1.5 to 20. SCF is bipolar: low-pass left for pumping, high-pass right to avoid it.", p:["THR","ATK","REL","MUP","RAT","SCS","SCF","MIX"]},
-    {n:"Chain Delay", f:"delay", d:"Delay with saturated input, stereo width on input and feedback, SKEW pulling the channels into a rhythmic relationship, and a tilt filter.", p:["DRV","TIME","FDBK","WIDH","MOD","SKEW","FILT","MIX"]},
-    {n:"Decimator", f:"dest", d:"The lo-fi collection: bit reduction, overdrive, sample-rate redux, random drop-outs, ring modulation and random freezes.", p:["BR","OVER","SRR","DROP","RATE","DEP","FREZ","F.TIM"]},
-    {n:"Gritshaper", f:"dest", d:"Drive into a rectifier, with noise ring-modulated against the distorted signal. HPF is bipolar and chooses where the filter sits — before the drive, or after the rectifier.", p:["DRV","RECT","HPF","LPF","NOIS","N.FRQ","N.RES","MIX"]},
-    {n:"Fold Filter", f:"filt", d:"High-pass, then a wavefolder, then a morphing multimode filter, then distortion. Adds overtones rather than removing them.", p:["ILEV","HP","FOLD","OLEV","FREQ","RESO","TYPE","DIST"]},
-    {n:"Filterbank", f:"filt", d:"Eight fixed bands — a low-pass at 90 Hz, six band-passes, a high-pass at 4 kHz — each with its own gain.", p:["90Hz","122Hz","225Hz","418Hz","777Hz","1k4","2k7","4k+"]},
-    {n:"Spectrum Bender", f:"pitch", d:"A true single-sideband frequency shifter, not a pitch shifter, so intervals go inharmonic. SBND blends the two sidebands.", p:["SPD","DEP","SPH","LAG","SHFT","SPRD","SBND","MIX"]},
-    {n:"Endless Flanger", f:"mod", d:"Barber-pole motion: three crossfaded taps, so the sweep appears to rise or fall forever without ever turning around. SPD at centre holds still.", p:["SPD","DEP","TUNE","FDBK","LPF"]},
-    {n:"Low-Pass Filter", f:"filt", d:"Four poles, 24 dB per octave, with a tempo-synced LFO and stereo spread offsetting cutoff between the channels.", p:["SPD","DEP","SPH","LAG","FREQ","RESO","SPRD"]},
-    {n:"Multimode Filter", f:"filt", d:"Morphs low-pass to band-pass to high-pass, with an ADSR envelope modulating cutoff by a bipolar depth.", p:["ATK","DEC","SUS","REL","FREQ","RESO","TYPE","ENV"]},
-    {n:"Wide Chorus", f:"mod", d:"Three-voice chorus for widening, with a high-pass on the input and a stereo width control.", p:["DEP","SPD","HPF","WDTH","MIX"]},
-    {n:"Phase Array", f:"mod", d:"Six allpass stages; STG blends the tap after four with the tap after six. SHP morphs the LFO from a falling ramp through triangle to a rising one.", p:["SPD","DEP","SHP","LAG","FREQ","FDBK","STG","MIX"]},
-    {n:"Roomtone Reverb", f:"space", d:"Large-space voicing with an explicit early-reflection bank in front of the tank.", p:["PRE","EARLY","DAMP","SIZE","LOWC","HIGHC"]},
-    {n:"Drive Delay", f:"delay", d:"Delay on a 128th-note grid with ping-pong, and saturation in the feedback path so repeats degrade as they decay.", p:["TIME","PPONG","WID","FDBK","HPF","LPF","MIX"]},
-    {n:"Iron Room Reverb", f:"space", d:"Plate character: heavy input diffusion, a bright tank, deliberately wide parameter ranges.", p:["SIZE","FDBK","BRIT","PRE","WDTH","DIFF","LOWC","MIX"]},
-    {n:"Voidspace Reverb", f:"space", d:"Room to huge. FREQ and GAIN form a feedback shelving filter — at full GAIN the treble stays in the tail, lowering it damps progressively.", p:["PRE","DEC","FREQ","GAIN","HPF","LPF","MIX"]},
-    {n:"Flutter", f:"tape", d:"Tape wobble with a band-shaped signal and added noise. SPEED at zero makes the modulator a random walk. The noise deliberately sits outside the mix law.", p:["SPEED","DEPTH","BASE","WIDTH","N.LEV","N.HPF","STEREO","MIX"]},
-    {n:"Granulator", f:"gran", d:"Granulates the last two seconds of live input. POS is where in that buffer grains start, SCAN moves that point and wraps, SPRD scatters it, SIZE is grain length and AMNT how many sound at once. With a sample loaded the grains read THAT instead of the live input, which is what makes it an SRC machine; clear the sample and it granulates the input again. Eight knobs and a fixed Hann window, rather than the three pages of grain controls a dedicated granulator would give you.", p:["TUNE","DENS","SIZE","POS","SCAN","SPRD","AMNT","MIX"]},
-    {n:"One Shot", f:"src", d:"The first SRC machine: one shot of the loaded sample per trig. TUNE is \u00b1two octaves, STRT and LEN scan a window into the sample, LOOP holds that window instead of stopping at its end, ATK and DEC shape an AD envelope, LEV and PAN place the result. Unlike every machine above it this is a SOURCE \u2014 it replaces its input rather than processing it, which is what lets a Work slot originate audio. Silent until a sample is loaded.", p:["TUNE","STRT","LEN","LOOP","ATK","DEC","LEV","PAN"]},
-    {n:"Polysample", f:"src", d:"Eight-voice polyphonic playback of the loaded sample, pitched by incoming notes with note 60 as unity. VIBR, SPD and FADE are the documented vibrato: depth, speed, and the time it takes to fade in. Work has one sample buffer, so every note plays that one sample transposed &mdash; the polyphony and the vibrato are real, multi-sampled instruments are not on offer.", p:["TUNE","VIBR","SPD","FADE","STRT","LEN","LEV","PAN"]},
-    {n:"Slicer", f:"src", d:"Windowed sample playback with a separate loop point: MODE chooses forward, reverse, forward loop or reverse loop, STRT and LEN set the window, and L.ST is the point a loop returns to. Reverse and a separate loop point are both things One Shot cannot do. What it is not is a multitrack sampler \u2014 one buffer, one window, no per-slice tracks of its own. Work is a two-slot FX chain.", p:["TUNE","MODE","STRT","LEN","L.ST","ATK","DEC","LEV"]},
-    {n:"Wavescan", f:"src", d:"Two wavetable oscillators blended together, with POS selecting the wave, ANIM an internal modulator that animates it (eleven envelope and LFO shapes), A.POS its depth, SPD its rate and DTUN the detune between the two. Movement through the table is interpolated, which is what makes it wavetable synthesis rather than switching. There is no wavetable library here: the loaded SAMPLE is the wavetable, read as a series of 2048-frame waves.", p:["TUNE","POS","A.POS","ANIM","SPD","DTUN","LEV","MIX"]},
-    {n:"Tilt", f:"src", d:"A low shelf and a high shelf, each with frequency and gain, where 64 turns the shelf into a full pass \u2014 the manual\u2019s Shape makes no sound of its own, it shapes what is on the bus. This is the one Phase 3 machine that needed no adaptation at all, because a Work slot IS a bus insert. WDTH is mid/side width and DRV a little saturation.", p:["LO.G","LO.F","HI.F","HI.G","WDTH","DRV","LEV","MIX"]}
+    {n:"Bypass", s:"both", f:"none", d:"Passes the stage through untouched. The one machine both families share, because every stage needs a way to be empty.", p:[]},
+    {n:"Clock Pitch", s:"fx", f:"pitch", d:"Granular pitch shifter with feedback, so held notes climb or fall in steps rather than sitting at one interval.", p:["TUNE","WIN","FDBK","DEP","HPF","LPF","SPD","MIX"]},
+    {n:"Comb Filter", s:"fx", f:"filt", d:"Tuned stereo comb. FREQ is bipolar and its sign flips the comb’s polarity — positive feedback plucks like a string, negative sounds hollow and tube-like.", p:["SPD","DEP","SPH","DTUN","FREQ","FDBK","LPF","MIX"]},
+    {n:"Compressor", s:"fx", f:"dyn", d:"Feed-forward peak compressor, eight ratios from 1.5 to 20. SCF is bipolar: low-pass left for pumping, high-pass right to avoid it.", p:["THR","ATK","REL","MUP","RAT","SCS","SCF","MIX"]},
+    {n:"Chain Delay", s:"fx", f:"delay", d:"Delay with saturated input, stereo width on input and feedback, SKEW pulling the channels into a rhythmic relationship, and a tilt filter.", p:["DRV","TIME","FDBK","WIDH","MOD","SKEW","FILT","MIX"]},
+    {n:"Decimator", s:"fx", f:"dest", d:"The lo-fi collection: bit reduction, overdrive, sample-rate redux, random drop-outs, ring modulation and random freezes.", p:["BR","OVER","SRR","DROP","RATE","DEP","FREZ","F.TIM"]},
+    {n:"Gritshaper", s:"fx", f:"dest", d:"Drive into a rectifier, with noise ring-modulated against the distorted signal. HPF is bipolar and chooses where the filter sits — before the drive, or after the rectifier.", p:["DRV","RECT","HPF","LPF","NOIS","N.FRQ","N.RES","MIX"]},
+    {n:"Fold Filter", s:"fx", f:"filt", d:"High-pass, then a wavefolder, then a morphing multimode filter, then distortion. Adds overtones rather than removing them.", p:["ILEV","HP","FOLD","OLEV","FREQ","RESO","TYPE","DIST"]},
+    {n:"Filterbank", s:"fx", f:"filt", d:"Eight fixed bands — a low-pass at 90 Hz, six band-passes, a high-pass at 4 kHz — each with its own gain.", p:["90Hz","122Hz","225Hz","418Hz","777Hz","1k4","2k7","4k+"]},
+    {n:"Spectrum Bender", s:"fx", f:"pitch", d:"A true single-sideband frequency shifter, not a pitch shifter, so intervals go inharmonic. SBND blends the two sidebands.", p:["SPD","DEP","SPH","LAG","SHFT","SPRD","SBND","MIX"]},
+    {n:"Endless Flanger", s:"fx", f:"mod", d:"Barber-pole motion: three crossfaded taps, so the sweep appears to rise or fall forever without ever turning around. SPD at centre holds still.", p:["SPD","DEP","TUNE","FDBK","LPF"]},
+    {n:"Low-Pass Filter", s:"fx", f:"filt", d:"Four poles, 24 dB per octave, with a tempo-synced LFO and stereo spread offsetting cutoff between the channels.", p:["SPD","DEP","SPH","LAG","FREQ","RESO","SPRD"]},
+    {n:"Multimode Filter", s:"fx", f:"filt", d:"Morphs low-pass to band-pass to high-pass, with an ADSR envelope modulating cutoff by a bipolar depth.", p:["ATK","DEC","SUS","REL","FREQ","RESO","TYPE","ENV"]},
+    {n:"Wide Chorus", s:"fx", f:"mod", d:"Three-voice chorus for widening, with a high-pass on the input and a stereo width control.", p:["DEP","SPD","HPF","WDTH","MIX"]},
+    {n:"Phase Array", s:"fx", f:"mod", d:"Six allpass stages; STG blends the tap after four with the tap after six. SHP morphs the LFO from a falling ramp through triangle to a rising one.", p:["SPD","DEP","SHP","LAG","FREQ","FDBK","STG","MIX"]},
+    {n:"Roomtone Reverb", s:"fx", f:"space", d:"Large-space voicing with an explicit early-reflection bank in front of the tank.", p:["PRE","EARLY","DAMP","SIZE","LOWC","HIGHC"]},
+    {n:"Drive Delay", s:"fx", f:"delay", d:"Delay on a 128th-note grid with ping-pong, and saturation in the feedback path so repeats degrade as they decay.", p:["TIME","PPONG","WID","FDBK","HPF","LPF","MIX"]},
+    {n:"Iron Room Reverb", s:"fx", f:"space", d:"Plate character: heavy input diffusion, a bright tank, deliberately wide parameter ranges.", p:["SIZE","FDBK","BRIT","PRE","WDTH","DIFF","LOWC","MIX"]},
+    {n:"Voidspace Reverb", s:"fx", f:"space", d:"Room to huge. FREQ and GAIN form a feedback shelving filter — at full GAIN the treble stays in the tail, lowering it damps progressively.", p:["PRE","DEC","FREQ","GAIN","HPF","LPF","MIX"]},
+    {n:"Flutter", s:"fx", f:"tape", d:"Tape wobble with a band-shaped signal and added noise. SPEED at zero makes the modulator a random walk. The noise deliberately sits outside the mix law.", p:["SPEED","DEPTH","BASE","WIDTH","N.LEV","N.HPF","STEREO","MIX"]},
+    {n:"Granulator", s:"src", f:"gran", d:"Granulates the last two seconds of live input. POS is where in that buffer grains start, SCAN moves that point and wraps, SPRD scatters it, SIZE is grain length and AMNT how many sound at once. With a sample loaded the grains read THAT instead of the live input, which is what makes it an SRC machine; clear the sample and it granulates the input again. Eight knobs and a fixed Hann window, rather than the three pages of grain controls a dedicated granulator would give you.", p:["TUNE","DENS","SIZE","POS","SCAN","SPRD","AMNT","MIX"]},
+    {n:"One Shot", s:"src", f:"src", d:"One shot of the loaded sample per trig. TUNE is \u00b1two octaves, STRT and LEN scan a window into the sample, LOOP holds that window instead of stopping at its end, ATK and DEC shape an AD envelope, LEV and PAN place the result. Like every machine in the source family it REPLACES its input rather than processing it, which is what lets Work originate audio. Silent until a sample is loaded.", p:["TUNE","STRT","LEN","LOOP","ATK","DEC","LEV","PAN"]},
+    {n:"Polysample", s:"src", f:"src", d:"Eight-voice polyphonic playback of the loaded sample, pitched by incoming notes with note 60 as unity. VIBR, SPD and FADE are the documented vibrato: depth, speed, and the time it takes to fade in. Work has one sample buffer, so every note plays that one sample transposed &mdash; the polyphony and the vibrato are real, multi-sampled instruments are not on offer.", p:["TUNE","VIBR","SPD","FADE","STRT","LEN","LEV","PAN"]},
+    {n:"Slicer", s:"src", f:"src", d:"Windowed sample playback with a separate loop point: MODE chooses forward, reverse, forward loop or reverse loop, STRT and LEN set the window, and L.ST is the point a loop returns to. Reverse and a separate loop point are both things One Shot cannot do. What it is not is a multitrack sampler \u2014 one buffer, one window, no per-slice tracks of its own.", p:["TUNE","MODE","STRT","LEN","L.ST","ATK","DEC","LEV"]},
+    {n:"Wavescan", s:"src", f:"src", d:"Two wavetable oscillators blended together, with POS selecting the wave, ANIM an internal modulator that animates it (eleven envelope and LFO shapes), A.POS its depth, SPD its rate and DTUN the detune between the two. Movement through the table is interpolated, which is what makes it wavetable synthesis rather than switching. There is no wavetable library here: the loaded SAMPLE is the wavetable, read as a series of 2048-frame waves.", p:["TUNE","POS","A.POS","ANIM","SPD","DTUN","LEV","MIX"]},
+    {n:"Tilt", s:"fx", f:"filt", d:"A low shelf and a high shelf, each with frequency and gain, where 64 turns the shelf into a full pass. It makes no sound of its own \u2014 it shapes what is on the bus, which is exactly what an insert slot is. WDTH is mid/side width and DRV a little saturation.", p:["LO.G","LO.F","HI.F","HI.G","WDTH","DRV","LEV","MIX"]}
   ];
 
   /* ---------------- machine reference ---------------- */
@@ -670,9 +689,11 @@ footer a{color:var(--rust)}
     var params = m.p.length
       ? '<ul class="params">' + m.p.map(function(p){ return "<li>"+p+"</li>"; }).join("") + "</ul>"
       : '<ul class="params"><li>no parameters</li></ul>';
+    var STAGE_LABEL = {src:"source stage", fx:"either insert", both:"any stage"};
     el.innerHTML =
       '<h3><span class="idx">'+String(i).padStart(2,"0")+'</span>'+m.n+'</h3>' +
       '<span class="fam" style="color:var('+fam.css+')">'+fam.name+'</span>' +
+      '<span class="stage">loads in: '+STAGE_LABEL[m.s]+'</span>' +
       "<p>"+m.d+"</p>" + params;
     list.appendChild(el);
   });
@@ -812,10 +833,11 @@ footer a{color:var(--rust)}
   /* pads 68-99, drawn rows 1-4 from the TOP: 92-99, 84-91, 76-83, 68-75.
    *
    * Rows 1-3 are the machine palette, minus the three pads that carry undo,
-   * memorize and song. That leaves 21 slots for 26 machines, which is why
-   * SHIFT reaches an upper bank — five machines, including every sample
-   * player, are ONLY reachable that way. Hold the Shift toggle below to see
-   * what the surface becomes. */
+   * memorize and song. That leaves 21 pads — and the palette now shows the
+   * FOCUSED STAGE's family rather than the whole list, so 21 effects fit
+   * outright and the six sources fit with room to spare. There is no longer a
+   * SHIFT bank: pick a stage below to see its palette, and hold Shift to see
+   * what row 4 becomes. */
   var PALETTE_ORDER = [92,93,94,95,96,97,98,99, 84,85,86,87,88,89,90,91,
                        76,77,78,79,80];
 
@@ -826,7 +848,7 @@ footer a{color:var(--rust)}
     83:{t:"SONG",  d:"Song mode on and off — chains patterns with repeats."},
     68:{t:"PLAY",  d:"Start and stop the sequencer."},
     69:{t:"FILL",  d:"Fill. Tap to latch, hold for momentary. Gates the FILL and !FIL conditions."},
-    70:{t:"SLOT",  d:"Focus FX slot 1 or 2 — the palette and the knobs follow it."},
+    70:{t:"STAGE", d:"Cycle the focused stage — SRC, FX 1, FX 2. The palette and the knobs both follow it, so the pads only ever offer machines the focused stage will take."},
     71:{t:"PAGE",  d:"Cycle the pattern page, sixteen steps at a time, up to 64."},
     72:{t:"EDIT",  d:"Cycle the knob page: FX, LFO 1-3, Mod Env, Global."},
     73:{t:"COPY",  d:"Copy the visible pattern page."},
@@ -847,6 +869,19 @@ footer a{color:var(--rust)}
     81:{t:"REDO",  d:"Redo the edit you just undid."}
   };
 
+  /* The two families, derived from the per-machine stage tags above rather
+     than listed again here. test/site_matches_engine.mjs checks those tags
+     against the families the engine actually serves. */
+  var SRC_CODES = [], FX_CODES = [];
+  MACHINES.forEach(function(m, i){
+    if (m.s === "src" || m.s === "both") SRC_CODES.push(i);
+    if (m.s === "fx"  || m.s === "both") FX_CODES.push(i);
+  });
+  var STAGES = [{name:"SRC",  codes:SRC_CODES},
+                {name:"FX 1", codes:FX_CODES},
+                {name:"FX 2", codes:FX_CODES}];
+  var stageView = 0;
+
   var padsEl = document.getElementById("mapPads");
   var padInfo = document.getElementById("padInfo");
   var ROWS = [[92,99],[84,91],[76,83],[68,75]];
@@ -856,11 +891,12 @@ footer a{color:var(--rust)}
     var pi = PALETTE_ORDER.indexOf(n);
     var table = shiftView ? SHIFTED : SPECIAL;
 
-    /* SHIFT moves the palette to the upper bank */
+    /* The palette is the focused stage's family. Shift does not move it —
+       there is no second bank to move it to. */
     if (pi >= 0){
-      var idx = pi + (shiftView ? PALETTE_ORDER.length : 0);
-      if (idx < MACHINES.length){
-        var m = MACHINES[idx];
+      var stage = STAGES[stageView];
+      if (pi < stage.codes.length){
+        var m = MACHINES[stage.codes[pi]];
         return {
           /* Shorten to fit a pad. Only ever SHORTENS — a rule that rewrites one
              machine's name into another's put the retired names back on this
@@ -868,13 +904,16 @@ footer a{color:var(--rust)}
              test/site_matches_engine.mjs now checks for them. */
           label: m.n.replace("Low-Pass Filter","LPF").replace(" Reverb","")
                     .replace("Multimode","Multi").replace(" Filter"," Flt"),
-          desc: "<b>Palette — " + m.n + "</b>. " +
-                (shiftView ? "Hold Shift and tap" : "Tap") +
-                " to load it into the focused slot. " + m.d,
-          color: "var(" + FAM[m.f].css + ")"
+          desc: "<b>Palette — " + m.n + "</b>. Tap to load it into " +
+                stage.name + ". " + m.d,
+          color: "var(" + FAM[m.f].css + ")",
+          dim: shiftView
         };
       }
-      if (shiftView) return {label:"—", desc:"Nothing here — the machine list ends before this pad."};
+      return {label:"—", desc:"Dark. The " + stage.name + " palette ends here — " +
+              "this stage takes " + stage.codes.length + " machines, and a pad " +
+              "past the end of a family does nothing rather than offering " +
+              "something the stage would refuse."};
     }
     if (table[n]) return {label: table[n].t, desc: "<b>" + table[n].t + "</b>. " + table[n].d, special:true};
     if (!shiftView && SPECIAL[n]) return {label: SPECIAL[n].t, desc: "<b>" + SPECIAL[n].t + "</b>. " + SPECIAL[n].d, special:true};
@@ -890,7 +929,11 @@ footer a{color:var(--rust)}
         var b = document.createElement("button");
         b.type = "button";
         b.className = "pad";
-        if (info.color){ b.style.borderColor = info.color; b.style.borderWidth = "2.5px"; }
+        if (info.color){
+          b.style.borderColor = info.color;
+          b.style.borderWidth = "2.5px";
+          if (info.dim) b.style.opacity = ".45";
+        }
         else if (info.special){
           b.style.borderColor = "var(--rust)";
           b.style.borderWidth = "2.5px";
@@ -908,12 +951,24 @@ footer a{color:var(--rust)}
     });
   }
 
+  var stageBtns = document.querySelectorAll(".stagebtn");
+  Array.prototype.forEach.call(stageBtns, function(btn){
+    btn.addEventListener("click", function(){
+      stageView = parseInt(btn.getAttribute("data-stage"), 10);
+      Array.prototype.forEach.call(stageBtns, function(b){
+        b.setAttribute("aria-pressed",
+          b.getAttribute("data-stage") === btn.getAttribute("data-stage") ? "true" : "false");
+      });
+      drawPads();
+    });
+  });
+
   var shiftBtn = document.getElementById("shiftToggle");
   if (shiftBtn){
     shiftBtn.addEventListener("click", function(){
       shiftView = !shiftView;
       shiftBtn.setAttribute("aria-pressed", shiftView ? "true" : "false");
-      shiftBtn.textContent = shiftView ? "SHIFT held — showing the upper bank"
+      shiftBtn.textContent = shiftView ? "SHIFT held — row 4 is the mode row"
                                        : "Hold SHIFT";
       drawPads();
     });

@@ -4,13 +4,14 @@
     {
       "title": "What it is",
       "lines": [
-        "Three insert FX",
-        "slots in series,",
-        "each loaded with",
-        "one of 26 machines.",
-        "Three FX LFOs can",
-        "modulate any slot",
-        "parameter."
+        "A source stage and",
+        "two insert FX in",
+        "series. 6 sources",
+        "load in SRC, 21",
+        "effects in FX 1 or",
+        "FX 2. Three LFOs",
+        "modulate any of",
+        "their parameters."
       ]
     },
     {
@@ -29,11 +30,11 @@
     {
       "title": "Pages",
       "lines": [
-        "MACHINES picks the",
-        "two machines and",
+        "MACHINES picks all",
+        "three machines and",
         "the global dry/wet.",
-        "FX 1 and FX 2 edit",
-        "8 params each.",
+        "SRC, FX 1 and FX 2",
+        "edit 8 params each.",
         "LFO 1 and LFO 2",
         "modulate them."
       ]

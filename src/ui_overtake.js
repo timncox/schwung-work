@@ -174,7 +174,7 @@ const MACHINE_COLOR = [
     White,         /* 22 Polysample      source */
     White,         /* 23 Slicer         source */
     YellowGreen,   /* 24 Wavescan        source, wavetable */
-    Blue           /* 25 Shape             not a source — shelving EQ */
+    Blue           /* 25 Tilt              an effect — shelving EQ    */
 ];
 
 

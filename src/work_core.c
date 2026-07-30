@@ -283,7 +283,7 @@ typedef struct {
     float  wf_anim[2];
     float  wf_sh[2];             /* sample-and-hold value per oscillator  */
 
-    /* Shape: shelving filter state, two channels each. TWO poles per band,
+    /* Tilt: shelving filter state, two channels each. TWO poles per band,
      * one pole per band: `in - low` is an exact complementary highpass only for a
      * single pole, and cascading a second one breaks the null. See m_shape. */
     float  sh_lo[2], sh_hi[2];
@@ -2239,17 +2239,18 @@ static float shelf_gain(uint8_t v) {
     return t * t;                          /* -12 dB at t = 0.5, silence at 0 */
 }
 
-/* ------------------------------------------------------------------ Shape
+/* ------------------------------------------------------------------- Tilt
  *
- * The manual is explicit that Shape "does not produce any sound, but instead
- * helps to shape the sound on the Bus and Send FX tracks" — a low shelf and a
- * high shelf, each with a frequency and a gain, where 64 turns the shelf into
- * a full high-pass or low-pass response.
+ * A low shelf and a high shelf, each with a frequency and a gain, where 64
+ * turns the shelf into a full high-pass or low-pass response. It produces no
+ * sound of its own — it shapes what is already on the bus.
  *
- * That maps onto Work exactly, because a Work slot IS a bus insert. This is
- * the only new machine that needs no adaptation at all. The remaining knobs
- * carry stereo width, a little drive, level and mix, which the manual's Shape
- * has on its AMP page.
+ * That maps onto Work exactly, because a Work insert IS a bus insert: the one
+ * machine here that needed no adaptation at all. The remaining knobs carry
+ * stereo width, a little drive, level and mix.
+ *
+ * It is an EFFECT, not a source: it has nothing to play. See
+ * machine_in_src_family.
  */
 static void m_shape(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
@@ -3000,6 +3001,24 @@ void work_process(work_t *w, const int16_t *in, int16_t *out, int frames) {
  * Values write through work_set_param, so a CC move records a parameter lock
  * when live record is armed exactly like a knob move does.
  */
+/* Pick a machine for `stage` from a controller value, scaled across that
+ * stage's FAMILY rather than across the whole machine list.
+ *
+ * Scaling across the list looks equivalent and is not: work_set_param refuses a
+ * machine the stage does not accept, so every refused code becomes a dead spot
+ * in the controller's travel. On the source stage that is 21 positions out of
+ * 26 — five sixths of the knob doing nothing — which reads as broken hardware
+ * rather than as a rule being enforced. `range` is the controller's full-scale
+ * value: 127 for CC, 16383 for NRPN. */
+static int family_pick(int stage, long value, long range) {
+    int fam[WORK_FX_COUNT], n = 0;
+    for (int mc = 0; mc < WORK_FX_COUNT; ++mc)
+        if (work_machine_fits_stage(stage, mc)) fam[n++] = mc;
+    if (n <= 0) return WORK_FX_BYPASS;
+    long i = (value * (n - 1) + range / 2) / range;
+    return fam[iclamp((int)i, 0, n - 1)];
+}
+
 /* NRPN parameter numbers mirror the CC map, so CC 8 and NRPN 8 reach the same
  * place — one map to learn, two resolutions. */
 static void nrpn_apply(work_t *w, int num, int value14) {
@@ -3016,7 +3035,8 @@ static void nrpn_apply(work_t *w, int num, int value14) {
     if (num == 24 || num == 25) {
         snprintf(key, sizeof(key), "machine%d", num - 23);
         /* full range from 14 bits — the whole reason NRPN exists here */
-        snprintf(val, sizeof(val), "%d", (value14 * (WORK_FX_COUNT - 1)) / 16383);
+        snprintf(val, sizeof(val), "%d",
+                 family_pick(num - 23, value14, 16383));
         work_set_param(w, key, val);
         return;
     }
@@ -3033,7 +3053,8 @@ static void nrpn_apply(work_t *w, int num, int value14) {
         return;
     }
     if (num == 88) {
-        snprintf(val, sizeof(val), "%d", (value14 * (WORK_FX_COUNT - 1)) / 16383);
+        snprintf(val, sizeof(val), "%d",
+                 family_pick(WORK_STAGE_SRC, value14, 16383));
         work_set_param(w, "src", val);
         return;
     }
@@ -3063,7 +3084,7 @@ static void cc_apply(work_t *w, int cc, int v) {
     }
     if (cc == 24 || cc == 25) {                   /* machine select, scaled */
         snprintf(key, sizeof(key), "machine%d", cc - 23);
-        snprintf(val, sizeof(val), "%d", (v * (WORK_FX_COUNT - 1) + 63) / 127);
+        snprintf(val, sizeof(val), "%d", family_pick(cc - 23, v, 127));
         work_set_param(w, key, val);
         return;
     }
@@ -3081,7 +3102,7 @@ static void cc_apply(work_t *w, int cc, int v) {
         return;
     }
     if (cc == 88) {
-        snprintf(val, sizeof(val), "%d", (v * (WORK_FX_COUNT - 1) + 63) / 127);
+        snprintf(val, sizeof(val), "%d", family_pick(WORK_STAGE_SRC, v, 127));
         work_set_param(w, "src", val);
         return;
     }

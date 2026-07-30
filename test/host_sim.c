@@ -31,6 +31,15 @@ static int tests_failed;
     }                                                                       \
 } while (0)
 
+/* CHECK inside a tight sweep: counts like CHECK but reports only the first
+   failure, so a broken mapping does not print 128 identical lines. */
+static int quiet_fired = 0;
+#define CHECK_QUIET(cond, ...) do { \
+    if (!(cond)) { if (!quiet_fired++) CHECK(cond, __VA_ARGS__); \
+                   else { tests_run++; tests_failed++; } } \
+    else { tests_run++; } \
+} while (0)
+
 static float sim_bpm(void) { return 120.0f; }
 
 static host_api_v1_t host = {
@@ -1353,11 +1362,60 @@ static void test_midi_cc(void) {
     work_get_param(w, "fx2_p8", s, sizeof(s));
     CHECK(atoi(s) == 64, "CC 23 did not set fx2_p8 (%s)", s);
 
-    uint8_t ccm[3] = {0xB0, 24, 127};            /* machine select, scaled */
+    /* A machine select sweeps its stage's FAMILY, not the whole machine list.
+     * Both ends must land on real machines, and — the part that would
+     * otherwise rot silently — EVERY controller position must select something
+     * the stage actually accepts. Scaling across all 26 codes instead leaves
+     * dead spots wherever the stage refuses one: 21 of 26 positions on the
+     * source stage, which on hardware reads as a broken knob. */
+    uint8_t ccm[3] = {0xB0, 24, 127};            /* insert 1 machine select */
     work_on_midi(w, ccm, 3, MOVE_MIDI_SOURCE_EXTERNAL);
     work_get_param(w, "fx1", s, sizeof(s));
-    CHECK(atoi(s) == WORK_FX_COUNT - 1,
-          "CC 24 at 127 should select the last machine, got %s", s);
+    CHECK(atoi(s) == WORK_FX_TILT,
+          "CC 24 at 127 should select the last EFFECT, got %s", s);
+
+    for (int stage = 0; stage < WORK_STAGES; ++stage) {
+        const int ctrl = stage == WORK_STAGE_SRC ? 88 : 23 + stage;
+
+        /* Sweep the controller and count how many positions land on each
+         * machine. Checking only that the RESULT is in-family proves nothing:
+         * a refused write leaves the stage at its default, and the default is
+         * in-family too. The observable damage is the DISTRIBUTION — with
+         * whole-list scaling most of the travel refuses and sticks on Bypass,
+         * so one machine claims the majority of the knob. */
+        int hits[WORK_FX_COUNT] = {0}, family = 0;
+        for (int mc = 0; mc < WORK_FX_COUNT; ++mc)
+            if (work_machine_fits_stage(stage, mc)) family++;
+
+        for (int v = 0; v <= 127; ++v) {
+            work_t *m = work_create(&host);
+            uint8_t msg[3] = {0xB0, (uint8_t)ctrl, (uint8_t)v};
+            work_on_midi(m, msg, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+            char got[16];
+            work_get_param(m, STAGE_KEY[stage], got, sizeof(got));
+            int mc = atoi(got);
+            CHECK_QUIET(work_machine_fits_stage(stage, mc),
+                        "CC %d at %d selected %d, which stage %d refuses",
+                        ctrl, v, mc, stage);
+            hits[mc]++;
+            work_destroy(m);
+        }
+
+        int worst = 0, worst_mc = 0, reached = 0;
+        for (int mc = 0; mc < WORK_FX_COUNT; ++mc) {
+            if (hits[mc]) reached++;
+            if (hits[mc] > worst) { worst = hits[mc]; worst_mc = mc; }
+        }
+        const int share = 2 * (128 + family - 1) / family;   /* twice its fair share */
+        CHECK(worst <= share,
+              "CC %d: %s claims %d of 128 positions (fair share is about %d) — "
+              "the sweep is not crossing stage %d's family, it is stalling on "
+              "the machines the stage refuses",
+              ctrl, work_machine_name(worst_mc), worst, 128 / family, stage);
+        CHECK(reached == family,
+              "CC %d reached %d of stage %d's %d machines",
+              ctrl, reached, stage, family);
+    }
 
     uint8_t ccr[3] = {0xB0, 66, 127};            /* live record on */
     work_on_midi(w, ccr, 3, MOVE_MIDI_SOURCE_EXTERNAL);
@@ -2354,7 +2412,7 @@ static void test_wavefinder_needs_a_wavetable(void) {
 }
 
 static void test_shape_shelves(void) {
-    printf("Shape boosts and cuts its shelves, and is flat in the middle\n");
+    printf("Tilt boosts and cuts its shelves, and is flat in the middle\n");
     work_t *w = work_create(&host);
     work_set_param(w, "machine1", "25");
     work_set_param(w, "fx2", "0");
@@ -2366,14 +2424,14 @@ static void test_shape_shelves(void) {
     work_set_param(w, "fx1_p4", "64");     /* HI.G flat */
     work_set_param(w, "fx1_p5", "64");     /* WDTH unity */
 
-    /* Shape makes no sound of its own — the manual says so explicitly. */
+    /* Tilt makes no sound of its own: it shapes what is already there. */
     int16_t quiet[BLOCK * 2] = {0}, out[BLOCK * 2];
     int64_t self = 0;
     for (int b = 0; b < 10; ++b) {
         work_process(w, quiet, out, BLOCK);
         for (int i = 0; i < BLOCK * 2; ++i) self += llabs(out[i]);
     }
-    CHECK(self == 0, "Shape generated sound from silence (%lld)", (long long)self);
+    CHECK(self == 0, "Tilt generated sound from silence (%lld)", (long long)self);
 
     /* Low shelf boost must raise a low tone more than a cut does.
      *

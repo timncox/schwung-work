@@ -1,9 +1,15 @@
 # Work
 
-**Twenty-six machines for the Ableton Move** — twenty-one effects and five
-sample sources — as a [Schwung](https://github.com/charlesvestal/schwung)
-module. Three insert slots in series, each loaded with one machine, plus three FX
-LFOs and a modulation envelope that can modulate any slot parameter.
+**Twenty-six machines for the Ableton Move** — twenty-one effects and six
+sources — as a [Schwung](https://github.com/charlesvestal/schwung) module.
+A **source stage** followed by **two insert FX**, in series, each holding one
+machine, plus three FX LFOs and a modulation envelope that can modulate any of
+their parameters.
+
+Loading a sampler costs you no insert: sources have their own stage. Each stage
+only accepts machines from its own family and says so rather than substituting
+something near enough, so the pads only ever offer what the focused stage will
+actually take.
 
 > Clean-room: every machine is an original DSP implementation, written from
 > published descriptions of the effect it is named for — documented parameter
@@ -68,7 +74,7 @@ rather than an approximation:
 That last row is the whole point. The gesture survives intact.
 
 In Overwork the 32 pads are free for what a hardware sequencer spends menus on:
-rows 1–3 are a machine palette (tap to load one into the focused slot), and row 4 is
+rows 1–3 are a machine palette for the focused stage (tap to load one), and row 4 is
 transport, pattern pages, copy/paste and clear — with Shift turning its last
 four into the step-attribute modes.
 
@@ -107,9 +113,9 @@ Deployed to hardware, but **nothing has been verified by ear yet**.
 2. ~~**Overwork** — the `overtake` build: step buttons as trig keys, machine
    palette, hold-step-and-turn parameter locks, trig conditions, micro-timing.~~ done
 3. ~~**Presets**, three distinct reverb algorithms, and **Granulator**.~~ done (v0.2.0)
-4. **The remaining SRC machines** — Single/Polysample, Slicer, Wavescan,
-   Shape. Gated on sample loading: the DSP has no filesystem access, so samples
-   must arrive through the UI in chunks under the 16 KB `set_param` ceiling.
+4. ~~**The remaining source machines** — Polysample, Slicer, Wavescan.~~ done
+   (v0.7.0). Sample loading goes through the UI in chunks, because the DSP has
+   no filesystem access and `set_param` has a 16 KB ceiling.
 
 ## Siblings
 

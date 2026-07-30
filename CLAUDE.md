@@ -5,10 +5,10 @@ last_touched: 2026-07-29
 
 # Work
 
-Schwung module for the Ableton Move: **twenty-six machines in three insert
-slots** — twenty-one effects and five sample sources — inspired by the FX
-section of the Elektron Tonverk. Three FX LFOs and a modulation envelope
-modulate any slot parameter.
+Schwung module for the Ableton Move: **twenty-six machines in a source stage
+and two insert FX** — twenty-one effects and six sources — inspired by the
+Elektron Tonverk's per-track shape. Three FX LFOs and a modulation envelope
+modulate any stage parameter.
 
 ## Clean-room statement — read before touching the DSP
 
@@ -41,11 +41,30 @@ Practical consequences:
 ## Architecture
 
 The reference device is 8 encoders per page and Move has 8 knobs, so parameter
-pages map 1:1. Three insert slots in series, each holding one machine with up
-to 8 parameters — that is what this engine models.
+pages map 1:1. Three stages in series — a SOURCE stage then two INSERT FX —
+each holding one machine with up to 8 parameters. That is the reference
+device's per-track shape, and it is what this engine models.
+
+A stage only accepts machines from its own family, and refuses the rest rather
+than substituting something near enough:
+
+- **sources** (6): Bypass, Granulator, One Shot, Polysample, Slicer, Wavescan
+- **effects** (21): Bypass and everything else, including Tilt
+
+The families are NOT complements. Granulator is a source because that is where
+a player looks for it, but it still reads its input when no sample is loaded,
+which is what makes live granulation work from the source stage. Bypass is in
+both, because every stage needs a way to be empty.
+
+**21 effects against 21 free palette pads is exact.** Adding an effect without
+freeing a pad puts it out of reach of the Move's surface entirely; that has
+happened twice. `test_every_machine_is_reachable_from_the_palette` in
+`test/ui_overtake.mjs` is the guard.
+
+Growing this further means growing TRACKS, not stages — see DESIGN-8TRACK.md.
 
 ```
-src/work_core.{c,h}   the engine: 21 machines, 2 slots, 2 FX LFOs, sequencer
+src/work_core.{c,h}   the engine: 26 machines, 3 stages, 3 FX LFOs, sequencer
 src/work_fx.c         audio_fx_api_v2 wrapper  -> work.so
 src/work_overtake.c   plugin_api_v2 wrapper    -> dsp.so (reads audio-in)
 src/ui_chain.js       Signal Chain slot editor UI
@@ -75,8 +94,10 @@ build behaves as a plain static chain until something turns it on; the overtake
 wrapper turns it on at create.
 
 - 64 steps (four 16-step pages), per-step trig / condition / micro-timing / retrig.
-- **19 lockable parameters**: 16 slot parameters, both machine selects, global mix.
-  The lock index is part of the pattern format — **append only**.
+- **28 lockable parameters**: 24 stage parameters, all three machine selects,
+  global mix. The lock index is part of the pattern format — **append only**.
+  A machine lock goes through the same family gate as any other machine write,
+  so a lock cannot put a reverb in the source stage.
 - Resolution order per block is **base → locks → FX LFOs**, which is Elektron's:
   a lock sets the value, the LFO moves around whatever the lock set.
 - **Lock semantics:** each firing trig is a complete snapshot — parameters it
@@ -113,11 +134,16 @@ renumbers every saved preset.
 | | | 22 | Polysample |
 | | | 23 | Slicer |
 | | | 24 | Wavescan |
-| | | 25 | Shape |
+| | | 25 | Tilt |
 
 Knob labels live in `PARAM_NAME[][]` in `work_core.c` and are served to the UI
-via `get_param("labels1"/"labels2")`. **The UI must never keep its own copy** —
-a second table is a table that drifts.
+via `get_param("labels_src"/"labels1"/"labels2")` — the source stage spells its
+suffix `_src` and the inserts use their number, and every stage-addressed key
+follows that convention (`eff_src`/`eff1`, `src_p1`/`fx1_p1`, `fp_src`/`fp1`).
+**The UI must never keep its own copy** — a second table is a table that drifts.
+The same goes for the FAMILIES: the engine serves them at `src_codes` and
+`fx_codes`, and both UIs and the manual site read them rather than listing
+membership locally.
 
 ## Conventions inherited from the sibling modules
 
@@ -253,7 +279,7 @@ make arm         # Docker cross-compile + both tarballs (no hardware touched)
 `make test` runs three suites. The engine simulator covers bypass transparency,
 every machine bounded at min/default/max parameters, the global mix law, state
 round-trip, short-buffer `get_param` canaries, compressor gain reduction,
-machine-change state reset, FX LFO modulation, two-slot series routing, MIDI
+machine-change state reset, FX LFO modulation, stage series routing, MIDI
 clock/note handling, and the whole sequencer — lock apply/revert, every trig
 condition, machine locks, micro-timing, a full 64-step round trip, and transport
 restart. The UI harness covers the parameter-lock gesture, lock nudging, trig
@@ -278,7 +304,7 @@ mock cannot quietly become too forgiving to catch the bug that broke Mono.
   param channel, and **One Shot firing from a sequencer trig**. Audio out
   of the Move.
 
-**Still NOT verified by ear:** Polysample, Slicer, Wavescan and Shape;
+**Still NOT verified by ear:** Polysample, Slicer, Wavescan and Tilt;
 polyphony and voice stealing; note-to-pitch tracking; anything about how the
 machines actually SOUND as opposed to producing signal.
 
@@ -323,7 +349,7 @@ trig conditions, micro-timing, retrig, pattern pages, copy/paste.
 Phase 3 (**machines done**, v0.7.0) — the SRC machines.
 
 All six now exist: **One Shot**, **Polysample**, **Slicer**,
-**Granulator** (reading the loaded sample), **Wavescan** and **Shape**, on top of
+**Granulator** (reading the loaded sample), **Wavescan** and **Tilt**, on top of
 the sample memory and transfer below. Twenty-six machines total.
 
 Three needed adaptation, and the docs say so rather than letting the names
@@ -336,14 +362,18 @@ imply otherwise:
 - **Slicer** implements the documented PLAYBACK set — play mode (forward,
   reverse, and both loops), STRT, LEN, L.ST. Its defining feature, eight
   samples on eight sequencer subtracks plus a supertrack, is NOT here and
-  cannot be: Work is a two-slot FX chain, not an eight-track sampler. Reverse
+  cannot be: Work is one source stage and two inserts, not an eight-track
+  sampler. Reverse
   and a separate loop point still make it a real gain over One Shot.
 - **Wavescan** has no SD card and no 127-slot wavetable store, so the loaded
   sample IS the wavetable, read as a series of 2048-frame waves with POS
   interpolating across them. SLOT is replaced by MIX.
 
-**Shape** needed no adaptation at all — a Work slot IS a bus insert, which is
-exactly where the manual says Shape belongs.
+**Tilt** needed no adaptation at all — a Work insert IS a bus insert, which is
+exactly where the manual says its counterpart belongs. It is an EFFECT, not a
+source: it makes no sound of its own, so it loads in an insert. The manual site
+had it tagged a source for a while, and nothing caught that until the families
+became real.
 
 The constraint that shaped the whole design: `work_set_param` runs on the
 SHIM'S AUDIO THREAD — `shim_handle_param_bulk` says so in its own comment
