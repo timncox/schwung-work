@@ -138,10 +138,15 @@ int main(void) {
     for (int i = 0; i < WORK_SONG_ROWS; ++i) {
         snprintf(key, sizeof(key), "song_row%d", i); emit(w, key);
     }
-    for (int n = 1; n <= WORK_LFOS; ++n) {
+    /* Keyed by FAMILY — vlfo1..2, flfo1..2 — because a destination means
+     * different things in each. */
+    emit(w, "lfo_dests");
+    for (int n = 0; n < WORK_LFOS; ++n) {
         const char *f[] = {"dest", "spd", "mult", "wave", "depth", "phase", "trig"};
+        const char *fam = work_lfo_is_voice(n) ? "v" : "f";
+        const int   num = work_lfo_is_voice(n) ? n + 1 : n - WORK_VOICE_LFOS + 1;
         for (size_t i = 0; i < sizeof(f) / sizeof(f[0]); ++i) {
-            snprintf(key, sizeof(key), "lfo%d_%s", n, f[i]);
+            snprintf(key, sizeof(key), "%slfo%d_%s", fam, num, f[i]);
             emit(w, key);
         }
     }
@@ -179,12 +184,14 @@ int main(void) {
          * UI. That happened — the chain editor's MULT and SPH knobs were
          * reported as writing keys the engine does not accept, when in fact
          * they were simply never probed. */
-        {"lfo1_dest", "4"}, {"lfo1_spd", "99"}, {"lfo1_wave", "3"},
-        {"lfo1_mult", "5"}, {"lfo1_phase", "33"}, {"lfo1_depth", "77"}, {"lfo1_trig", "1"},
-        {"lfo2_dest", "9"}, {"lfo2_spd", "88"}, {"lfo2_wave", "2"},
-        {"lfo2_mult", "6"}, {"lfo2_phase", "44"}, {"lfo2_depth", "20"}, {"lfo2_trig", "1"},
-        {"lfo3_dest", "6"}, {"lfo3_spd", "70"}, {"lfo3_wave", "4"},
-        {"lfo3_mult", "7"}, {"lfo3_phase", "22"}, {"lfo3_depth", "55"}, {"lfo3_trig", "1"},
+        {"vlfo1_dest", "4"}, {"vlfo1_spd", "99"}, {"vlfo1_wave", "3"},
+        {"vlfo1_mult", "5"}, {"vlfo1_phase", "33"}, {"vlfo1_depth", "77"}, {"vlfo1_trig", "1"},
+        {"vlfo2_dest", "9"}, {"vlfo2_spd", "88"}, {"vlfo2_wave", "2"},
+        {"vlfo2_mult", "6"}, {"vlfo2_phase", "44"}, {"vlfo2_depth", "20"}, {"vlfo2_trig", "1"},
+        {"flfo1_dest", "6"}, {"flfo1_spd", "70"}, {"flfo1_wave", "4"},
+        {"flfo1_mult", "7"}, {"flfo1_phase", "22"}, {"flfo1_depth", "55"}, {"flfo1_trig", "1"},
+        {"flfo2_dest", "11"}, {"flfo2_spd", "60"}, {"flfo2_wave", "5"},
+        {"flfo2_mult", "8"}, {"flfo2_phase", "11"}, {"flfo2_depth", "40"}, {"flfo2_trig", "1"},
         {"vf_base", "40"}, {"vf_width", "50"}, {"vf_reso", "60"},
         {"vf_env", "70"}, {"vf_atk", "10"}, {"vf_dec", "20"}, {"vf_track", "80"},
         {"live_rec", "1"}, {"menv_dest", "3"}, {"menv_atk", "20"}, {"menv_hold", "30"},

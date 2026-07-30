@@ -593,7 +593,16 @@ footer a{color:var(--rust)}
   <p>Every step carries its own probability, 1&ndash;100, <em>separate</em> from its trig condition &mdash; both gates must pass. Shift + the pattern-page pad selects probability mode, then hold a step and turn the jog.</p>
 
   <h3>Modulation</h3>
-  <p>Three FX LFOs and an AHD modulation envelope that restarts on every firing trig. Resolution order is base &rarr; parameter lock &rarr; envelope &rarr; LFOs, so each stage rides the one before it.</p>
+  <p><strong>Four LFOs in two families</strong>, plus an AHD modulation envelope that restarts on every firing trig. Resolution order is base &rarr; parameter lock &rarr; envelope &rarr; LFOs, so each stage rides the one before it.</p>
+  <table>
+    <caption>The two LFO families</caption>
+    <thead><tr><th scope="col">Family</th><th scope="col">Reaches</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Voice</strong> LFO 1, 2</td><td>the source stage&rsquo;s eight parameters, then the seven voice-filter controls &mdash; 15 destinations</td></tr>
+      <tr><td><strong>FX</strong> LFO 1, 2</td><td>insert 1 A&ndash;H, then insert 2 A&ndash;H &mdash; 16 destinations</td></tr>
+    </tbody>
+  </table>
+  <p>A voice LFO cannot be pointed at an insert, and that is the point rather than a limitation: a single flat destination list would be twice as long to page through on one encoder, and most of it would be somewhere you did not mean. The two ranges both count from zero and mean different things, so the destination readout always names what it found &mdash; <code>SRC C</code>, <code>F.RESO</code>, <code>FX2 A</code>.</p>
 
   <h3>MIDI</h3>
   <p><strong>Track N listens on channel N.</strong> Channel 1 drives track 1, channel 8 drives track 8, and the map below is the same on every one of them &mdash; so eight tracks come off one external sequencer without anything new to learn. A channel above the eighth reaches nothing at all, rather than falling through to whichever track you happen to be looking at.</p>
@@ -605,7 +614,8 @@ footer a{color:var(--rust)}
       <tr><td><code>8&ndash;15</code> / <code>16&ndash;23</code></td><td>FX 1 / FX 2 parameters A&ndash;H</td></tr>
       <tr><td><code>24</code> / <code>25</code> / <code>26</code></td><td>FX 1 machine, FX 2 machine, dry/wet</td></tr>
       <tr><td><code>27</code> / <code>28</code></td><td>track level, track pan</td></tr>
-      <tr><td><code>32</code> / <code>40</code> / <code>48</code></td><td>FX LFO 1 / 2 / 3, seven fields each</td></tr>
+      <tr><td><code>32</code> / <code>40</code></td><td>voice LFO 1 / 2, seven fields each</td></tr>
+      <tr><td><code>48</code> / <code>96</code></td><td>FX LFO 1 / 2, seven fields each</td></tr>
       <tr><td><code>56&ndash;60</code></td><td>modulation envelope</td></tr>
       <tr><td><code>64</code> / <code>65</code> / <code>66</code></td><td>sequencer, fill, live record</td></tr>
       <tr><td><code>80&ndash;87</code> / <code>88</code></td><td>source parameters A&ndash;H, source machine</td></tr>

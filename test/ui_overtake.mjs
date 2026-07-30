@@ -858,20 +858,39 @@ async function testVoiceFilterPageIsReachable() {
                `expected vf_base`);
 }
 
-async function testLfo3AndEnvelopePages() {
-    console.log('the edit pages reach LFO 3 and the modulation envelope');
+/* Every modulator has to be reachable by cycling the edit pages.
+ *
+ * The list is derived from the CONTRACT rather than written out, so adding an
+ * LFO to the engine without giving it a page fails here instead of shipping a
+ * modulator nobody can set. That is the same failure the machine palette has
+ * hit twice — a 21st machine that no pad could reach. */
+async function testEveryModulatorHasAPage() {
+    console.log('the edit pages reach every LFO and the modulation envelope');
     const ctx = await loadUI();
     ctx.host.init();
+
+    const families = [...new Set(
+        Object.keys(contract.get)
+            .filter((k) => /^[vf]lfo\d+_/.test(k))
+            .map((k) => k.slice(0, k.indexOf('_') + 1))
+    )];
+    check(families.length >= 4,
+          `the contract only offers ${families.length} LFOs; expected four`);
+
+    /* Enough passes to visit every page whatever the page count is. */
     const seen = new Set();
-    for (let i = 0; i < 8; i++) {                 /* cycle every edit page */
+    for (let i = 0; i < 16; i++) {
         ctx.writes.length = 0;
         for (let k = 0; k < 8; k++) ctx.host.onMidiMessageInternal(cc(KNOB1 + k, 1));
-        ctx.writes.forEach((x) => seen.add(x.key.replace(/\d+$/, '')));
-        ctx.host.onMidiMessageInternal(noteOn(72));
+        ctx.writes.forEach((x) => seen.add(x.key));
+        ctx.host.onMidiMessageInternal(noteOn(72));   /* EDIT PG */
         ctx.host.onMidiMessageInternal(noteOff(72));
     }
-    check([...seen].some((k) => k.startsWith('lfo3_')),
-          `no LFO 3 parameter was reachable; saw ${[...seen].join(', ')}`);
+
+    for (const fam of families) {
+        check([...seen].some((k) => k.startsWith(fam)),
+              `no ${fam.slice(0, -1)} parameter was reachable from any edit page`);
+    }
     check([...seen].some((k) => k.startsWith('menv_')),
           `no envelope parameter was reachable; saw ${[...seen].join(', ')}`);
 }
@@ -1952,7 +1971,7 @@ const tests = [
     testMonitorManualOverride,
     testLiveRecordToggle,
     testProbabilityMode,
-    testLfo3AndEnvelopePages,
+    testEveryModulatorHasAPage,
     testVoiceFilterPageIsReachable,
     testReaddirContractIsFaithful,
     testPresetSaveThenList,

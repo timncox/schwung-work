@@ -52,12 +52,12 @@
    "title": "Pages",
    "lines": [
     "MACHINES picks all",
-    "three machines and",
-    "the global dry/wet.",
+    "three machines, the",
+    "dry/wet, level and",
+    "pan.",
     "SRC, FX 1 and FX 2",
     "edit 8 params each.",
-    "LFO 1 and LFO 2",
-    "modulate them."
+    "Then four LFO pages."
    ]
   },
   {
@@ -92,16 +92,21 @@
    ]
   },
   {
-   "title": "FX LFOs",
+   "title": "The four LFOs",
    "lines": [
-    "DEST picks a slot",
-    "parameter, Off to",
-    "disable. DEP is",
-    "bipolar at 64.",
-    "SPD and MULT are",
-    "on the tempo grid.",
-    "TRIG Retrig resets",
-    "on each note."
+    "Two families.",
+    "",
+    "V.LFO 1 and 2 reach",
+    "the source stage and",
+    "the voice filter.",
+    "",
+    "FX LFO 1 and 2 reach",
+    "the two inserts.",
+    "",
+    "DEST shows what it",
+    "is pointed at, so",
+    "the family is never",
+    "in doubt."
    ]
   },
   {

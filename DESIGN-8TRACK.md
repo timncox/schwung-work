@@ -1,6 +1,6 @@
 # Work — the eight-track restructure
 
-Status: **steps 1-4 and 6 done (2026-07-29); 5 and 7 not started.** Read this
+Status: **steps 1-6 done; 7 needs hardware.** Read this
 before touching `work_core.h`. It exists because the refactor spans more work
 than one session holds, and because two of its decisions are expensive to
 reverse.
@@ -285,7 +285,22 @@ Each step lands with tests green; nothing here needs a big-bang merge.
    `work_create` adds 1.8 MB resident rather than the ~48 MB of address space
    the allocations suggest, because untouched tracks never fault their pages
    in. No idle-skip optimisation is needed.
-5. LFOs split into voice and FX families, two of each per track. **Not started.**
+5. LFOs split into voice and FX families, two of each per track. **Done,
+   2026-07-30.** Four per track: voice 1/2 reach the source stage and the voice
+   filter (15 destinations), FX 1/2 reach the two inserts (16). Parameter keys
+   lead with the family (`vlfo1_dest`) because the two destination spaces
+   overlap numerically and not in meaning, and the engine serves `lfo_dests` so
+   no UI computes the ranges locally.
+
+   One deviation from the plan above, deliberate: ONE array plus
+   `work_lfo_is_voice()` rather than two arrays. The guarantee this section
+   asks for is the separate destination SPACE, and that now lives in a single
+   branch at the end of `build_effective` where it can be tested — which it is,
+   from both sides, by ear. Two arrays would have doubled every uniform loop
+   (defaults, phase, retrig, state) to express the same invariant by layout.
+
+   Pre-v4 presets migrate by where each old LFO pointed. Three into two-plus-two
+   can overflow, and the overflow is reported on `load_note`.
 6. Surface: track selection on both UIs, screen track strip. **Done,
    2026-07-29** — see `CLAUDE.md`, "Reaching the eight tracks from the surface",
    for the gestures and for which hardware was ruled out and why. Nothing here

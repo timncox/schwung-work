@@ -7,8 +7,8 @@ last_touched: 2026-07-29
 
 Schwung module for the Ableton Move: **twenty-six machines in a source stage
 and two insert FX** — twenty-one effects and six sources — inspired by the
-Elektron Tonverk's per-track shape. Three FX LFOs and a modulation envelope
-modulate any stage parameter.
+Elektron Tonverk's per-track shape. Eight tracks, each with four LFOs in two
+families and a modulation envelope.
 
 ## Clean-room statement — read before touching the DSP
 
@@ -259,6 +259,32 @@ because a parameter read is a blocking ~23 ms round trip and eight of them to
 redraw a strip is 184 ms of the audio thread's budget every time the selection
 moves.
 
+## Modulation: two LFO families
+
+Four LFOs per track, and they are **not interchangeable**:
+
+- **voice** LFO 1, 2 — the source stage's eight parameters, then the seven
+  voice-filter fields. 15 destinations.
+- **FX** LFO 1, 2 — insert 1 A–H, then insert 2 A–H. 16 destinations.
+
+The two destination spaces both count from zero and mean different things, so a
+destination may only be read alongside the family of the LFO carrying it —
+`dest` 8 is the filter's BASE on a voice LFO and insert 2's knob A on an FX one.
+That is why the parameter keys put the family first (`vlfo1_dest`, not
+`lfo1_dest`) and why the engine serves `lfo_dests` rather than letting a UI
+compute the ranges.
+
+Resolution lives in **exactly one place** — the family branch at the end of
+`build_effective`. Everything else (defaults, phase advance, retrig, state I/O)
+treats an LFO as an LFO. `DESIGN-8TRACK.md` asked for two separate arrays; one
+array plus `work_lfo_is_voice()` keeps the uniform loops uniform and puts the
+guarantee where it can actually be checked.
+
+A pre-v4 preset had three LFOs in one flat 0..23 space. They migrate **by where
+they pointed**: at the source stage makes a voice LFO, at an insert makes an FX
+one with 8 subtracted. Three into two-plus-two does not always fit, and the
+overflow goes on `load_note` rather than vanishing.
+
 ## MIDI
 
 **Track N listens on channel N.** Channel 1 drives track 1, channel 8 drives
@@ -273,7 +299,7 @@ where the UI was pointed, which is the kind of surprise that makes a rig
 unreproducible — the same reason micro-timing had to become per-lane.
 
 The CC map, per channel: 8–15 insert 1 A–H, 16–23 insert 2 A–H, 24/25 insert
-machine selects, 26 dry/wet, 27 track level, 28 track pan, 32/40/48 LFOs,
+machine selects, 26 dry/wet, 27 track level, 28 track pan, 32/40 voice LFOs, 48/96 FX LFOs,
 56–60 mod envelope, 64/65/66 sequencer/fill/record, 80–87 source A–H, 88 source
 machine. The source stage sits at 80 because 27–31 is not eight controls wide,
 and because 8–26 was published meaning the inserts and the dry/wet — which is

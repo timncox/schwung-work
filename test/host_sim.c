@@ -233,9 +233,9 @@ static void test_state_roundtrip(void) {
         work_set_param(a, key, val);
     }
     work_set_param(a, "mix", "99");
-    work_set_param(a, "lfo1_dest", "5");
-    work_set_param(a, "lfo1_depth", "100");
-    work_set_param(a, "lfo2_wave", "3");
+    work_set_param(a, "vlfo1_dest", "5");
+    work_set_param(a, "vlfo1_depth", "100");
+    work_set_param(a, "flfo1_wave", "3");
 
     char blob[4096];
     int n = work_get_param(a, "state", blob, sizeof(blob));
@@ -264,8 +264,8 @@ static void test_get_param_tiny_buffers(void) {
     set_stage(w, WORK_STAGE_FX1 + 1, WORK_FX_ROOMTONE);
     set_all_params(w, WORK_STAGE_FX1, 127);
     set_all_params(w, WORK_STAGE_FX1 + 1, 127);
-    work_set_param(w, "lfo1_dest", "15");
-    work_set_param(w, "lfo2_dest", "9");
+    work_set_param(w, "flfo1_dest", "15");
+    work_set_param(w, "vlfo2_dest", "9");
 
     const int sizes[] = {2, 8, 16, 40, 100, 512, 4096};
     for (size_t k = 0; k < sizeof(sizes) / sizeof(sizes[0]); ++k) {
@@ -385,9 +385,12 @@ static void test_fx_lfo_modulates(void) {
     work_t *b = work_create(&host);
     set_stage(b, WORK_STAGE_FX1, WORK_FX_LPF);
     work_set_param(b, "fx1_p5", "40");
-    work_set_param(b, "lfo1_dest", "12");        /* insert 1, knob E = FREQ */
-    work_set_param(b, "lfo1_depth", "127");
-    work_set_param(b, "lfo1_spd", "100");
+    /* An FX LFO, because the destination is an insert parameter. In the FX
+     * family insert 1 knob E is 4; it was 12 when one flat range spanned every
+     * stage. */
+    work_set_param(b, "flfo1_dest", "4");
+    work_set_param(b, "flfo1_depth", "127");
+    work_set_param(b, "flfo1_spd", "100");
     int64_t e_mod = run_blocks(b, 120, &dummy);
     work_destroy(b);
 
@@ -1422,18 +1425,165 @@ static void test_third_lfo(void) {
     work_t *b = work_create(&host);
     set_stage(b, WORK_STAGE_FX1, WORK_FX_LPF);
     work_set_param(b, "fx1_p5", "40");
-    work_set_param(b, "lfo3_dest", "12");    /* insert 1 knob E */
-    work_set_param(b, "lfo3_depth", "127");
-    work_set_param(b, "lfo3_spd", "100");
+    work_set_param(b, "flfo2_dest", "4");    /* insert 1 knob E */
+    work_set_param(b, "flfo2_depth", "127");
+    work_set_param(b, "flfo2_spd", "100");
     int64_t mod = run_blocks(b, 120, &dummy);
 
     char s[16];
-    work_get_param(b, "lfo3_dest", s, sizeof(s));
-    CHECK(atoi(s) == 12, "lfo3_dest reads %s", s);
+    work_get_param(b, "flfo2_dest", s, sizeof(s));
+    CHECK(atoi(s) == 4, "flfo2_dest reads %s", s);
     CHECK(llabs(mod - stat) > stat / 20,
-          "LFO 3 changed output by under 5%% (%lld vs %lld)",
+          "the fourth LFO changed output by under 5%% (%lld vs %lld)",
           (long long)mod, (long long)stat);
     work_destroy(b);
+}
+
+/* The two LFO families reach different things, and cannot reach each other's.
+ *
+ * This is the whole point of the split, and it is the sort of invariant that
+ * looks obviously true and is one arithmetic slip from being false: both
+ * families count their destinations from 0, so an off-by-one in the resolver
+ * silently points a voice LFO at a reverb. Measured by ear on both sides. */
+static void test_lfo_families_reach_their_own(void) {
+    printf("a voice LFO moves the voice, an FX LFO moves the inserts\n");
+
+    /* An FX LFO on insert 1's filter cutoff must change the output. */
+    {
+        work_t *a = work_create(&host);
+        work_t *b = work_create(&host);
+        assert(a && b);
+        for (work_t *w = a; w; w = (w == a ? b : NULL)) {
+            set_stage(w, WORK_STAGE_FX1, WORK_FX_LPF);
+            work_set_param(w, "fx1_p5", "40");
+        }
+        work_set_param(b, "flfo1_dest", "4");     /* insert 1, knob E */
+        work_set_param(b, "flfo1_depth", "127");
+        work_set_param(b, "flfo1_spd", "100");
+
+        int dummy;
+        int64_t stat = run_blocks(a, 120, &dummy);
+        int64_t mod  = run_blocks(b, 120, &dummy);
+        CHECK(llabs(mod - stat) > stat / 20,
+              "an FX LFO on insert 1 did nothing (%lld vs %lld)",
+              (long long)mod, (long long)stat);
+        work_destroy(a); work_destroy(b);
+    }
+
+    /* A VOICE LFO with the same number must NOT reach that insert. Destination
+     * 4 means insert 1 knob E to an FX LFO and source-stage knob E to a voice
+     * one; if the resolver ignored the family, this would move the filter
+     * exactly as above. */
+    {
+        work_t *a = work_create(&host);
+        work_t *b = work_create(&host);
+        assert(a && b);
+        for (work_t *w = a; w; w = (w == a ? b : NULL)) {
+            set_stage(w, WORK_STAGE_FX1, WORK_FX_LPF);
+            work_set_param(w, "fx1_p5", "40");
+        }
+        work_set_param(b, "vlfo1_dest", "4");
+        work_set_param(b, "vlfo1_depth", "127");
+        work_set_param(b, "vlfo1_spd", "100");
+
+        int dummy;
+        int64_t stat = run_blocks(a, 120, &dummy);
+        int64_t mod  = run_blocks(b, 120, &dummy);
+        CHECK(llabs(mod - stat) <= stat / 20,
+              "a VOICE LFO reached an insert parameter (%lld vs %lld) — the "
+              "destination was resolved without its family",
+              (long long)mod, (long long)stat);
+        work_destroy(a); work_destroy(b);
+    }
+
+    /* Each family's range is what the engine says it is, and they differ. */
+    work_t *w = work_create(&host);
+    char s[64];
+    work_get_param(w, "lfo_dests", s, sizeof s);
+    CHECK(strcmp(s, "15,15,16,16") == 0,
+          "lfo_dests is \"%s\"; voice LFOs address 8 source knobs plus 7 filter "
+          "fields, FX LFOs address two inserts of 8", s);
+
+    /* And a destination past a family's end is refused rather than wrapped. */
+    work_set_param(w, "vlfo1_dest", "15");        /* one past the voice range */
+    work_get_param(w, "vlfo1_dest", s, sizeof s);
+    CHECK(atoi(s) == WORK_VLFO_DESTS - 1,
+          "a voice LFO took destination %s, past its own range", s);
+    work_destroy(w);
+}
+
+/* A pre-v4 preset had three LFOs in one flat destination space. They are
+ * translated by WHERE THEY POINTED: at the source stage makes a voice LFO, at
+ * an insert makes an FX one. Three into two-plus-two does not always fit, and
+ * what will not fit is reported rather than lost quietly. */
+static void test_v3_lfos_migrate_by_destination(void) {
+    printf("a pre-v4 preset's LFOs land in the right families\n");
+    work_t *w = work_create(&host);
+
+    /* l1 -> source stage knob C (voice), l2 -> insert 1 knob A (FX),
+     * l3 -> insert 2 knob A (FX). */
+    static const char v3[] =
+        "{\"v\":3,\"mix\":100,\"sel\":0"
+        ",\"t0lvl\":127,\"t0pan\":64"
+        ",\"t0m1\":21,\"t0p1\":[1,2,3,4,5,6,7,8]"
+        ",\"t0m2\":0,\"t0p2\":[0,0,0,0,0,0,0,0]"
+        ",\"t0m3\":0,\"t0p3\":[0,0,0,0,0,0,0,0]"
+        ",\"t0l1\":[2,10,20,1,70,5,1]"
+        ",\"t0l2\":[8,11,21,2,71,6,0]"
+        ",\"t0l3\":[16,12,22,3,72,7,1]"
+        ",\"sq\":[0,16,15]}";
+    work_set_param(w, "state", v3);
+
+    char s[32];
+    work_get_param(w, "vlfo1_dest", s, sizeof s);
+    CHECK(atoi(s) == 2, "the source-stage LFO did not become voice LFO 1 (%s)", s);
+    work_get_param(w, "vlfo1_spd", s, sizeof s);
+    CHECK(atoi(s) == 10, "voice LFO 1 lost its speed (%s)", s);
+    work_get_param(w, "vlfo1_trig", s, sizeof s);
+    CHECK(atoi(s) == 1, "voice LFO 1 lost its retrig flag (%s)", s);
+
+    work_get_param(w, "flfo1_dest", s, sizeof s);
+    CHECK(atoi(s) == 0, "insert 1's LFO should be FX LFO 1 destination 0 (%s)", s);
+    work_get_param(w, "flfo2_dest", s, sizeof s);
+    CHECK(atoi(s) == 8, "insert 2's LFO should be FX LFO 2 destination 8 (%s)", s);
+    work_get_param(w, "flfo2_depth", s, sizeof s);
+    CHECK(atoi(s) == 72, "FX LFO 2 lost its depth (%s)", s);
+
+    /* The second voice slot was never filled and must be at its default. */
+    work_get_param(w, "vlfo2_dest", s, sizeof s);
+    CHECK(atoi(s) == -1, "voice LFO 2 should be off, reads %s", s);
+
+    work_get_param(w, "load_note", s, sizeof s);
+    CHECK(s[0] == '\0', "a migration that fitted still left a note: \"%s\"", s);
+    work_destroy(w);
+}
+
+/* Three old LFOs all pointed at inserts is one more than the FX family holds.
+ * The overflow is REPORTED — a modulator that vanishes without a word is the
+ * kind of thing you notice a week later and blame on the machine. */
+static void test_overflowing_lfo_migration_is_reported(void) {
+    printf("an LFO with nowhere to go is reported, not dropped quietly\n");
+    work_t *w = work_create(&host);
+
+    static const char v3[] =
+        "{\"v\":3,\"mix\":100,\"sel\":0"
+        ",\"t0m1\":0,\"t0p1\":[0,0,0,0,0,0,0,0]"
+        ",\"t0l1\":[8,10,20,1,70,5,1]"
+        ",\"t0l2\":[9,11,21,2,71,6,0]"
+        ",\"t0l3\":[10,12,22,3,72,7,1]"
+        ",\"sq\":[0,16,15]}";
+    work_set_param(w, "state", v3);
+
+    char s[64];
+    work_get_param(w, "flfo1_dest", s, sizeof s);
+    CHECK(atoi(s) == 0, "the first insert LFO did not land (%s)", s);
+    work_get_param(w, "flfo2_dest", s, sizeof s);
+    CHECK(atoi(s) == 1, "the second insert LFO did not land (%s)", s);
+
+    work_get_param(w, "load_note", s, sizeof s);
+    CHECK(strstr(s, "LFO") != NULL,
+          "three insert LFOs into two slots left no note: \"%s\"", s);
+    work_destroy(w);
 }
 
 /* Channel N drives track N, and a channel with no track behind it drives
@@ -1691,7 +1841,7 @@ static void test_current_preset_is_not_migrated(void) {
 
     static char blob[16384];
     work_get_param(a, "state", blob, sizeof(blob));
-    CHECK(strstr(blob, "\"v\":3") != NULL, "the blob does not declare v3");
+    CHECK(strstr(blob, "\"v\":4") != NULL, "the blob does not declare v4");
 
     work_t *b = work_create(&host);
     work_set_param(b, "state", blob);
@@ -3432,6 +3582,9 @@ int main(void) {
     test_mod_envelope();
     test_third_lfo();
     test_midi_cc();
+    test_lfo_families_reach_their_own();
+    test_v3_lfos_migrate_by_destination();
+    test_overflowing_lfo_migration_is_reported();
     test_midi_channel_selects_the_track();
 
     printf("\n-- Tier A: bank, song, history, transform --\n");

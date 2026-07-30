@@ -53,7 +53,48 @@
  * count. See DESIGN-8TRACK.md. */
 #define WORK_TRACKS      8
 #define WORK_PARAMS      8      /* knob A-H, one per Move encoder */
-#define WORK_LFOS        3      /* FX LFO 1, 2 and 3 (3 added in v0.3.0) */
+#define WORK_VFILT_FIELDS 7     /* base, width, reso, env, attack, decay, track */
+
+/* Modulators, per track, in TWO FAMILIES that are not interchangeable.
+ *
+ * A VOICE LFO reaches the source stage's parameters and the voice filter — the
+ * things that make the note. An FX LFO reaches the two inserts. They were one
+ * flat family of three until v0.10.0, with a destination running 0..23 across
+ * every stage, and the split is deliberate: a flat range lets a voice LFO
+ * point at a reverb parameter, which the reference device does not do, and it
+ * makes the destination list twice as long to page through on eight encoders.
+ *
+ * LFO n is a voice LFO while n < WORK_VOICE_LFOS and an FX LFO after that.
+ * DESIGN-8TRACK.md called for two separate arrays; one array plus this index
+ * rule keeps every uniform loop uniform — defaults, phase advance, retrig,
+ * state I/O — and the guarantee the design actually asked for is the separate
+ * DESTINATION SPACE below, which is enforced in work_lfo_dest_count() and
+ * applied in exactly one place. */
+#define WORK_VOICE_LFOS  2
+#define WORK_FX_LFOS     2
+#define WORK_LFOS        (WORK_VOICE_LFOS + WORK_FX_LFOS)
+
+/* What each family can point at.
+ *
+ *   voice   0..7   source stage A-H
+ *           8..14  the voice filter, in edit-page order
+ *   FX      0..7   insert 1 A-H
+ *           8..15  insert 2 A-H
+ *
+ * -1 is off in both. The two spaces overlap numerically and mean different
+ * things, which is exactly why a destination may only be read alongside the
+ * family of the LFO carrying it. */
+#define WORK_VLFO_DESTS  (WORK_PARAMS + WORK_VFILT_FIELDS)
+#define WORK_FLFO_DESTS  (WORK_INSERTS * WORK_PARAMS)
+
+static inline int work_lfo_is_voice(int n) {
+    return n >= 0 && n < WORK_VOICE_LFOS;
+}
+
+static inline int work_lfo_dest_count(int n) {
+    if (n < 0 || n >= WORK_LFOS) return 0;
+    return work_lfo_is_voice(n) ? WORK_VLFO_DESTS : WORK_FLFO_DESTS;
+}
 
 /* Longest delay line any machine can ask for: 2 s covers a 1/2 note at 60 BPM
  * and a whole note at 120 BPM. Drive Delay clamps its division to this. */
@@ -205,7 +246,7 @@ typedef enum {
 #define WORK_LOCK_LEVEL     27
 #define WORK_LOCK_PAN       28
 #define WORK_LOCK_VF0       29     /* the seven voice-filter fields run here   */
-#define WORK_LOCK_VF_COUNT  7
+#define WORK_LOCK_VF_COUNT  WORK_VFILT_FIELDS
 #define WORK_LOCKABLE       36
 
 /* How big a preset can get.
@@ -430,8 +471,9 @@ typedef struct {
     uint8_t p[WORK_PARAMS];
 } work_slot_cfg_t;
 
-/* FX LFO. Destination addresses a slot parameter as slot*8 + param, or -1 for
- * off. FX LFOs reach FX-slot parameters only. */
+/* One LFO. The meaning of `dest` depends on which FAMILY the LFO belongs to —
+ * see WORK_VLFO_DESTS / WORK_FLFO_DESTS. A destination read without knowing
+ * the family is a destination read wrong. */
 typedef struct {
     int8_t  dest;        /* -1 = off, else 0..(WORK_STAGES*WORK_PARAMS-1) */
     uint8_t speed;

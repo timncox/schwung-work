@@ -2766,6 +2766,23 @@ static void seq_run(work_t *w, int frames) {
  * A switch rather than pointer arithmetic across the struct: the seven fields
  * are all uint8_t, but C is free to pad between members, and "it works on this
  * compiler" is not a reason to index a struct as an array. */
+/* Read back the field vfilt_set_field writes, so a voice LFO can modulate
+ * AROUND the current value rather than replacing it. Same switch, same reason
+ * it is a switch: the seven fields are all uint8_t but C may pad between
+ * members, and indexing a struct as an array is "works on this compiler". */
+static uint8_t vfilt_get_field(const work_vfilt_cfg_t *v, int field) {
+    switch (field) {
+        case 0: return v->base;
+        case 1: return v->width;
+        case 2: return v->reso;
+        case 3: return v->env;
+        case 4: return v->attack;
+        case 5: return v->decay;
+        case 6: return v->track;
+        default: return 0;
+    }
+}
+
 static void vfilt_set_field(work_vfilt_cfg_t *v, int field, uint8_t value) {
     switch (field) {
         case 0: v->base   = value; break;
@@ -2864,7 +2881,7 @@ static void build_effective(work_t *w, work_track_t *tr, int frames) {
         tr->lfo_ph[n] += (float)frames / per;
         while (tr->lfo_ph[n] >= 1.0f) tr->lfo_ph[n] -= 1.0f;
 
-        if (L->dest < 0 || L->dest >= WORK_STAGES * WORK_PARAMS) continue;
+        if (L->dest < 0 || L->dest >= work_lfo_dest_count(n)) continue;
 
         float ph = tr->lfo_ph[n] + p01(L->phase);
         if (ph >= 1.0f) ph -= 1.0f;
@@ -2880,13 +2897,30 @@ static void build_effective(work_t *w, work_track_t *tr, int frames) {
             default: v = rnd_bi(&tr->rng); break;                            /* rand */
         }
 
-        int slot = L->dest / WORK_PARAMS;
-        int idx  = L->dest % WORK_PARAMS;
-        /* Modulate around the LOCKED value, not the base one — otherwise a
-         * p-lock and an LFO pointed at the same parameter fight each other. */
-        int base = tr->eff[slot][idx];
-        int out  = base + (int)(v * pbi(L->depth) * 127.0f);
-        tr->eff[slot][idx] = (uint8_t)iclamp(out, 0, 127);
+        const int swing = (int)(v * pbi(L->depth) * 127.0f);
+
+        /* THE one place a destination is resolved, and the only place that
+         * knows both families. Everything else — defaults, phase, retrig,
+         * state — treats an LFO as an LFO; what makes a voice LFO unable to
+         * reach a reverb is that this function never looks there for one. */
+        if (work_lfo_is_voice(n)) {
+            if (L->dest < WORK_PARAMS) {
+                /* Modulate around the LOCKED value, not the base one —
+                 * otherwise a p-lock and an LFO pointed at the same parameter
+                 * fight each other. */
+                int out = tr->eff[WORK_STAGE_SRC][L->dest] + swing;
+                tr->eff[WORK_STAGE_SRC][L->dest] = (uint8_t)iclamp(out, 0, 127);
+            } else {
+                const int f = L->dest - WORK_PARAMS;
+                int out = vfilt_get_field(&tr->eff_vfilt, f) + swing;
+                vfilt_set_field(&tr->eff_vfilt, f, (uint8_t)iclamp(out, 0, 127));
+            }
+        } else {
+            const int stage = WORK_STAGE_FX1 + L->dest / WORK_PARAMS;
+            const int idx   = L->dest % WORK_PARAMS;
+            int out = tr->eff[stage][idx] + swing;
+            tr->eff[stage][idx] = (uint8_t)iclamp(out, 0, 127);
+        }
     }
 }
 
@@ -3353,15 +3387,30 @@ static void cc_apply(work_t *w, int cc, int v) {
         return;
     }
 
-    /* CC 32/40/48 start LFO 1/2/3; the seven fields run in page order */
-    if ((cc >= 32 && cc <= 38) || (cc >= 40 && cc <= 46) || (cc >= 48 && cc <= 54)) {
+    /* The four LFOs, seven fields each in page order.
+     *
+     * 32 / 40 / 48 are where LFO 1 / 2 / 3 already were and keep their
+     * positions; the split renames them voice 1, voice 2 and FX 1, so a
+     * controller already mapped there still drives the same seven fields of
+     * the same modulator. What it cannot preserve is the DESTINATION's
+     * meaning, because the families address different things — that much the
+     * split makes unavoidable.
+     *
+     * FX LFO 2 is new and lands at 96 rather than continuing the stride to 56,
+     * which would be tidier and would displace the modulation envelope. The
+     * envelope has been at 56-60 on a device that exists; a regular map is not
+     * worth silently repointing someone's controller. */
+    if ((cc >= 32 && cc <= 38) || (cc >= 40 && cc <= 46) ||
+        (cc >= 48 && cc <= 54) || (cc >= 96 && cc <= 102)) {
         static const char *F[7] = {"dest", "spd", "mult", "wave", "depth", "phase", "trig"};
-        int n   = (cc - 32) / 8;
-        int fld = (cc - 32) % 8;
+        int n   = (cc >= 96) ? WORK_LFOS - 1 : (cc - 32) / 8;
+        int fld = (cc >= 96) ? cc - 96       : (cc - 32) % 8;
         if (fld > 6 || n >= WORK_LFOS) return;
-        snprintf(key, sizeof(key), "lfo%d_%s", n + 1, F[fld]);
+        snprintf(key, sizeof(key), "%slfo%d_%s",
+                 work_lfo_is_voice(n) ? "v" : "f",
+                 work_lfo_is_voice(n) ? n + 1 : n - WORK_VOICE_LFOS + 1, F[fld]);
         if (fld == 0) snprintf(val, sizeof(val), "%d",
-                               (v * (WORK_STAGES * WORK_PARAMS) + 63) / 127 - 1);
+                               (v * work_lfo_dest_count(n) + 63) / 127 - 1);
         else if (fld == 3) snprintf(val, sizeof(val), "%d", (v * 6 + 63) / 127);
         else if (fld == 6) snprintf(val, sizeof(val), "%d", v >= 64 ? 1 : 0);
         work_set_param(w, key, val);
@@ -3506,6 +3555,51 @@ void work_on_midi(work_t *w, const uint8_t *msg, int len, int source) {
 }
 
 /* ---------------------------------------------------------- parameter I/O */
+
+/* The blob's per-LFO key: vl1..vl2, fl1..fl2. Family first, same reason the
+ * parameter keys put it first. */
+static void lfo_blob_key(int n, char *out, size_t cap) {
+    if (work_lfo_is_voice(n)) snprintf(out, cap, "vl%d", n + 1);
+    else                      snprintf(out, cap, "fl%d", n - WORK_VOICE_LFOS + 1);
+}
+
+/* Seven comma-separated numbers into one LFO, clamped to `dests` destinations.
+ * Shared by the current reader and the pre-v4 translation, so the field order
+ * exists in one place — two copies of a seven-field order is two chances to
+ * read speed as multiplier. */
+static void lfo_read_array(work_lfo_cfg_t *L, const char *c, int dests) {
+    int v[7] = {-1, 32, 64, 0, 64, 0, 0};
+    for (int i = 0; i < 7 && *c && *c != ']'; ++i) {
+        v[i] = atoi(c);
+        while (*c && *c != ',' && *c != ']') c++;
+        if (*c == ',') c++;
+    }
+    L->dest  = (int8_t) iclamp(v[0], -1, dests - 1);
+    L->speed = (uint8_t)iclamp(v[1], 0, 127);
+    L->mult  = (uint8_t)iclamp(v[2], 0, 127);
+    L->wave  = (uint8_t)iclamp(v[3], 0, 127);
+    L->depth = (uint8_t)iclamp(v[4], 0, 127);
+    L->phase = (uint8_t)iclamp(v[5], 0, 127);
+    L->trig  = (uint8_t)iclamp(v[6], 0, 1);
+}
+
+/* "vlfo1_dest" -> 0, "flfo2_spd" -> 3, anything else -> -1, with `field` left
+ * pointing at the part after the underscore.
+ *
+ * The FAMILY is in the key rather than the number, and that is the point. A
+ * flat "lfo3_dest" would not say which family a reader is in, and `dest` means
+ * different things in each — 8 is the voice filter's BASE on a voice LFO and
+ * insert 2's knob A on an FX one. A UI that guessed would point a modulator
+ * somewhere plausible and wrong. */
+static int lfo_index_from_key(const char *key, const char **field) {
+    int base, count;
+    if      (strncmp(key, "vlfo", 4) == 0) { base = 0;               count = WORK_VOICE_LFOS; }
+    else if (strncmp(key, "flfo", 4) == 0) { base = WORK_VOICE_LFOS; count = WORK_FX_LFOS;    }
+    else return -1;
+    if (key[4] < '1' || key[4] >= '1' + count || key[5] != '_') return -1;
+    *field = key + 6;
+    return base + (key[4] - '1');
+}
 
 /* Accept either a machine index or its name, so a UI can send whichever. */
 static int parse_machine(const char *val) {
@@ -3827,7 +3921,8 @@ static int state_stage_shift(const char *json) {
 /* One track's fields, from the keys carrying `pfx`. v3 prefixes every per-track
  * key with "t<N>"; v1 and v2 knew one track and used no prefix, so they come
  * through here with pfx = "" and land on track 0. */
-static void apply_track_state(work_track_t *tr, const char *json, const char *pfx) {
+static int apply_track_state(work_track_t *tr, const char *json, const char *pfx,
+                             int version) {
     const char *q;
 
     if ((q = jfind(json, pfx, "lvl")) != NULL) tr->level = (uint8_t)iclamp(atoi(q), 0, 127);
@@ -3878,26 +3973,55 @@ static void apply_track_state(work_track_t *tr, const char *json, const char *pf
         tr->vfilt.track  = (uint8_t)v[6];
     }
 
-    for (int n = 0; n < WORK_LFOS; ++n) {
-        char name[8];
-        snprintf(name, sizeof name, "l%d", n + 1);
-        if ((q = jfind(json, pfx, name)) != NULL && *q == '[') {
-            const char *c = q + 1;
-            int v[7] = {-1, 32, 64, 0, 64, 0, 0};
-            for (int i = 0; i < 7 && *c && *c != ']'; ++i) {
-                v[i] = atoi(c);
-                while (*c && *c != ',' && *c != ']') c++;
-                if (*c == ',') c++;
-            }
-            tr->lfo[n].dest  = (int8_t) iclamp(v[0], -1, WORK_STAGES * WORK_PARAMS - 1);
-            tr->lfo[n].speed = (uint8_t)iclamp(v[1], 0, 127);
-            tr->lfo[n].mult  = (uint8_t)iclamp(v[2], 0, 127);
-            tr->lfo[n].wave  = (uint8_t)iclamp(v[3], 0, 127);
-            tr->lfo[n].depth = (uint8_t)iclamp(v[4], 0, 127);
-            tr->lfo[n].phase = (uint8_t)iclamp(v[5], 0, 127);
-            tr->lfo[n].trig  = (uint8_t)iclamp(v[6], 0, 1);
+    /* LFOs.
+     *
+     * v4 keys them by family — vl1, vl2, fl1, fl2 — because the destination
+     * means different things in each. Before that they were one flat family of
+     * three at l1..l3, with a destination running 0..23 across every stage, so
+     * an older blob is TRANSLATED rather than read: 0..7 addressed the source
+     * stage and becomes a voice LFO, 8..23 addressed the inserts and becomes
+     * an FX LFO with 8 subtracted.
+     *
+     * Three old into two-plus-two new, so the slots fill in order and a fourth
+     * of either family has nowhere to go. That is reported rather than dropped
+     * quietly — see load_note. An old LFO that was switched off carries no
+     * destination to place it by, so it is skipped and its slot left free for
+     * one that does. */
+    if (version >= 4) {
+        for (int n = 0; n < WORK_LFOS; ++n) {
+            char name[8];
+            lfo_blob_key(n, name, sizeof name);
+            if ((q = jfind(json, pfx, name)) == NULL || *q != '[') continue;
+            lfo_read_array(&tr->lfo[n], q + 1, work_lfo_dest_count(n));
         }
+        return 0;
     }
+
+    int used[WORK_LFOS] = {0};
+    int dropped = 0;
+    for (int old = 0; old < 3; ++old) {
+        char name[8];
+        snprintf(name, sizeof name, "l%d", old + 1);
+        if ((q = jfind(json, pfx, name)) == NULL || *q != '[') continue;
+
+        work_lfo_cfg_t tmp;
+        lfo_read_array(&tmp, q + 1, WORK_STAGES * WORK_PARAMS);
+        if (tmp.dest < 0) continue;              /* off: nothing to place */
+
+        const int voice = tmp.dest < WORK_PARAMS;
+        const int first = voice ? 0 : WORK_VOICE_LFOS;
+        const int count = voice ? WORK_VOICE_LFOS : WORK_FX_LFOS;
+        if (!voice) tmp.dest = (int8_t)(tmp.dest - WORK_PARAMS);
+
+        int slot = -1;
+        for (int i = first; i < first + count; ++i) if (!used[i]) { slot = i; break; }
+        if (slot < 0) { dropped++; continue; }
+
+        used[slot] = 1;
+        tr->lfo[slot] = tmp;
+        tr->lfo[slot].dest = (int8_t)iclamp(tmp.dest, -1, work_lfo_dest_count(slot) - 1);
+    }
+    return dropped;
 }
 
 static void apply_state(work_t *w, const char *json) {
@@ -3909,6 +4033,7 @@ static void apply_state(work_t *w, const char *json) {
     if ((q = strstr(json, "\"v\":")) != NULL) version = atoi(q + 4);
 
     w->load_note[0] = '\0';
+    int lfo_dropped = 0;
 
     if ((q = strstr(json, "\"mix\":")) != NULL) w->mix = (uint8_t)iclamp(atoi(q + 6), 0, 127);
 
@@ -3927,7 +4052,7 @@ static void apply_state(work_t *w, const char *json) {
                 w->trk[t].held_mask = 0;
                 continue;
             }
-            apply_track_state(&w->trk[t], json, pfx);
+            lfo_dropped += apply_track_state(&w->trk[t], json, pfx, version);
 
             /* The lane, packed. A named track with no "ln" key is one whose
              * lane was empty at save time, so it still gets cleared — the
@@ -3940,7 +4065,7 @@ static void apply_state(work_t *w, const char *json) {
         }
         seq_rearm(w);
     } else {
-        apply_track_state(TRK(w), json, "");
+        lfo_dropped += apply_track_state(TRK(w), json, "", version);
     }
 
     if ((q = strstr(json, "\"sq\":[")) != NULL) {
@@ -4012,6 +4137,17 @@ static void apply_state(work_t *w, const char *json) {
                      shift ? ", stages shifted" : "",
                      dropped ? ", mix locks dropped" : "");
         }
+    }
+
+    /* An old preset could have three LFOs pointed at the inserts and only two
+     * FX slots exist to put them in. Silently losing a modulator is the kind
+     * of thing you notice a week later and blame on the machine, so it goes on
+     * the note — appended, because a v1 blob can hit both migrations at once. */
+    if (lfo_dropped) {
+        const size_t at = strlen(w->load_note);
+        snprintf(w->load_note + at, sizeof(w->load_note) - at,
+                 "%s%d LFO%s dropped", at ? "; " : "v3 preset: ",
+                 lfo_dropped, lfo_dropped == 1 ? "" : "s");
     }
 }
 
@@ -4397,19 +4533,21 @@ void work_set_param(work_t *w, const char *key, const char *val) {
         return;
     }
 
-    if (strncmp(key, "lfo", 3) == 0 && key[3] >= '1' &&
-        key[3] < '1' + WORK_LFOS && key[4] == '_') {
-        work_lfo_cfg_t *L = &TRK(w)->lfo[key[3] - '1'];
-        const char *f = key + 5;
-        int v = atoi(val);
-        if      (strcmp(f, "dest")  == 0) L->dest  = (int8_t)iclamp(v, -1, WORK_STAGES * WORK_PARAMS - 1);
-        else if (strcmp(f, "spd")   == 0) L->speed = (uint8_t)iclamp(v, 0, 127);
-        else if (strcmp(f, "mult")  == 0) L->mult  = (uint8_t)iclamp(v, 0, 127);
-        else if (strcmp(f, "wave")  == 0) L->wave  = (uint8_t)iclamp(v, 0, 127);
-        else if (strcmp(f, "depth") == 0) L->depth = (uint8_t)iclamp(v, 0, 127);
-        else if (strcmp(f, "phase") == 0) L->phase = (uint8_t)iclamp(v, 0, 127);
-        else if (strcmp(f, "trig")  == 0) L->trig  = (uint8_t)iclamp(v, 0, 1);
-        return;
+    {
+        const char *f;
+        const int n = lfo_index_from_key(key, &f);
+        if (n >= 0) {
+            work_lfo_cfg_t *L = &TRK(w)->lfo[n];
+            int v = atoi(val);
+            if      (strcmp(f, "dest")  == 0) L->dest  = (int8_t)iclamp(v, -1, work_lfo_dest_count(n) - 1);
+            else if (strcmp(f, "spd")   == 0) L->speed = (uint8_t)iclamp(v, 0, 127);
+            else if (strcmp(f, "mult")  == 0) L->mult  = (uint8_t)iclamp(v, 0, 127);
+            else if (strcmp(f, "wave")  == 0) L->wave  = (uint8_t)iclamp(v, 0, 127);
+            else if (strcmp(f, "depth") == 0) L->depth = (uint8_t)iclamp(v, 0, 127);
+            else if (strcmp(f, "phase") == 0) L->phase = (uint8_t)iclamp(v, 0, 127);
+            else if (strcmp(f, "trig")  == 0) L->trig  = (uint8_t)iclamp(v, 0, 1);
+            return;
+        }
     }
 }
 
@@ -4455,7 +4593,7 @@ static int state_build(work_t *w) {
     int       n       = 0;
 
     n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                            "{\"v\":3,\"mix\":%d,\"sel\":%d",
+                            "{\"v\":4,\"mix\":%d,\"sel\":%d",
                             w->mix, w->sel_track), cap);
 
     for (int t = 0; t < WORK_TRACKS; ++t) {
@@ -4509,8 +4647,12 @@ static int state_build(work_t *w) {
 
         for (int l = 0; l < WORK_LFOS; ++l) {
             const work_lfo_cfg_t *L = &tr->lfo[l];
+            char lk[8];
+
+            lfo_blob_key(l, lk, sizeof lk);
+
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                    ",\"%sl%d\":[%d,%d,%d,%d,%d,%d,%d]", pfx, l + 1,
+                                    ",\"%s%s\":[%d,%d,%d,%d,%d,%d,%d]", pfx, lk,
                                     L->dest, L->speed, L->mult, L->wave,
                                     L->depth, L->phase, L->trig), cap);
         }
@@ -4849,20 +4991,33 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
         return n;
     }
 
-    if (strncmp(key, "lfo", 3) == 0 && key[3] >= '1' &&
-        key[3] < '1' + WORK_LFOS && key[4] == '_') {
-        work_lfo_cfg_t *L = &TRK(w)->lfo[key[3] - '1'];
-        const char *f = key + 5;
-        int v = 0;
-        if      (strcmp(f, "dest")  == 0) v = L->dest;
-        else if (strcmp(f, "spd")   == 0) v = L->speed;
-        else if (strcmp(f, "mult")  == 0) v = L->mult;
-        else if (strcmp(f, "wave")  == 0) v = L->wave;
-        else if (strcmp(f, "depth") == 0) v = L->depth;
-        else if (strcmp(f, "phase") == 0) v = L->phase;
-        else if (strcmp(f, "trig")  == 0) v = L->trig;
-        else return -1;
-        return nclamp(snprintf(buf, buf_len, "%d", v), cap);
+    {
+        const char *f;
+        const int n = lfo_index_from_key(key, &f);
+        if (n >= 0) {
+            work_lfo_cfg_t *L = &TRK(w)->lfo[n];
+            int v = 0;
+            if      (strcmp(f, "dest")  == 0) v = L->dest;
+            else if (strcmp(f, "spd")   == 0) v = L->speed;
+            else if (strcmp(f, "mult")  == 0) v = L->mult;
+            else if (strcmp(f, "wave")  == 0) v = L->wave;
+            else if (strcmp(f, "depth") == 0) v = L->depth;
+            else if (strcmp(f, "phase") == 0) v = L->phase;
+            else if (strcmp(f, "trig")  == 0) v = L->trig;
+            else return -1;
+            return nclamp(snprintf(buf, buf_len, "%d", v), cap);
+        }
+    }
+
+    /* How many destinations this LFO's family offers, so a UI can size its
+     * encoder without a local copy of the table — the rule that keeps the
+     * machine palette honest, applied to modulation. */
+    if (strncmp(key, "lfo_dests", 9) == 0) {
+        int n = 0;
+        for (int i = 0; i < WORK_LFOS; ++i)
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s%d",
+                                    i ? "," : "", work_lfo_dest_count(i)), cap);
+        return n;
     }
 
     /* The Shadow UI and the auto-generated Master FX knob pages read their

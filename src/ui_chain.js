@@ -70,9 +70,11 @@ const PAGE_STAGE1   = 1;          /* stage N's page is PAGE_STAGE1 + N */
 /* The LFO pages follow the stage pages and need no named constant, because
  * nothing branches on them; PAGES and PAGE_NAME carry their layout. Both are
  * derived from N_STAGES so a stage cannot be added without its page. */
-const PAGE_COUNT    = 1 + N_STAGES + 2;
+const N_LFOS        = 4;
+const PAGE_COUNT    = 1 + N_STAGES + N_LFOS;
 
-const PAGE_NAME = ['MACHINES', ...STAGE_LABEL, 'LFO 1', 'LFO 2'];
+const PAGE_NAME = ['MACHINES', ...STAGE_LABEL,
+                   'V.LFO 1', 'V.LFO 2', 'FX LFO 1', 'FX LFO 2'];
 
 /* Which stage a page edits, or -1 for the machine and LFO pages. */
 function pageSlot(p) {
@@ -81,22 +83,34 @@ function pageSlot(p) {
 }
 
 const WAVE_NAME = ['Tri', 'Sine', 'Sqr', 'Saw', 'Ramp', 'Exp', 'Rand'];
+/* The voice filter's seven fields, in the order a voice LFO's destination
+ * numbers them — the same order the lock map and the VOICE FLT page use. */
+const VF_NAME = ['F.BASE', 'F.WDTH', 'F.RESO', 'F.ENV', 'F.ATK', 'F.DEC', 'F.KEY'];
 
 /* Per-page knob descriptors: DSP key, fallback label, range and step. FX page
  * labels come from the DSP at runtime, so their `label` here is only used
  * before the first fetch completes. */
-/* DEST reaches every stage parameter. It was frozen at 15 — two stages' worth —
- * which quietly made the third unmodulatable from this build. Derive it. */
-const DEST_MAX = N_STAGES * 8 - 1;
+/* Engine LFO index -> key prefix. Voice LFOs come first, then FX. */
+const N_VOICE_LFOS = 2;
+const lfoKeyPrefix = (i) =>
+    (i < N_VOICE_LFOS ? `vlfo${i + 1}` : `flfo${i - N_VOICE_LFOS + 1}`);
 
-const LFO_KNOBS = (n) => ([
-    { key: `lfo${n}_dest`,  label: 'DEST',  min: -1, max: DEST_MAX, step: 1 },
-    { key: `lfo${n}_spd`,   label: 'SPD',   min: 0,  max: 127, step: 1 },
-    { key: `lfo${n}_mult`,  label: 'MULT',  min: 0,  max: 127, step: 1 },
-    { key: `lfo${n}_wave`,  label: 'WAVE',  min: 0,  max: 6,   step: 1 },
-    { key: `lfo${n}_depth`, label: 'DEP',   min: 0,  max: 127, step: 1 },
-    { key: `lfo${n}_phase`, label: 'SPH',   min: 0,  max: 127, step: 1 },
-    { key: `lfo${n}_trig`,  label: 'TRIG',  min: 0,  max: 1,   step: 1 }
+/* DEST's range comes from the engine's lfo_dests, because the two families
+ * offer different counts (15 for a voice LFO, 16 for an FX one) and a formula
+ * here would be a second copy of a table the engine owns. Seeded with the
+ * smaller so the window before the first read can only under-offer — an
+ * over-offer writes a value the engine refuses, and a refused write is what
+ * makes an encoder feel jammed. */
+let lfoDests = [15, 15, 15, 15];
+
+const LFO_KNOBS = (i) => ([
+    { key: `${lfoKeyPrefix(i)}_dest`,  label: 'DEST',  min: -1, max: lfoDests[i] - 1, step: 1 },
+    { key: `${lfoKeyPrefix(i)}_spd`,   label: 'SPD',   min: 0,  max: 127, step: 1 },
+    { key: `${lfoKeyPrefix(i)}_mult`,  label: 'MULT',  min: 0,  max: 127, step: 1 },
+    { key: `${lfoKeyPrefix(i)}_wave`,  label: 'WAVE',  min: 0,  max: 6,   step: 1 },
+    { key: `${lfoKeyPrefix(i)}_depth`, label: 'DEP',   min: 0,  max: 127, step: 1 },
+    { key: `${lfoKeyPrefix(i)}_phase`, label: 'SPH',   min: 0,  max: 127, step: 1 },
+    { key: `${lfoKeyPrefix(i)}_trig`,  label: 'TRIG',  min: 0,  max: 1,   step: 1 }
 ]);
 
 const FX_KNOBS = (stage) => {
@@ -134,7 +148,7 @@ MACHINE_PAGE.push({ key: 'pan',   label: 'PAN', min: 0, max: 127, step: 1 });
 
 const PAGES = [MACHINE_PAGE];
 for (let s = 0; s < N_STAGES; s++) PAGES.push(FX_KNOBS(s));
-PAGES.push(LFO_KNOBS(1), LFO_KNOBS(2));
+for (let i = 0; i < N_LFOS; i++) PAGES.push(LFO_KNOBS(i));
 
 /* Is this key one of the machine selects? A chain of === comparisons is what
  * left slot 3 out of the label refresh when the slot was added. */
@@ -201,6 +215,20 @@ function applyMachineRange() {
     }
 }
 
+/* Push the engine's destination counts into the DEST knob of each LFO page.
+ *
+ * A separate step because PAGES is built ONCE at module load, when lfoDests
+ * still holds its fallback — so LFO_KNOBS captured 15 for all four and simply
+ * updating the array afterwards would change nothing. Exactly the shape
+ * applyMachineRange exists for; the FX LFOs would have been one destination
+ * short, leaving insert 2's knob H unreachable from this build. */
+function applyLfoRange() {
+    for (let i = 0; i < N_LFOS; i++) {
+        const page = PAGES[1 + N_STAGES + i];
+        if (page && page[0]) page[0].max = Math.max(0, lfoDests[i] - 1);
+    }
+}
+
 /* The knob mirrors a POSITION in the family; the engine speaks machine codes.
  * These two convert, and both fall back rather than throwing on a family that
  * has not arrived yet. */
@@ -245,7 +273,14 @@ function readFamilies() {
         if (Number.isFinite(n) && n > 0) nTracks = n;
     }
 
+    const dests = readRaw('lfo_dests');
+    if (dests !== null) {
+        const d = `${dests}`.split(',').map((x) => parseInt(x, 10));
+        if (d.length >= N_LFOS && d.every(Number.isFinite)) lfoDests = d;
+    }
+
     applyMachineRange();
+    applyLfoRange();
     return true;
 }
 
@@ -335,6 +370,12 @@ function knobValue(i) {
     if (k.key.endsWith('_trig')) return v ? 'Retrig' : 'Free';
     if (k.key.endsWith('_dest')) {
         if (v < 0) return 'Off';
+        /* The two families read the same number differently: 8 is the voice
+         * filter's BASE on a voice LFO and insert 2's knob A on an FX one. */
+        if (k.key.startsWith('vlfo')) {
+            return v < 8 ? `SRC${String.fromCharCode(65 + v)}`
+                         : (VF_NAME[v - 8] || '?');
+        }
         return `FX${(v >> 3) + 1}${String.fromCharCode(65 + (v & 7))}`;
     }
     return `${v}`;

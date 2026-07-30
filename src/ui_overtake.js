@@ -118,18 +118,24 @@ const PAD_CLEAR = 75;
 
 /* Edit pages the knobs address */
 const EDIT_FX     = 0;
-const EDIT_LFO1   = 1;
-const EDIT_LFO2   = 2;
-const EDIT_LFO3   = 3;
-const EDIT_MENV   = 4;
+/* Four LFOs in two families. A VOICE LFO reaches the source stage and the
+ * voice filter; an FX LFO reaches the two inserts. They are separate pages
+ * rather than one list of four because the DEST encoder means different things
+ * on each — the destination spaces overlap numerically and do not overlap in
+ * meaning, so a shared page would have to explain itself on every read. */
+const EDIT_VLFO1  = 1;
+const EDIT_VLFO2  = 2;
+const EDIT_FLFO1  = 3;
+const EDIT_FLFO2  = 4;
+const EDIT_MENV   = 5;
 /* The voice filter is its own page rather than knobs on the sample machines:
  * all five source machines already spend all eight, and a filter belongs to
  * the voice rather than to the machine reading the sample. */
-const EDIT_VFILT  = 5;
-const EDIT_GLOBAL = 6;
-const EDIT_COUNT  = 7;
-const EDIT_NAME   = ['FX', 'LFO 1', 'LFO 2', 'LFO 3', 'MOD ENV', 'VOICE FLT',
-                     'GLOBAL'];
+const EDIT_VFILT  = 6;
+const EDIT_GLOBAL = 7;
+const EDIT_COUNT  = 8;
+const EDIT_NAME   = ['FX', 'V.LFO 1', 'V.LFO 2', 'FX LFO 1', 'FX LFO 2',
+                     'MOD ENV', 'VOICE FLT', 'GLOBAL'];
 
 /* Step-attribute modes the jog edits while a step is held */
 const MODE_NONE   = 0;
@@ -448,7 +454,24 @@ const LOCK_MACH0    = 24;      /* stage N's machine is LOCK_MACH0 + N */
 const LOCK_LEVEL    = 27;
 const LOCK_PAN      = 28;
 const LOCK_VF0      = 29;      /* the seven voice-filter fields run from here */
-const DEST_MAX      = N_STAGES * 8 - 1;
+const DEST_MAX      = N_STAGES * 8 - 1;   /* the mod envelope still spans every stage */
+
+/* Engine LFO index -> parameter-key prefix. The engine orders them voice-first,
+ * so 0..1 are vlfo1..2 and 2..3 are flfo1..2. Derived from the family sizes
+ * rather than written out, so raising WORK_VOICE_LFOS does not leave this
+ * pointing at the wrong modulator. */
+const N_VOICE_LFOS = 2;
+function lfoKeyPrefix(i) {
+    return i < N_VOICE_LFOS ? `vlfo${i + 1}` : `flfo${i - N_VOICE_LFOS + 1}`;
+}
+
+/* How many destinations each LFO offers, from the engine's lfo_dests. The
+ * fallback only covers the window before the first fetchAll answers, and it is
+ * deliberately the SMALLER of the two family sizes: a UI that briefly believes
+ * in fewer destinations can only under-offer, where one that over-offers would
+ * write a destination the engine refuses and the encoder would feel jammed. */
+let lfoDests = [15, 15, 15, 15];
+let lfoDestsRead = false;
 
 function lockForParam(stage, knob) {
     return stage * 8 + knob;
@@ -502,16 +525,21 @@ function pageKnobs() {
             { key: '', label: '', lock: -1, min: 0, max: 0 }
         ];
     }
-    if (editPage === EDIT_LFO1 || editPage === EDIT_LFO2 || editPage === EDIT_LFO3) {
-        const n = editPage - EDIT_LFO1 + 1;
+    if (editPage >= EDIT_VLFO1 && editPage <= EDIT_FLFO2) {
+        const i = editPage - EDIT_VLFO1;          /* 0..3, engine LFO order */
+        const p = lfoKeyPrefix(i);
         return [
-            { key: `lfo${n}_dest`,  label: 'DEST',  lock: -1, min: -1, max: DEST_MAX },
-            { key: `lfo${n}_spd`,   label: 'SPD',   lock: -1, min: 0, max: 127 },
-            { key: `lfo${n}_mult`,  label: 'MULT',  lock: -1, min: 0, max: 127 },
-            { key: `lfo${n}_wave`,  label: 'WAVE',  lock: -1, min: 0, max: 6 },
-            { key: `lfo${n}_depth`, label: 'DEP',   lock: -1, min: 0, max: 127 },
-            { key: `lfo${n}_phase`, label: 'SPH',   lock: -1, min: 0, max: 127 },
-            { key: `lfo${n}_trig`,  label: 'TRIG',  lock: -1, min: 0, max: 1 },
+            /* max comes from the ENGINE's lfo_dests, not from arithmetic here.
+             * The two families offer different counts (15 against 16) and a
+             * local formula would be a second copy of a table the engine owns
+             * — the same rule that keeps the machine palette reachable. */
+            { key: `${p}_dest`,  label: 'DEST',  lock: -1, min: -1, max: lfoDests[i] - 1 },
+            { key: `${p}_spd`,   label: 'SPD',   lock: -1, min: 0, max: 127 },
+            { key: `${p}_mult`,  label: 'MULT',  lock: -1, min: 0, max: 127 },
+            { key: `${p}_wave`,  label: 'WAVE',  lock: -1, min: 0, max: 6 },
+            { key: `${p}_depth`, label: 'DEP',   lock: -1, min: 0, max: 127 },
+            { key: `${p}_phase`, label: 'SPH',   lock: -1, min: 0, max: 127 },
+            { key: `${p}_trig`,  label: 'TRIG',  lock: -1, min: 0, max: 1 },
             { key: '', label: '', lock: -1, min: 0, max: 0 }
         ];
     }
@@ -552,7 +580,8 @@ function fetchAll() {
     if (machineList.length === 0) keys.push('machines');
     if (condList.length === 0) keys.push('conds');
     if (familyFor(STAGE_SRC).length === 0) keys.push('src_codes', 'fx_codes');
-    if (nTracks <= 1) keys.push('tracks');
+    if (nTracks <= 1) keys.push("tracks");
+    if (!lfoDestsRead) keys.push("lfo_dests");
     keys.push('track_map');
 
     for (let s = 0; s < N_STAGES; s++) {
@@ -604,7 +633,11 @@ function fetchAll() {
     monitor = num('monitor');
     hwInput = num('hw_input');
     selTrack = num('track');
-    if (v.tracks) nTracks = Math.max(1, num('tracks'));
+    if (v.tracks) nTracks = Math.max(1, num("tracks"));
+    if (v.lfo_dests) {
+        const d = `${v.lfo_dests}`.split(",").map((x) => parseInt(x, 10));
+        if (d.length >= 4 && d.every(Number.isFinite)) { lfoDests = d; lfoDestsRead = true; }
+    }
 
     /* "<trigs>:<source machine>" per track, comma separated. Parsed
      * defensively: a short or absent answer leaves the strip showing what it
