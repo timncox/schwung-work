@@ -377,6 +377,14 @@ Two ways to misread the daemon's state, both of which cost time today:
   exactly like a daemon crash. Every reboot kills testd; it is not
   auto-started.
 
+**You cannot check whether a module is mapped from `ableton`.** `grep
+/data/UserData/schwung/modules /proc/*/maps` returns EMPTY whether or not an
+overtake DSP is loaded, because the shim lives inside MoveOriginal and
+`/proc/<its pid>/maps` is permission-denied to us — verified 2026-07-30, after
+I used exactly that check to declare a deploy safe. It proved nothing. The
+honest check is the manager's `tool_info` over `ws://move.local:7700/ws/remote-ui`
+(subscribe_tool), which reports the active overtake tool by id.
+
 **Deploy with the tool CLOSED.** `scripts/deploy.sh` overwrites `dsp.so`; doing
 that while an overtake module has it mapped crashed MoveOriginal on 2026-07-30
 and needed a power cycle. Check `bus.state().overtake_mode == 0` first, deploy,

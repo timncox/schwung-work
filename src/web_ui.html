@@ -458,8 +458,23 @@ function renderRail() {
     d.appendChild(n); d.appendChild(m); d.appendChild(bar);
     /* Changing track is navigation, not a parameter — same as the surface.
        The write bumps rui_rev, so the manager pushes a fresh blob and the
-       detail below follows. */
-    d.onclick = () => send("track", t);
+       detail below follows.
+
+       Move the highlight NOW rather than waiting for that blob. The round trip
+       is a blocking param read serviced once per SPI frame and then a poll
+       interval on top, so a click that only takes effect when the device
+       answers reads as a click that did nothing — which is exactly how it
+       felt. The device's answer overwrites this a moment later either way, so
+       an optimistic move cannot desync: if the write is refused, the next blob
+       puts the highlight back. */
+    d.onclick = () => {
+      send("track", t);
+      const rail = el("rail");
+      for (let i = 0; i < rail.children.length; i++)
+        rail.children[i].classList.toggle("sel", i === t);
+      M.ftrk = t + "," + count;
+      renderChain(); renderSteps(csv("fseq")[1] || 16); renderVoice(); renderMod();
+    };
     rail.appendChild(d);
   }
 }
@@ -568,7 +583,14 @@ function renderSteps(len) {
     /* Past the pattern's length a step exists but never fires; say so rather
        than letting it look identical to one that will. */
     if (i >= len) d.style.opacity = "0.35";
-    d.onclick = () => send("step" + i, (st.on ? 0 : 1) + ":" + st.cond + ":0:0:" + st.prob);
+    /* Same reasoning as the track rail: paint the step immediately and let the
+       device's next blob be the authority. A trig that only lights up after a
+       round trip is a trig you press twice. */
+    d.onclick = () => {
+      st.on = st.on ? 0 : 1;
+      d.classList.toggle("on", !!st.on);
+      send("step" + i, st.on + ":" + st.cond + ":0:0:" + st.prob);
+    };
     grid.appendChild(d);
   }
 }
