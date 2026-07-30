@@ -1769,7 +1769,7 @@ static void m_warble(mctx_t *m, float *l, float *r) {
  * two seconds of history. With no sample loaded it falls back to the live
  * input exactly as before, so an existing patch sounds unchanged.
  */
-static void m_grainer(mctx_t *m, float *l, float *r) {
+static void m_granulator(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
     const uint8_t *p = m->p;
 
@@ -2502,7 +2502,7 @@ static void run_machine(mctx_t *m, int machine, float *l, float *r) {
         case WORK_FX_IRONROOM:  m_steelbox(m, l, r);  break;
         case WORK_FX_VOIDSPACE: m_supervoid(m, l, r); break;
         case WORK_FX_FLUTTER:    m_warble(m, l, r);    break;
-        case WORK_FX_GRANULATOR:   m_grainer(m, l, r);   break;
+        case WORK_FX_GRANULATOR:   m_granulator(m, l, r);   break;
         case WORK_FX_ONESHOT:    m_single(m, l, r);    break;
         case WORK_FX_POLYSAMPLE:     m_multi(m, l, r);     break;
         case WORK_FX_SLICER: m_subtracks(m, l, r); break;

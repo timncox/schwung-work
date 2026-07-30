@@ -1227,7 +1227,7 @@ static void test_reverbs_are_distinct(void) {
 
 /* Granulator must actually granulate: rearrange the input rather than pass it,
  * and follow TUNE. */
-static void test_grainer(void) {
+static void test_granulator(void) {
     printf("Granulator granulates the input buffer and tracks TUNE\n");
 
     /* fully wet, pitch centred */
@@ -2915,7 +2915,7 @@ static void test_single_player(void) {
 }
 
 
-static void test_grainer_reads_the_sample(void) {
+static void test_granulator_reads_the_sample(void) {
     printf("Granulator granulates the loaded sample, and live input without one\n");
     work_t *w = work_create(&host);
 
@@ -3410,7 +3410,7 @@ int main(void) {
     test_param_name_table();
     test_ui_hierarchy_not_served();
     test_reverbs_are_distinct();
-    test_grainer();
+    test_granulator();
 
     printf("\n-- sequencer --\n");
     test_seq_locks_apply_and_revert();
@@ -3456,7 +3456,7 @@ int main(void) {
     test_sample_bounds();
     test_single_player();
 
-    test_grainer_reads_the_sample();
+    test_granulator_reads_the_sample();
 
     test_multi_player_is_polyphonic();
     test_multi_player_pitch();
