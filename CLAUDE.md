@@ -443,33 +443,46 @@ mock cannot quietly become too forgiving to catch the bug that broke Mono.
 polyphony and voice stealing; note-to-pitch tracking; anything about how the
 machines actually SOUND as opposed to producing signal.
 
-**CPU, measured on the A53 for the first time on 2026-07-29.** `make
-bench-tracks-arm` cross-compiles `test/bench_tracks.c`; copy it to the Move and
-run it there. A "track" is 1 SRC machine + 2 insert FX + the voice filter +
-sounding voices — the shape the reference device uses. Percentages are of ONE
-core:
+**CPU, measured on the A53.** `make bench-tracks-arm` cross-compiles
+`test/bench_tracks.c`; copy it to the Move and run it there. A "track" is
+1 SRC machine + 2 insert FX + the voice filter + sounding voices. Percentages
+are of ONE core, measured 2026-07-30 (two runs, agreeing within 1-2 points):
 
-| profile                    | 1 trk | 4 trk | 8 trk | 12 trk | 16 trk |
-|----------------------------|-------|-------|-------|--------|--------|
-| light  1shot+tilt+fbank    |  4%   | 15%   | 30%   |  44%   |  59%   |
-| mid    poly+mmf+drivedelay |  4%   | 15%   | 29%   |  47%   |  61%   |
-| heavy  poly+2 reverbs      |  9%   | 38%   | 74%   | 115%   | 152%   |
+| profile                    | 1 | 2 | 4 | **8** | 12 | 16 |
+|----------------------------|---|---|---|-------|----|----|
+| light  1shot+tilt+fbank — N instances |  5% | 10% | 20% | **39%** | 59% | 80% |
+| light — one engine, N tracks          |  5% |  9% | 15% | **28%** |  —  |  —  |
+| mid    poly+mmf+drivedelay — instances |  5% | 10% | 19% | **39%** | 60% | 80% |
+| mid — one engine                       |  5% |  9% | 16% | **29%** |  —  |  —  |
+| heavy  poly+2 reverbs — instances      | 10% | 21% | 42% | **86%** |132% |172% |
+| heavy — one engine                     | 10% | 20% | 41% | **82%** |  —  |  —  |
 
-Cost is essentially linear in track count, and light vs mid barely differ — the
-fixed per-track overhead (voices, filter, modulators, sequencer) dominates
-unless a reverb is involved. Reverbs are the only machines that move the needle.
-So **eight tracks fits**; twelve fits unless every track runs two reverbs.
+**Eight light or mid tracks fit at under 30% of a core. Eight HEAVY tracks do
+not** — 82% is past the ~50% line, and it is the reverbs, as it always was.
 
-The Mac-vs-Move ratio came out at ~8x (8 heavy tracks: 9% on a Mac, 74% here),
-which is worth knowing when reading `make bench` output.
+The **real engine is cheaper than N one-track instances**, and by a shrinking
+margin as the profile gets heavier: 11 points at light, 9 at mid, 4 at heavy.
+That is the shape you would expect — what a single instance shares between its
+tracks is the FIXED overhead (sequencer, transport, pattern, mix stage), so it
+is a large fraction of a light track and a small one of a track running two
+reverbs. `bench_tracks` measures both modes and prints the delta.
+
+**Two corrections to what was recorded on 2026-07-29.** Those figures (light
+4/15/30%, heavy 9/38/74%) were wrong in the same way: `set_slot()` wrote
+`"fx%d"` for every stage including the source, so after the SRC promotion the
+source machine went to insert 1 and the **family gate silently refused it**.
+Every profile measured two effects over an empty source stage with no voices
+sounding. `set_stage()` now uses the stage's own key and **reads back what it
+loaded**, exiting if a stage refuses. A benchmark that does not check what it
+configured is measuring something it cannot name.
 
 **Read the caveat before quoting these.** The benchmark runs as its own process
-on a free core. `MoveOriginal` is a 20-thread process sitting at roughly one
-core's worth on a 4-core box, and DSP hosted inside its audio callback shares
-*that* thread's budget, not a free core's. So the table is an upper bound on
-what the hardware can do, not a measurement of what is left inside the render
-callback. Whether audio_fx slots on different Move tracks are rendered on
-different threads is UNKNOWN and worth settling before betting on it.
+on a free core, with `MoveOriginal` sitting at roughly one core's worth of a
+4-core box (load average was 3.1 during these runs). DSP hosted inside its audio
+callback shares *that* thread's budget, not a free core's. So the table is an
+upper bound on what the hardware can do, not a measurement of what is left
+inside the render callback. Whether audio_fx slots on different Move tracks are
+rendered on different threads is UNKNOWN and worth settling before betting on it.
 
 Memory is not a constraint: one 3-slot track is 6.1 MB (1.35 MB sample RAM,
 1.58 MB of delay/reverb lines per slot), so 8 two-slot tracks is ~36 MB against

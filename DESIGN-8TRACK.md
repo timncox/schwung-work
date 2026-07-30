@@ -1,6 +1,6 @@
 # Work — the eight-track restructure
 
-Status: **steps 1-6 done; 7 needs hardware.** Read this
+Status: **all seven steps done (2026-07-30).** Read this
 before touching `work_core.h`. It exists because the refactor spans more work
 than one session holds, and because two of its decisions are expensive to
 reverse.
@@ -306,7 +306,28 @@ Each step lands with tests green; nothing here needs a big-bang merge.
    for the gestures and for which hardware was ruled out and why. Nothing here
    has been on a device yet.
 7. Re-run `bench-tracks` on the Move against the real engine rather than N
-   instances, and record the delta.
+   instances, and record the delta. **Done, 2026-07-30**, on the device.
+
+   `bench_tracks` now measures BOTH modes and prints the delta itself, so the
+   comparison is one run rather than two remembered numbers. At eight tracks on
+   the A53 the real engine costs 28% of a core for a light profile against 39%
+   for eight instances, 29% against 39% at mid, and 82% against 86% at heavy.
+
+   The delta shrinks as the profile gets heavier — 11 points, 9, then 4 — which
+   is the shape to expect: what one instance shares between its tracks is the
+   fixed overhead, and that is a large fraction of a light track and a small
+   one of a track running two reverbs.
+
+   **Eight light or mid tracks fit; eight heavy ones do not.** 82% is past the
+   ~50% line. The reverbs are the only machines that move the needle, which was
+   also true of the old numbers.
+
+   Fixing the benchmark was most of this step. `set_slot()` wrote `"fx%d"` for
+   every stage including the source, so after the SRC promotion the source
+   machine went to insert 1 and the family gate refused it — every figure
+   recorded on 2026-07-29 was two effects over an empty source stage with no
+   voices. It now addresses stages by their own keys and reads back what it
+   loaded, exiting if a stage refuses.
 
 ## What must not be lost
 
