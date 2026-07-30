@@ -107,10 +107,12 @@ wrapper turns it on at create.
   so a lock cannot put a reverb in the source stage. It also fires the locked
   machine's voice — the trigger reads the EFFECTIVE machine and parameters, so
   a firing trig is a complete snapshot of the voice as well as the knobs.
-- **Preset versions:** the blob is `"v":2`. v1 covers two different maps (before
-  and after the SRC promotion) and nothing in the lock data separates them — the
-  flat-mirror key names do, because they were renumbered in the same change.
-  `fp3` dates a blob to before it, `fp_src` to after.
+- **Preset versions:** the blob is `"v":3`. v3 prefixes every per-track key
+  with `t<N>` and packs each lane to base64; v2 and v1 have no prefix and write
+  the pattern as `"stp"` text. v1 additionally covers two different lock maps
+  (before and after the SRC promotion) and nothing in the lock data separates
+  them — the flat-mirror key names do, because they were renumbered in the same
+  change. `fp3` dates a blob to before it, `fp_src` to after.
 - Resolution order per block is **base → locks → FX LFOs**, which is Elektron's:
   a lock sets the value, the LFO moves around whatever the lock set.
 - **Lock semantics:** each firing trig is a complete snapshot — parameters it
@@ -122,15 +124,46 @@ wrapper turns it on at create.
 - Retrig restarts the FX LFOs and the filter envelope. It does **not** stutter
   audio — the Decimator's FREZ is the machine for that.
 
-Worst-case `state` blob (64 steps, every lock set) is **14,817 bytes** against
-the device host's 16,384-byte read buffer — 90% of it, measured 2026-07-29. It
-was 7570 when the map had 19 lockables; the v2 map has 36. Over the buffer a
-preset does not fail, it TRUNCATES, and the pattern comes back short.
-`test_worst_case_state_fits_the_host_buffer` fails before that can happen.
+## The preset blob
 
-This is what blocks eight lanes: the same density across eight would be about
-114 KB. A packed-binary-plus-base64 lane encoding is the way out, and it has to
-land before `WORK_TRACKS` goes up. See DESIGN-8TRACK.md.
+`get_param("state")` is served through a 16,384-byte buffer in the host
+(`js_host_module_get_param`, schwung's `src/schwung_host.c`). Over that a
+preset does not fail, it **TRUNCATES** — it stays valid JSON, loses the later
+tracks, and says nothing. That is what kept `WORK_TRACKS` at 1 until v0.9.0:
+the v2 text format put a single maximally dense lane at 14,817 bytes, 90% of
+the buffer, and eight of those is about 114 KB.
+
+Three things fixed it, and none of them may be undone casually:
+
+- **Lanes are packed to binary and base64'd** (`lane_pack` / `lane_unpack`). A
+  step record is 12 bytes plus one per lock. Fields stay a byte each rather
+  than bit-packing into the obvious spare room, because every one is bounded by
+  a `WORK_*` constant that has already grown once. The lock mask is read back
+  by population count over all 40 bits, so a blob from a future engine with
+  more lockables parses instead of desynchronising.
+- **Per-track keys are prefixed `t<N>`.** `apply_state` walks the blob with
+  `strstr` rather than parsing JSON, so a nested `m1` would be found by
+  whichever track came first. A track that is all Bypass with an empty lane is
+  omitted entirely — it can make no sound whatever else is set — and comes back
+  at `track_defaults()`.
+- **The blob is served in WINDOWS**: `state_len` for the total, `state` and
+  `state@<offset>` for the bytes. Ask for the length first rather than reading
+  until a short answer; "short" means "shorter than the host's buffer", and
+  that constant lives in schwung, not here.
+
+Measured 2026-07-29, at eight tracks:
+
+| pattern | blob | host reads |
+|---|---|---|
+| empty | 515 B | 1 |
+| 64 trigs on every lane | 10,418 B | 1 |
+| …plus 4 locks per step | 13,170 B | 1 |
+| …plus all 36 locks per step | 34,994 B | 3 |
+
+So the realistic case still costs one round trip. `test_one_dense_track_fits_a_single_read`
+guards that, because a chain slot holds one track and paying for paging there
+would be a cliff nobody asked for;
+`test_every_track_survives_the_window_protocol` guards the rest.
 
 ## Machine list
 
@@ -193,6 +226,30 @@ These are all lessons other Schwung modules paid for. Do not relearn them.
   never listed a file. This paid for itself immediately: the first fixture run
   caught that `lock<N>_<P>` had a setter but **no getter**, so lock display and
   lock nudging were both silently reading the base value.
+
+## MIDI
+
+**Track N listens on channel N.** Channel 1 drives track 1, channel 8 drives
+track 8, and a channel above the track count reaches nothing at all. Decided
+2026-07-29 over addressing tracks through NRPN: a channel per track is what
+every hardware sequencer already speaks, so the whole CC map works per track
+unchanged instead of needing a second scheme beside it.
+
+The spare channels are ignored rather than folded onto the selected track, on
+purpose. A fallback would make one message mean different things depending on
+where the UI was pointed, which is the kind of surprise that makes a rig
+unreproducible — the same reason micro-timing had to become per-lane.
+
+The CC map, per channel: 8–15 insert 1 A–H, 16–23 insert 2 A–H, 24/25 insert
+machine selects, 26 dry/wet, 27 track level, 28 track pan, 32/40/48 LFOs,
+56–60 mod envelope, 64/65/66 sequencer/fill/record, 80–87 source A–H, 88 source
+machine. The source stage sits at 80 because 27–31 is not eight controls wide,
+and because 8–26 was published meaning the inserts and the dry/wet — which is
+still exactly what it means. Nothing anyone already mapped moved.
+
+Only EXTERNAL and FX-broadcast CCs are acted on; Move's own encoders arrive as
+INTERNAL and would fight the UI. Identical messages inside ~2 blocks are
+dropped, because a channel-matched chain slot can deliver one CC twice.
 
 ## Feedback
 

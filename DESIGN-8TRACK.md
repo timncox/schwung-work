@@ -1,17 +1,20 @@
 # Work — the eight-track restructure
 
-Status: **steps 1-3 done (2026-07-29); 4 onwards not started.** Read this
+Status: **steps 1-4 done (2026-07-29); 5 onwards not started.** Read this
 before touching `work_core.h`. It exists because the refactor spans more work
 than one session holds, and because two of its decisions are expensive to
 reverse.
 
-**MIDI: channel per track**, decided 2026-07-29. Track N listens on channel N
-and the published CC 8..28 map is reused verbatim on each, so nothing anyone
-has already mapped moves.
+**MIDI: channel per track**, decided 2026-07-29 and now implemented. Track N
+listens on channel N and the published CC 8..28 map is reused verbatim on each,
+so nothing anyone has already mapped moves. A channel above the track count
+reaches nothing rather than falling back to the selected track.
 
-**Step 4 is structurally done but the count is still 1**, blocked on the state
-blob size — measured at 90% of the host's read buffer at ONE track. See step 4
-below.
+**`WORK_TRACKS` is 8.** The state format was what blocked it, and the fix is
+described in `CLAUDE.md` under "The preset blob": packed lanes, per-track key
+prefixes, and windowed reads. What remains is the SURFACE — eight tracks are
+reachable over MIDI and in a preset, but the Move's own controls still address
+one.
 
 ## Why
 
@@ -245,33 +248,41 @@ Each step lands with tests green; nothing here needs a big-bang merge.
    The migration needed one thing the plan did not anticipate: "v":1 covers TWO
    maps, and only the flat-mirror key names date a blob to before or after the
    SRC promotion.
-4. `WORK_TRACKS` = 8; sequencer grows to eight lanes. **Structure done, count
-   NOT flipped** — see below.
+4. `WORK_TRACKS` = 8; sequencer grows to eight lanes. **Done, 2026-07-29.**
 
-   Done: the render path names its track explicitly (`mctx_t.tr`, per-track prep
-   loop, a render that sums), a pattern holds one `work_lane_t` per track,
-   `held`/`held_mask` moved onto the track, `seq_run` walks every lane through
-   `lane_fire()`, and `track` selects which one the parameter interface
-   addresses. All of it runs green at `WORK_TRACKS == 1`.
+   The structure landed first: the render path names its track explicitly
+   (`mctx_t.tr`, per-track prep loop, a render that sums), a pattern holds one
+   `work_lane_t` per track, `held`/`held_mask` moved onto the track, `seq_run`
+   walks every lane through `lane_fire()`, and `track` selects which one the
+   parameter interface addresses.
 
-   **Blocked on the state format, measured not guessed.** The worst-case blob —
-   64 steps, every step trigged, every one of the 36 lockables set — is
-   **14,817 bytes against the device host's 16,384-byte read buffer**. At one
-   track. Eight lanes at that density is about 114 KB, seven times over, and
-   the failure mode is silent truncation: the preset loads and the pattern
-   comes back short.
+   The **state format** was the real blocker, and it was measured rather than
+   guessed: the v2 text blob put one maximally dense lane at 14,817 bytes
+   against a 16,384-byte host read buffer, so eight was about 114 KB and the
+   failure mode was silent truncation. Fixed by packing lanes to base64,
+   prefixing per-track keys, and serving the blob in windows — the full account
+   is in `CLAUDE.md` under "The preset blob". A realistically dense eight-track
+   pattern is 13,170 bytes and still fits one read; the pathological one is
+   34,994 across three.
 
-   So the flip needs a compact pattern encoding first. The obvious one is
-   base64 of a packed binary lane rather than `"index=value"` text, which is
-   roughly a 4x saving and would put eight lanes near 28 KB — still over, so
-   the lanes probably also want to be emitted only when non-empty. Decide that
-   before flipping the constant.
-   `test_worst_case_state_fits_the_host_buffer` guards the current margin.
+   The flip then exposed two bugs, both the same shape — state meaning "the
+   selected track" sitting on the RENDER path:
 
-   Also still to do at the flip: MIDI channel-per-track routing (decided
-   2026-07-29 — track N listens on channel N, reusing the CC 8..28 map
-   verbatim), and the per-track allocation cost (~6 MB each, so eight is
-   ~48 MB at `work_create` whether or not they are used).
+   - `active_step()` read the selected lane's micro-timing to pick the step for
+     every lane, so a nudge on track 5 did nothing and a nudge on track 1 moved
+     all eight. Micro lives on the step, so it is per lane.
+   - `last_step` was one edge detector shared by every lane, which swallowed
+     trigs as soon as two lanes were genuinely on different steps.
+
+   Both are covered by `test_micro_timing_is_per_lane`, measured by ear with
+   the voice on the last track and the UI on the first — the arrangement that
+   let them hide.
+
+   The costs turned out not to matter, also measured: idle at eight tracks is
+   0.9% of a Mac core (~7% on the A53), loaded is 8.6% (~69%), and
+   `work_create` adds 1.8 MB resident rather than the ~48 MB of address space
+   the allocations suggest, because untouched tracks never fault their pages
+   in. No idle-skip optimisation is needed.
 5. LFOs split into voice and FX families, two of each per track.
 6. Surface: TRACK modifier, per-stage palette, screen track strip.
 7. Re-run `bench-tracks` on the Move against the real engine rather than N
