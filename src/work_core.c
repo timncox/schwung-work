@@ -4826,6 +4826,42 @@ static int state_build(work_t *w) {
                             w->seq_on, CURPAT(w)->len, w->seq_pos,
                             w->cur_pattern, w->sel_track, WORK_TRACKS), cap);
 
+    /* The knob NAMES of the three loaded machines, and the machine table
+     * itself with each stage's family.
+     *
+     * These are all served as their own keys already — labels_src, machines,
+     * src_codes — and the browser can reach none of them: the manager only
+     * ever reads "state", and schwungRemote.getParam answers from its cache of
+     * that parse. A page missing labels renders a stage with no knobs at all,
+     * and a page missing the family lists cannot offer a machine without
+     * keeping its own copy of the table, which is the duplication this project
+     * refuses everywhere else. ~450 bytes, once, not per track. */
+    for (int sl = 0; sl < WORK_STAGES; ++sl) {
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                ",\"flab%s\":\"", STAGE_SFX[sl]), cap);
+        for (int i = 0; i < WORK_PARAMS; ++i)
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s%s",
+                                    i ? "," : "",
+                                    PARAM_NAME[TRK(w)->cfg[sl].machine][i]), cap);
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "\""), cap);
+    }
+    n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), ",\"fmach\":\""), cap);
+    for (int mc = 0; mc < WORK_FX_COUNT; ++mc)
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s%s",
+                                mc ? "," : "", MACHINE_NAME[mc]), cap);
+    n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "\""), cap);
+    for (int sl = 0; sl < WORK_STAGES; ++sl) {
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                ",\"ffam%s\":\"", STAGE_SFX[sl]), cap);
+        int wrote = 0;
+        for (int mc = 0; mc < WORK_FX_COUNT; ++mc) {
+            if (!work_machine_fits_stage(sl, mc)) continue;
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s%d",
+                                    wrote++ ? "," : "", mc), cap);
+        }
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "\""), cap);
+    }
+
     n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "}"), cap);
     buf[n] = '\0';
     return n;

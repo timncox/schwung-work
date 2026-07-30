@@ -38,13 +38,20 @@ build/dump_contract: src/work_core.c src/work_core.h test/dump_contract.c
 	@mkdir -p build
 	$(CC) $(CFLAGS) src/work_core.c test/dump_contract.c -o $@ $(LDLIBS)
 
+build/dump_state: src/work_core.c src/work_core.h test/dump_state.c
+	@mkdir -p build
+	$(CC) $(CFLAGS) src/work_core.c test/dump_state.c -o $@ $(LDLIBS)
+
+build/state.json: build/dump_state
+	./build/dump_state > $@
+
 test-ui: build/contract.json
 	node --no-warnings --experimental-vm-modules test/ui_overtake.mjs
 	node --no-warnings --experimental-vm-modules test/ui_chain.mjs
 
 # The manual site keeps its own copy of the machine table; this proves it still
 # matches the engine's. A swapped label already slipped through once.
-test-site: build/contract.json build/hierarchy.json
+test-site: build/contract.json build/hierarchy.json build/state.json
 	node --no-warnings test/site_matches_engine.mjs
 
 build/hierarchy.json: build/gen_hierarchy

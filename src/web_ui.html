@@ -1,0 +1,686 @@
+<!--
+  Work / Overwork browser editor.
+
+  Served by schwung-manager into a sandboxed iframe, for the OVERTAKE tool
+  (overwork) and the SOUND GENERATOR slot (work-in). The audio_fx build does
+  not get one and cannot: remote_ui.go only looks for web_ui.html on a slot's
+  "synth" component, so a chain slot uses the auto-generated controls built
+  from the engine's ui_hierarchy + chain_params instead.
+
+  ONE FILE, two hosts. The page sniffs its own parameter prefix from the first
+  update burst rather than being built twice — "overtake_dsp:" when it is the
+  tool, "synth:" when it is a slot.
+
+  Everything it draws comes out of the "state" blob's FLAT MIRROR. That is not
+  a style choice: schwungRemote.getParam reads the iframe's cache of that blob
+  rather than issuing a device read, so a value the mirror omits is a value
+  this page cannot obtain at all. Arrays are dropped by the manager's parse, so
+  the engine emits the same numbers again as strings. See the note above
+  state_build in work_core.c.
+
+  Writes go through the single "rui_set" key — "<param>:<value>" — because the
+  param channel is a blocking round trip serviced once per SPI frame, and one
+  key per control would be one round trip per control.
+-->
+<script src="/static/schwung-remote-api.js"></script>
+
+<style>
+  :root {
+    --bg:      #0b0d10;
+    --panel:   #12161b;
+    --rule:    #1e242c;
+    --grid:    #171c22;
+    --ink:     #c8d2dc;
+    --dim:     #6b7885;
+    --faint:   #3a444f;
+    --hot:     #ffb648;
+    --live:    #4ee39a;
+    --src:     #6ec6ff;
+    --fx1:     #c792ea;
+    --fx2:     #ff8a7a;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    padding: 10px;
+    background: var(--bg);
+    /* graph paper — the schematic the signal flow is drawn on */
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 24px 24px;
+    color: var(--ink);
+    font: 12px/1.45 var(--mono);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2 { margin: 0; font-weight: 600; }
+  h1 { font-size: 13px; letter-spacing: .22em; }
+  h2 {
+    font-size: 10px; letter-spacing: .18em; color: var(--dim);
+    text-transform: uppercase; margin-bottom: 6px;
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 9px 11px;
+    margin-bottom: 8px;
+  }
+
+  /* ---- header ---- */
+  #head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  #head .grow { flex: 1 1 auto; }
+  .stat { color: var(--dim); font-size: 11px; white-space: nowrap; }
+  .stat b { color: var(--ink); font-weight: 600; }
+
+  button {
+    font: inherit;
+    color: var(--ink);
+    background: #1a2028;
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    padding: 3px 9px;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--faint); }
+  button.on { background: var(--live); border-color: var(--live); color: #06231a; }
+
+  select {
+    font: inherit; color: var(--ink); background: #1a2028;
+    border: 1px solid var(--rule); border-radius: 2px; padding: 2px 4px;
+    max-width: 100%;
+  }
+
+  /* ---- track rail ---- */
+  #rail { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 5px; }
+  .trk {
+    border: 1px solid var(--rule); border-radius: 2px;
+    background: #151b22; padding: 5px 6px; cursor: pointer;
+    min-width: 0; overflow: hidden;
+  }
+  .trk:hover { border-color: var(--faint); }
+  .trk.sel { border-color: var(--hot); background: #1d2129; }
+  .trk .n { color: var(--dim); font-size: 10px; letter-spacing: .1em; }
+  .trk.sel .n { color: var(--hot); }
+  .trk .m {
+    display: block; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; font-size: 11px; margin-top: 1px;
+  }
+  .trk .bar { height: 2px; background: var(--faint); margin-top: 4px; }
+  .trk .bar i { display: block; height: 2px; background: var(--src); }
+
+  /* ---- signal flow ---- */
+  #chain { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; }
+  .stage { flex: 1 1 210px; min-width: 0; }
+  .stage h2 { display: flex; align-items: center; gap: 6px; }
+  .stage .tag {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  }
+  .s0 .tag { background: var(--src); }
+  .s1 .tag { background: var(--fx1); }
+  .s2 .tag { background: var(--fx2); }
+  .flow {
+    flex: 0 0 22px; align-self: center; color: var(--faint);
+    text-align: center; user-select: none;
+  }
+
+  /* ---- parameter rows ---- */
+  .row { display: flex; align-items: center; gap: 7px; margin: 2px 0; min-width: 0; }
+  .row .lab {
+    flex: 0 0 62px; color: var(--dim); font-size: 11px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  input[type=range] { accent-color: var(--hot); background: transparent; }
+  .row input[type=range] {
+    flex: 1 1 auto; min-width: 40px; height: 14px; margin: 0;
+  }
+  .row .val {
+    flex: 0 0 46px; text-align: right; font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  /* The value the DSP is actually using, when a lock or an LFO has moved it
+     off the knob. Without it a modulated parameter looks like a broken one. */
+  .row .val i { color: var(--live); font-style: normal; }
+  .row .val u { color: var(--faint); text-decoration: none; }
+
+  /* ---- step grid ---- */
+  #steps { display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 3px; }
+  .st {
+    position: relative; aspect-ratio: 1 / 1; min-height: 20px;
+    border: 1px solid var(--rule); border-radius: 2px;
+    background: #141a20; cursor: pointer;
+  }
+  .st:hover { border-color: var(--faint); }
+  .st.q { background: #171d24; }           /* downbeat of each group of four */
+  .st.on { background: var(--hot); border-color: var(--hot); }
+  .st.play { box-shadow: inset 0 0 0 2px var(--live); }
+  /* a locked step carries a corner mark — the lock is the reason the step
+     sounds different from its neighbours, so it has to be visible */
+  .st.lk::after {
+    content: ""; position: absolute; right: 2px; top: 2px;
+    width: 3px; height: 3px; border-radius: 50%; background: var(--live);
+  }
+  .st.on.lk::after { background: #06231a; }
+
+  #ruler {
+    display: grid; grid-template-columns: repeat(16, minmax(0, 1fr));
+    gap: 3px; color: var(--faint); font-size: 9px; margin-bottom: 3px;
+  }
+
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 0 18px; }
+
+  #offline { color: var(--dim); padding: 26px 4px; }
+  #ui { display: none; }
+
+  @media (max-width: 560px) {
+    #rail { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .row .lab { flex-basis: 52px; }
+  }
+</style>
+
+<div id="offline">Waiting for the device…</div>
+
+<div id="ui">
+  <div class="panel" id="head">
+    <h1>WORK</h1>
+    <button id="run">PLAY</button>
+    <span class="stat">PAT <b id="pat">1</b>/16</span>
+    <span class="stat">STEP <b id="pos">1</b>/<b id="len">16</b></span>
+    <span class="grow"></span>
+    <span class="stat">MIX</span>
+    <input id="mix" type="range" min="0" max="127" style="width:110px">
+    <span class="stat"><b id="mixv">127</b></span>
+  </div>
+
+  <div class="panel">
+    <h2>Tracks</h2>
+    <div id="rail"></div>
+  </div>
+
+  <div class="panel">
+    <h2 id="chainhead">Signal chain</h2>
+    <div id="chain"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Pattern <span id="pagelab" style="color:var(--faint)"></span></h2>
+    <div id="ruler"></div>
+    <div id="steps"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Voice</h2>
+    <div class="cols" id="voice"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Modulation</h2>
+    <div class="cols" id="mod"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ---- constants that MUST agree with the engine ------------------------ */
+const STAGES   = ["src", "fx1", "fx2"];      /* parameter key prefixes      */
+const STAGE_SFX= ["_src", "1", "2"];         /* flat-mirror key suffixes    */
+const STAGE_TAG= ["SRC", "FX 1", "FX 2"];
+const MACH_KEY = ["src", "machine1", "machine2"];
+const PARAMS   = 8;
+const STEPS    = 64;
+const LOCKABLE = 36;
+const MASK_BYTES = Math.ceil(LOCKABLE / 8);  /* lane_pack: 5                */
+const REC_FIXED  = 7 + MASK_BYTES;           /* lane_pack: 12               */
+
+const VF_KEY  = ["vf_base","vf_width","vf_reso","vf_env","vf_atk","vf_dec","vf_track"];
+const VF_NAME = ["BASE","WIDTH","RESO","ENV","ATTACK","DECAY","KEY"];
+const LFOS    = ["vlfo1","vlfo2","flfo1","flfo2"];
+const LFO_MIR = ["fvl1","fvl2","ffl1","ffl2"];   /* their flat-mirror keys  */
+const LFO_F   = ["dest","spd","mult","wave","depth","phase","trig"];
+const LFO_N   = ["DEST","SPEED","MULT","WAVE","DEPTH","PHASE","TRIG"];
+const WAVES   = ["Tri","Sin","Sqr","Saw","Ramp","Exp","Rnd"];
+const ME_F    = ["dest","atk","hold","dec","depth"];
+const ME_N    = ["DEST","ATTACK","HOLD","DECAY","DEPTH"];
+
+/* ---- device model ----------------------------------------------------- */
+let PREFIX = null;         /* "overtake_dsp:" (tool) or "synth:" (slot)     */
+const M = {};              /* stripped key -> string value                  */
+let playOn = false, playPos = 0;
+let page = 0;              /* which 16 steps the grid is showing            */
+const touched = {};        /* control id -> ts, so a drag is not fought     */
+
+const el   = (id) => document.getElementById(id);
+const numOf= (k, d) => (M[k] === undefined ? d : parseFloat(M[k]));
+const csv  = (k) => (M[k] ? M[k].split(",").map(Number) : []);
+
+/* Every write is one rui_set. The param channel is a blocking round trip
+   serviced once per SPI frame, so a key per control would be a round trip per
+   control — and dragging a slider would be a queue. */
+function send(key, val) {
+  if (!PREFIX) return;
+  schwungRemote.setParam(PREFIX + "rui_set", key + ":" + String(val));
+}
+
+/* ---- lane decode ------------------------------------------------------
+   The engine packs each lane and base64s it (lane_pack in work_core.c). The
+   page unpacks rather than asking for 64 step values, which would be 64 round
+   trips for something already in the blob it was handed. */
+function decodeLane(b64) {
+  const out = [];
+  for (let i = 0; i < STEPS; i++) out.push({ on: 0, locks: 0, prob: 100, cond: 0 });
+  if (!b64) return out;
+
+  let raw;
+  try { raw = atob(b64); } catch (e) { return out; }
+
+  let n = 0;
+  while (n + REC_FIXED <= raw.length) {
+    const idx = raw.charCodeAt(n);
+    if (idx >= STEPS) break;                 /* corrupt: stop, do not guess */
+    const st = out[idx];
+    st.on   = raw.charCodeAt(n + 1) ? 1 : 0;
+    st.cond = raw.charCodeAt(n + 2);
+    st.prob = raw.charCodeAt(n + 5);
+    n += 7;
+
+    let locks = 0;
+    for (let b = 0; b < MASK_BYTES; b++) {
+      const byte = raw.charCodeAt(n + b);
+      for (let bit = 0; bit < 8; bit++) if (byte & (1 << bit)) locks++;
+    }
+    n += MASK_BYTES + locks;                 /* one value byte per set bit  */
+    st.locks = locks;
+  }
+  return out;
+}
+
+/* ---- incoming sync ----------------------------------------------------- */
+schwungRemote.onParamChange(function (params) {
+  let dirty = false;
+  for (const k in params) {
+    let p = null;
+    if (k.indexOf("overtake_dsp:") === 0) p = "overtake_dsp:";
+    else if (k.indexOf("synth:") === 0)   p = "synth:";
+    if (!p) continue;
+    if (!PREFIX) PREFIX = p;
+
+    const key = k.slice(p.length);
+    if (key === "rui_play") {                /* cheap playhead: on:tick:bpm */
+      const a = params[k].split(":").map(Number);
+      playOn = !!a[0];
+      paintPlayhead();
+      continue;
+    }
+    if (M[key] !== params[k]) { M[key] = params[k]; dirty = true; }
+  }
+  if (dirty) render();
+});
+
+/* ---- small builders ---------------------------------------------------- */
+
+/* A labelled slider that reports BOTH values: what the knob is set to, and
+   what the DSP is using once locks and LFOs have resolved. They differ often
+   enough that showing only the knob makes a modulated parameter look stuck. */
+function slider(host, id, label, value, min, max, onset, effective) {
+  const row = document.createElement("div");
+  row.className = "row";
+
+  const lab = document.createElement("span");
+  lab.className = "lab";
+  lab.textContent = label;
+  lab.title = label;
+
+  const r = document.createElement("input");
+  r.type = "range"; r.min = min; r.max = max; r.value = value; r.id = id;
+
+  const v = document.createElement("span");
+  v.className = "val";
+
+  const paint = (base) => {
+    v.textContent = "";
+    if (effective !== undefined && effective !== null && effective !== base) {
+      const e = document.createElement("i");
+      e.textContent = effective;
+      const b = document.createElement("u");
+      b.textContent = " " + base;
+      v.appendChild(e); v.appendChild(b);
+    } else {
+      v.textContent = base;
+    }
+  };
+  paint(value);
+
+  r.oninput  = () => { touched[id] = Date.now(); paint(r.value); };
+  r.onchange = () => { touched[id] = Date.now(); onset(parseInt(r.value, 10)); };
+
+  row.appendChild(lab); row.appendChild(r); row.appendChild(v);
+  host.appendChild(row);
+  return r;
+}
+
+function chooser(host, label, options, index, onset) {
+  const row = document.createElement("div");
+  row.className = "row";
+  const lab = document.createElement("span");
+  lab.className = "lab";
+  lab.textContent = label;
+  const s = document.createElement("select");
+  s.style.flex = "1 1 auto";
+  options.forEach((o, i) => {
+    const opt = document.createElement("option");
+    opt.value = i; opt.textContent = o;
+    s.appendChild(opt);
+  });
+  s.value = index;
+  s.onchange = () => onset(parseInt(s.value, 10));
+  row.appendChild(lab); row.appendChild(s);
+  host.appendChild(row);
+}
+
+/* ---- render ------------------------------------------------------------ */
+
+function selTrack() {
+  const t = csv("ftrk");
+  return t.length ? t[0] : 0;
+}
+function trackCount() {
+  const t = csv("ftrk");
+  return t.length > 1 ? t[1] : 8;
+}
+
+function render() {
+  /* ftrk is emitted unconditionally, so its absence means nothing has
+     arrived yet rather than an instrument with no tracks. */
+  if (M.ftrk === undefined) return;
+  el("offline").style.display = "none";
+  /* "block", not "" — clearing the inline style falls back to the sheet's
+     `#ui { display: none }`, which built the whole page and showed none of
+     it. Caught by rendering the harness, not by reading the code. */
+  el("ui").style.display = "block";
+
+  const seq = csv("fseq");                   /* on, len, pos, pattern       */
+  playOn  = !!seq[0];
+  playPos = seq[2] || 0;
+  const len = seq[1] || 16;
+
+  el("run").textContent = playOn ? "STOP" : "PLAY";
+  el("run").className = playOn ? "on" : "";
+  el("pat").textContent = (seq[3] || 0) + 1;
+  el("pos").textContent = playPos + 1;
+  el("len").textContent = len;
+
+  if (!touched["mix"] || Date.now() - touched["mix"] > 1200) {
+    el("mix").value = numOf("mix", 127);
+    el("mixv").textContent = numOf("mix", 127);
+  }
+
+  renderRail();
+  renderChain();
+  renderSteps(len);
+  renderVoice();
+  renderMod();
+}
+
+function renderRail() {
+  const rail = el("rail");
+  rail.textContent = "";
+  const sel = selTrack(), count = trackCount();
+
+  for (let t = 0; t < count; t++) {
+    const d = document.createElement("div");
+    d.className = "trk" + (t === sel ? " sel" : "");
+
+    const n = document.createElement("span");
+    n.className = "n";
+    n.textContent = "TRK " + (t + 1);
+
+    /* The source machine's NAME, which the blob carries for every track
+       precisely so this rail can be drawn without eight device reads. */
+    const m = document.createElement("span");
+    m.className = "m";
+    const name = M["t" + t + "fn_src"];
+    m.textContent = name || "—";
+    m.title = name || "";
+    if (!name) m.style.color = "var(--faint)";
+
+    const bar = document.createElement("div");
+    bar.className = "bar";
+    const fill = document.createElement("i");
+    fill.style.width = Math.round(numOf("t" + t + "lvl", 127) / 127 * 100) + "%";
+    bar.appendChild(fill);
+
+    d.appendChild(n); d.appendChild(m); d.appendChild(bar);
+    /* Changing track is navigation, not a parameter — same as the surface.
+       The write bumps rui_rev, so the manager pushes a fresh blob and the
+       detail below follows. */
+    d.onclick = () => send("track", t);
+    rail.appendChild(d);
+  }
+}
+
+function renderChain() {
+  const host = el("chain");
+  host.textContent = "";
+  el("chainhead").textContent = "Signal chain — track " + (selTrack() + 1);
+
+  STAGES.forEach((sk, si) => {
+    if (si > 0) {
+      const arrow = document.createElement("div");
+      arrow.className = "flow";
+      arrow.textContent = "→";
+      host.appendChild(arrow);
+    }
+
+    const box = document.createElement("div");
+    box.className = "stage s" + si;
+
+    const h = document.createElement("h2");
+    const tag = document.createElement("span");
+    tag.className = "tag";
+    h.appendChild(tag);
+    h.appendChild(document.createTextNode(STAGE_TAG[si]));
+    box.appendChild(h);
+
+    /* The machine list comes from the hierarchy the engine serves, so the
+       options are exactly the family that stage accepts — the page never
+       keeps its own copy of the machine table. */
+    const machines = machineOptions(si);
+    const cur = M["t" + selTrack() + "fn" + STAGE_SFX[si]] || "";
+    if (machines.length) {
+      chooser(box, "MACHINE", machines, Math.max(0, machines.indexOf(cur)),
+              (i) => send(MACH_KEY[si], machineCode(si, i)));
+    } else {
+      const p = document.createElement("div");
+      p.className = "row";
+      p.innerHTML = '<span class="lab">MACHINE</span><span>' +
+                    (cur || "—") + "</span>";
+      box.appendChild(p);
+    }
+
+    const base = csv("fp" + STAGE_SFX[si]);
+    const eff  = csv("fe" + STAGE_SFX[si]);
+    const labs = (M["flab" + STAGE_SFX[si]] || "").split(",");
+
+    for (let i = 0; i < PARAMS; i++) {
+      const name = labs[i] || "";
+      if (!name) continue;                   /* Bypass has no knobs at all  */
+      slider(box, sk + "_p" + (i + 1), name, base[i] || 0, 0, 127,
+             (v) => send(sk + "_p" + (i + 1), v), eff[i]);
+    }
+    host.appendChild(box);
+  });
+}
+
+/* Membership is never decided here. The engine mirrors the machine table
+   (fmach) and each stage's family (ffam_src / ffam1 / ffam2) into the blob
+   from the same work_machine_fits_stage the setter enforces, so a list this
+   page offers cannot contain a machine the write would then be refused. */
+function machineList() {
+  return (M.fmach || "").split(",").filter((s) => s.length);
+}
+function machineCodes(si) {
+  return (M["ffam" + STAGE_SFX[si]] || "").split(",")
+           .filter((s) => s.length).map(Number);
+}
+function machineOptions(si) {
+  const all = machineList(), codes = machineCodes(si);
+  if (!all.length || !codes.length) return [];
+  return codes.map((c) => all[c]).filter((s) => s !== undefined);
+}
+function machineCode(si, optionIndex) {
+  const codes = machineCodes(si);
+  return codes[optionIndex] !== undefined ? codes[optionIndex] : 0;
+}
+
+function renderSteps(len) {
+  const ruler = el("ruler"), grid = el("steps");
+  ruler.textContent = ""; grid.textContent = "";
+
+  const lane = decodeLane(M["t" + selTrack() + "ln"]);
+  const pages = Math.ceil(STEPS / 16);
+  if (page >= pages) page = 0;
+  el("pagelab").textContent =
+    "page " + (page + 1) + "/" + pages + " · length " + len;
+
+  for (let c = 0; c < 16; c++) {
+    const r = document.createElement("span");
+    r.textContent = (c % 4 === 0) ? String(page * 16 + c + 1) : "";
+    ruler.appendChild(r);
+  }
+
+  for (let c = 0; c < 16; c++) {
+    const i = page * 16 + c;
+    const st = lane[i];
+    const d = document.createElement("div");
+    d.className = "st" + (c % 4 === 0 ? " q" : "") +
+                  (st.on ? " on" : "") +
+                  (st.locks ? " lk" : "") +
+                  (playOn && i === playPos ? " play" : "");
+    d.title = "step " + (i + 1) +
+              (st.locks ? " · " + st.locks + " lock" + (st.locks > 1 ? "s" : "") : "") +
+              (st.prob < 100 ? " · " + st.prob + "%" : "");
+    /* Past the pattern's length a step exists but never fires; say so rather
+       than letting it look identical to one that will. */
+    if (i >= len) d.style.opacity = "0.35";
+    d.onclick = () => send("step" + i, (st.on ? 0 : 1) + ":" + st.cond + ":0:0:" + st.prob);
+    grid.appendChild(d);
+  }
+}
+
+function renderVoice() {
+  const host = el("voice");
+  host.textContent = "";
+
+  const left = document.createElement("div");
+  const vf = csv("fvf");
+  const h = document.createElement("h2");
+  h.textContent = "Filter";
+  left.appendChild(h);
+  VF_KEY.forEach((k, i) => {
+    slider(left, k, VF_NAME[i], vf[i] || 0, 0, 127, (v) => send(k, v));
+  });
+  host.appendChild(left);
+
+  const right = document.createElement("div");
+  const h2 = document.createElement("h2");
+  h2.textContent = "Track";
+  right.appendChild(h2);
+  const t = selTrack();
+  slider(right, "level", "LEVEL", numOf("t" + t + "lvl", 127), 0, 127,
+         (v) => send("level", v));
+  slider(right, "pan", "PAN", numOf("t" + t + "pan", 64), 0, 127,
+         (v) => send("pan", v));
+  const smp = M["t" + t + "smp"];
+  const s = document.createElement("div");
+  s.className = "row";
+  s.innerHTML = '<span class="lab">SAMPLE</span>';
+  const sv = document.createElement("span");
+  sv.style.cssText = "flex:1 1 auto;min-width:0;overflow:hidden;" +
+                     "text-overflow:ellipsis;white-space:nowrap";
+  sv.textContent = smp ? smp.split("/").pop() : "—";
+  if (!smp) sv.style.color = "var(--faint)";
+  sv.title = smp || "";
+  s.appendChild(sv);
+  right.appendChild(s);
+  host.appendChild(right);
+}
+
+function renderMod() {
+  const host = el("mod");
+  host.textContent = "";
+
+  LFOS.forEach((pfx, li) => {
+    const box = document.createElement("div");
+    const h = document.createElement("h2");
+    /* Voice and FX LFOs address DIFFERENT destination spaces that both count
+       from zero, so the family has to be on the label — "dest 8" is the
+       filter's base on one and insert 2's knob A on the other. */
+    h.textContent = (li < 2 ? "Voice LFO " + (li + 1) : "FX LFO " + (li - 1));
+    box.appendChild(h);
+
+    const v = csv(LFO_MIR[li]);
+    LFO_F.forEach((f, fi) => {
+      const key = pfx + "_" + f;
+      const val = v[fi] === undefined ? 0 : v[fi];
+      if (f === "wave") {
+        chooser(box, LFO_N[fi], WAVES, val % WAVES.length, (i) => send(key, i));
+      } else if (f === "trig") {
+        chooser(box, LFO_N[fi], ["Free", "Retrig"], val ? 1 : 0, (i) => send(key, i));
+      } else if (f === "dest") {
+        slider(box, key, LFO_N[fi], val, -1, li < 2 ? 14 : 15, (x) => send(key, x));
+      } else {
+        slider(box, key, LFO_N[fi], val, 0, 127, (x) => send(key, x));
+      }
+    });
+    host.appendChild(box);
+  });
+
+  const box = document.createElement("div");
+  const h = document.createElement("h2");
+  h.textContent = "Mod envelope";
+  box.appendChild(h);
+  const me = csv("fme");
+  ME_F.forEach((f, i) => {
+    const key = "menv_" + f;
+    const val = me[i] === undefined ? 0 : me[i];
+    slider(box, key, ME_N[i], val, f === "dest" ? -1 : 0,
+           f === "dest" ? 23 : 127, (x) => send(key, x));
+  });
+  host.appendChild(box);
+}
+
+/* The playhead moves every step; repainting the whole page for it would fight
+   every control the user is holding. Move the class instead. */
+function paintPlayhead() {
+  const cells = el("steps").children;
+  for (let c = 0; c < cells.length; c++) {
+    const i = page * 16 + c;
+    cells[c].classList.toggle("play", playOn && i === playPos);
+  }
+}
+
+/* ---- fixed controls ---------------------------------------------------- */
+el("run").onclick = () => send("seq_on", playOn ? 0 : 1);
+el("mix").oninput = () => {
+  touched["mix"] = Date.now();
+  el("mixv").textContent = el("mix").value;
+};
+el("mix").onchange = () => {
+  touched["mix"] = Date.now();
+  send("mix", parseInt(el("mix").value, 10));
+};
+
+/* Pattern pages: the grid shows sixteen at a time, as the surface does. */
+document.addEventListener("keydown", (e) => {
+  if (e.key === "[") { page = (page + 3) % 4; render(); }
+  if (e.key === "]") { page = (page + 1) % 4; render(); }
+});
+el("pagelab").style.cursor = "pointer";
+el("pagelab").onclick = () => { page = (page + 1) % 4; render(); };
+</script>

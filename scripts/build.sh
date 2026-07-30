@@ -34,6 +34,18 @@ cp modules/overtake/overwork/module.json build/modules/overtake/overwork/
 cp src/ui_overtake.js                    build/modules/overtake/overwork/ui.js
 cp src/help_overwork.json                build/modules/overtake/overwork/help.json
 
+# Browser editor. schwung-manager auto-discovers web_ui.html per module and
+# serves it in a sandboxed iframe. ONE source file for both, because the page
+# sniffs its own parameter prefix at runtime ("overtake_dsp:" as the tool,
+# "synth:" in a slot) rather than being built twice.
+#
+# The audio_fx build deliberately does NOT get one: remote_ui.go only looks for
+# web_ui.html on a slot's "synth" component, so a chain slot could never load
+# it. That build's Remote UI comes from the engine's ui_hierarchy +
+# chain_params instead.
+cp src/web_ui.html build/modules/sound_generators/work-in/web_ui.html
+cp src/web_ui.html build/modules/overtake/overwork/web_ui.html
+
 # The chain host loads a slot's audio FX as modules/audio_fx/<id>/<id>.so and
 # never reads module.json's "dsp" field, so the FX build MUST be work.so.
 # Overtake modules are loaded via their module.json, hence plain dsp.so.

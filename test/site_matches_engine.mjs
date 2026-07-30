@@ -249,5 +249,74 @@ for (const fn of [81, 82, 83]) {
   }
 }
 
+/* ---------------------------------------------------------------- web UI */
+
+/* The browser editor reads the state blob's FLAT MIRROR and nothing else —
+ * schwungRemote.getParam answers from the iframe's cache of that parse, so a
+ * key the engine stops emitting is a control that silently goes blank rather
+ * than an error anyone sees.
+ *
+ * Check the page's keys against a blob the ENGINE produced (build/state.json,
+ * from test/dump_state.c), never against a fixture written alongside the page.
+ * That is the same rule the UI harness follows and for the same reason: a
+ * fixture written from the page's assumptions agrees with the page while the
+ * feature is dead on hardware. */
+{
+  const web = fs.readFileSync(path.join(root, 'src/web_ui.html'), 'utf8');
+  const statePath = path.join(root, 'build/state.json');
+  check(fs.existsSync(statePath),
+        'build/state.json is missing — run `make build/state.json`');
+
+  if (fs.existsSync(statePath)) {
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    /* Exactly what the manager keeps: scalars and strings, arrays dropped. */
+    const flat = new Set(Object.entries(state)
+      .filter(([, v]) => v !== null && typeof v !== 'object')
+      .map(([k]) => k));
+
+    /* Every literal mirror key the page names must exist in a real blob. The
+     * page builds some keys by concatenation ("t" + t + "fn_src"), so check
+     * the fixed ones plus one representative of each built family. */
+    const needed = [
+      'ftrk', 'fseq', 'fmach', 'fp_src', 'fe_src', 'fvf', 'fme',
+      'fvl1', 'fvl2', 'ffl1', 'ffl2',
+      'flab_src', 'flab1', 'flab2',
+      'ffam_src', 'ffam1', 'ffam2',
+      't0fn_src', 't0fn1', 't0fn2', 't0lvl', 't0pan', 't0ln',
+    ];
+    for (const k of needed)
+      check(flat.has(k),
+            `web_ui.html depends on "${k}", which a real state blob does not carry`);
+
+    /* And the reverse direction for the ones that would fail silently: if the
+     * page stopped naming a family key, the machine chooser would offer
+     * nothing and look like an empty dropdown rather than a bug. */
+    for (const k of ['fmach', 'ffam', 'flab', 'ftrk', 'fseq'])
+      check(web.includes(k),
+            `web_ui.html no longer reads "${k}" — a control that needs it will render empty`);
+
+    /* The page must not carry its own copy of the machine table. It exists in
+     * work_core.c and is mirrored into the blob precisely so it does not need
+     * a second one, and a second one is how the manual site once shipped the
+     * wrong knob names. */
+    for (const name of engineNames.slice(1)) {
+      check(!web.includes(`"${name}"`),
+            `web_ui.html hardcodes the machine name "${name}" instead of ` +
+            `reading the table the engine mirrors`);
+    }
+  }
+
+  /* Both builds that CAN have one must ship it; the audio_fx build must not,
+   * because remote_ui.go only serves web_ui.html for a slot's synth component
+   * and shipping a page nothing loads is a page nobody maintains. */
+  const build = fs.readFileSync(path.join(root, 'scripts/build.sh'), 'utf8');
+  for (const dir of ['sound_generators/work-in', 'overtake/overwork'])
+    check(build.includes(`build/modules/${dir}/web_ui.html`),
+          `scripts/build.sh does not copy the browser editor into ${dir}`);
+  check(!build.includes('build/modules/audio_fx/work/web_ui.html'),
+        'scripts/build.sh ships a web_ui.html for the audio_fx build, which ' +
+        'the manager will never serve');
+}
+
 console.log(`\n${checks} checks, ${failures} failed`);
 process.exit(failures ? 1 : 0);
