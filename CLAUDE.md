@@ -381,18 +381,33 @@ written out in full. Disabled by renaming the flag file
 per 20 s, and the suite went from never green to green roughly half the time.
 **Rename the flag back to restore logging.**
 
-*Still open:* the param channel is ONE shared-memory slot, and schwung's test
-daemon reads through the same one as a running module with no arbitration. When
-they collide, testd's protocol reads back the module's own bulk buffer —
-`unexpected reply 'seq_pos7'`, `'eff_src4'`, which are exactly the keys
-`ui_overtake.js`'s tick polls. A failing run is fast (3-14 s) and full of those;
-a good run takes 35-80 s. **Read a fast red run as bus contention, not as a
-module failure**, and re-run before believing it.
+*Largely fixed 2026-07-30*, in schwung (timncox/schwung PR #4). The param
+channel is ONE shared-memory slot and the test daemon reads through the same
+one as a running module. Three defects compounded: both sides generated request
+ids from the same counter starting at 1, so each matched the OTHER's response;
+a reply could carry the newlines of a module's BULK payload, which desynced the
+socket so one collision failed the whole run; and nothing verified the response
+belonged to the requester. Eight-run samples: **never green -> 6/8 green, worst
+run 1 failure**.
+
+**The device is running a hand-placed `schwung-testd`** until the next real
+`install.sh` — schwung's own rule is never to scp individual files, and this
+one was, because a full install would have taken the host 0.11.4 -> 0.11.6 to
+legitimise a test binary. The previous one is at
+`bin/schwung-testd.pre-race-fix`. A normal install supersedes it.
+
+*Still open:* both producers claim the slot with check-then-write rather than an
+atomic claim, so writes can still interleave. Closing it needs a claim value the
+shim ignores, and the shim clears any non-zero `request_type` it does not
+recognise — an audio-path change, not worth it for a test tool. The residue is a
+retryable error now, and the Python client retries it. **A red run is still
+worth re-running once** before believing it.
 
 Idling the tick poll when nothing can have changed (see `pollLive`) narrows the
 window and is worth having anyway — a blocking ~23 ms round-trip 22x/sec to
-read a stopped playhead is half the param channel for nothing — but it does NOT
-fix this, because the FX page is the default and keeps the poll live.
+read a stopped playhead is half the param channel for nothing — but it did NOT
+measurably help here, because the FX page is the default and keeps the poll
+live.
 
 **One manual step remains.** Overwork must already be open on the device.
 `bus.set_open_tool('overwork')` writes the command and shadow_ui reads it, but
