@@ -572,6 +572,31 @@ static const char *const VFILT_NAME[WORK_LOCK_VF_COUNT] = {
     "BASE", "WDTH", "RESO", "ENV", "ATK", "DEC", "KEY"
 };
 
+/* The same seven as PARAMETER KEYS. Two tables rather than one because the
+ * display name and the wire name genuinely differ ("WDTH" against "vf_width"),
+ * and _Static_assert below keeps them the same length — the failure a single
+ * table would prevent is the one where a field is added to one and not the
+ * other, and that is what the assert is for. */
+static const char *const VFILT_KEY[WORK_LOCK_VF_COUNT] = {
+    "vf_base", "vf_width", "vf_reso", "vf_env", "vf_atk", "vf_dec", "vf_track"
+};
+
+/* Per stage: the prefix its eight parameters carry ("src_p1", "fx1_p1") and
+ * the key its machine select answers to. Both spellings already existed in
+ * parse_slot_param and parse_machine_key; these name them once so a UI
+ * contract can be built from the same source the setters read. */
+static const char *const STAGE_KEY[WORK_STAGES]   = { "src", "fx1", "fx2" };
+static const char *const MACHINE_KEY[WORK_STAGES] = { "src", "machine1", "machine2" };
+
+/* "vlfo1" / "flfo2" — the PARAMETER prefix, which is not the blob key
+ * (lfo_blob_key gives "vl1" / "fl2"). Keeping them apart is deliberate: the
+ * blob is a storage format that must never change spelling, the parameter is a
+ * public name. */
+static void lfo_param_prefix(int n, char *out, size_t cap) {
+    if (work_lfo_is_voice(n)) snprintf(out, cap, "vlfo%d", n + 1);
+    else                      snprintf(out, cap, "flfo%d", n - WORK_VOICE_LFOS + 1);
+}
+
 /* "SRC:TUNE" for the source stage's knob A, "FX2:MACH" for the second insert's
  * machine select, "LEVEL" for the track level. The label follows whichever
  * machine the stage holds.
@@ -5105,37 +5130,227 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
         return n;
     }
 
-    /* The Shadow UI and the auto-generated Master FX knob pages read their
-     * parameter hierarchy from module.json OR from this key. module.json is
-     * static, so it can only ever say "A".."H" — which tells you nothing about
-     * what a knob does. Serving it here instead means the labels follow
-     * whichever machine each slot currently holds.
+    /* ui_hierarchy, marked remote_only.
      *
-     * Kept deliberately compact: the on-device host reads get_param into a
-     * 16 KB buffer, so this must not sprawl. Only the two loaded machines'
-     * labels are emitted, not all twenty machines' worth. */
-    /* ui_hierarchy is DELIBERATELY NOT SERVED.
-     *
-     * shadow_ui.js enterComponentEdit():
+     * This key used to go unanswered on purpose, and the reason still holds
+     * for the DEVICE. shadow_ui.js enterComponentEdit():
      *
      *     const hierarchy = getComponentHierarchy(slotIndex, componentKey);
      *     if (hierarchy) { enterHierarchyEditor(...); return; }
      *     enterComponentEditFallback(...);        // -> loadModuleUi -> ui_chain.js
      *
-     * So answering this key REPLACES our own chain UI with the generic
-     * hierarchy editor — and that editor captures the hierarchy once, in
-     * enterHierarchyEditorWith(), and never re-fetches it. That is what left
-     * the settings page showing the previous machine until you backed out and
-     * re-entered, and no amount of visible_if gating fixed it because the
-     * whole editor was the wrong editor.
+     * so answering it REPLACED our own chain UI with the generic hierarchy
+     * editor — which captures the hierarchy once and re-reads chain_params
+     * only on preset change or for keys ending "_rate_mode". A machine change
+     * is neither, so the settings page sat on the previous machine's labels
+     * until you backed out and re-entered. ui_chain.js re-reads labels_src /
+     * labels1 / labels2 on every machine change, so it is strictly better
+     * here, and staying quiet was what let the host reach it.
      *
-     * src/ui_chain.js is strictly better here: it reads labels1/labels2 from
-     * this engine on every machine change, so its labels always match what is
-     * loaded. Staying quiet is what lets the host reach it.
+     * But schwung-manager builds the BROWSER's control list from this same key
+     * and has no other source: chain_params only annotates keys a hierarchy
+     * already lists, so silence meant "No parameters available" in the Remote
+     * UI, permanently. One key, two surfaces, opposite needs.
      *
-     * If Master FX pages ever need labels, the route is chain_params, NOT this
-     * key — chain_params does not divert the component editor.
-     */
+     * "remote_only": true is the split (schwung's hierarchyDrivesDeviceEditor,
+     * docs/MODULES.md). The browser gets its hierarchy; the device falls
+     * through to ui_chain.js exactly as it did when this key was silent. A
+     * host too old to know the flag ignores it and diverts as before — which
+     * is the old behaviour, not a new break, and the labels follow the loaded
+     * machine either way because they are built here, now.
+     *
+     * Compact on purpose: only the three LOADED machines' labels, not
+     * twenty-six machines' worth. */
+    if (strcmp(key, "ui_hierarchy") == 0) {
+        int n = nclamp(snprintf(buf, buf_len,
+            "{\"remote_only\":true,\"levels\":{\"root\":{\"label\":\"Work\","
+            "\"params\":["
+            "{\"key\":\"track\",\"label\":\"Track\"},"
+            "{\"key\":\"mix\",\"label\":\"Dry/Wet\"},"
+            "{\"key\":\"level\",\"label\":\"Level\"},"
+            "{\"key\":\"pan\",\"label\":\"Pan\"},"
+            "{\"key\":\"seq_on\",\"label\":\"Sequencer\"},"
+            "{\"key\":\"seq_len\",\"label\":\"Length\"},"
+            "{\"key\":\"pattern\",\"label\":\"Pattern\"}"), cap);
+
+        for (int sl = 0; sl < WORK_STAGES; ++sl)
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                    ",{\"level\":\"s%d\",\"label\":\"%s: %s\"}",
+                                    sl, STAGE_TAG[sl],
+                                    MACHINE_NAME[TRK(w)->cfg[sl].machine]), cap);
+
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+            ",{\"level\":\"vf\",\"label\":\"Voice Filter\"},"
+            "{\"level\":\"mod\",\"label\":\"Modulation\"}],"
+            "\"knobs\":[\"mix\",\"level\",\"pan\",\"track\"]}"), cap);
+
+        /* One level per stage: the machine select, then that machine's own
+         * eight knobs under their real names. */
+        for (int sl = 0; sl < WORK_STAGES; ++sl) {
+            const int m = TRK(w)->cfg[sl].machine;
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                    ",\"s%d\":{\"label\":\"%s\",\"params\":["
+                                    "{\"key\":\"%s\",\"label\":\"Machine\"}",
+                                    sl, MACHINE_NAME[m], MACHINE_KEY[sl]), cap);
+            for (int i = 0; i < WORK_PARAMS; ++i) {
+                if (!PARAM_NAME[m][i][0]) continue;
+                n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                        ",{\"key\":\"%s_p%d\",\"label\":\"%s\"}",
+                                        STAGE_KEY[sl], i + 1, PARAM_NAME[m][i]), cap);
+            }
+            /* Knobs list exactly the parameters above and no more. A machine
+             * with fewer than eight — and several have — would otherwise map
+             * physical knobs to keys the level does not carry, which reads to
+             * a client as a control with no metadata rather than as absent.
+             * Bypass has none at all, and its level is legitimately just the
+             * machine select. */
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                    "],\"knobs\":["), cap);
+            for (int i = 0, k = 0; i < WORK_PARAMS; ++i) {
+                if (!PARAM_NAME[m][i][0]) continue;
+                n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                        "%s\"%s_p%d\"", k++ ? "," : "",
+                                        STAGE_KEY[sl], i + 1), cap);
+            }
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "]}"), cap);
+        }
+
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+            ",\"vf\":{\"label\":\"Voice Filter\",\"params\":["), cap);
+        for (int i = 0; i < WORK_VFILT_FIELDS; ++i)
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                    "%s{\"key\":\"%s\",\"label\":\"%s\"}",
+                                    i ? "," : "", VFILT_KEY[i], VFILT_NAME[i]), cap);
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "]}"), cap);
+
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+            ",\"mod\":{\"label\":\"Modulation\",\"params\":["), cap);
+        {
+            int first = 1;
+            static const char *const LF[] = { "dest", "spd", "mult", "wave",
+                                              "depth", "phase", "trig" };
+            for (int l = 0; l < WORK_LFOS; ++l) {
+                char lk[8];
+                lfo_param_prefix(l, lk, sizeof lk);
+                for (size_t f = 0; f < sizeof LF / sizeof *LF; ++f) {
+                    n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                            "%s{\"key\":\"%s_%s\",\"label\":\"%s %s\"}",
+                                            first ? "" : ",", lk, LF[f],
+                                            lk, LF[f]), cap);
+                    first = 0;
+                }
+            }
+            static const char *const ME[] = { "dest", "atk", "hold", "dec", "depth" };
+            for (size_t f = 0; f < sizeof ME / sizeof *ME; ++f)
+                n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                        ",{\"key\":\"menv_%s\",\"label\":\"Env %s\"}",
+                                        ME[f], ME[f]), cap);
+        }
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "]}}}"), cap);
+        return n;
+    }
+
+    /* chain_params — the metadata the hierarchy's keys need to become
+     * controls: ranges, steps, and the enum members.
+     *
+     * Unlike ui_hierarchy this key does NOT divert anything, which is why the
+     * old note pointed at it as the safe route. It annotates keys a hierarchy
+     * already lists, so on its own it renders nothing; the two go together.
+     *
+     * Machine options come from work_machine_fits_stage, the same gate
+     * set_param enforces, so the list a client offers cannot include a machine
+     * the engine would then refuse — the failure mode where a browser shows a
+     * reverb in the source stage and the write silently does nothing. */
+    if (strcmp(key, "chain_params") == 0) {
+        int n = nclamp(snprintf(buf, buf_len, "["), cap);
+        int first = 1;
+
+        #define CP_SEP() do { \
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), \
+                                    first ? "" : ","), cap); first = 0; \
+        } while (0)
+        #define CP_INT(k, nm, lo, hi) do { \
+            CP_SEP(); \
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), \
+                "{\"key\":\"%s\",\"name\":\"%s\",\"type\":\"int\"," \
+                "\"min\":%d,\"max\":%d,\"step\":1}", (k), (nm), (lo), (hi)), cap); \
+        } while (0)
+
+        /* Machine selects, per stage, each carrying only its family. */
+        for (int sl = 0; sl < WORK_STAGES; ++sl) {
+            CP_SEP();
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                "{\"key\":\"%s\",\"name\":\"%s Machine\",\"type\":\"enum\","
+                "\"options\":[", MACHINE_KEY[sl], STAGE_TAG[sl]), cap);
+            int wrote = 0;
+            for (int mc = 0; mc < WORK_FX_COUNT; ++mc) {
+                if (!work_machine_fits_stage(sl, mc)) continue;
+                n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                        "%s\"%s\"", wrote++ ? "," : "",
+                                        MACHINE_NAME[mc]), cap);
+            }
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "]}"), cap);
+
+            /* This stage's eight knobs, under the loaded machine's names. */
+            const int m = TRK(w)->cfg[sl].machine;
+            for (int i = 0; i < WORK_PARAMS; ++i) {
+                if (!PARAM_NAME[m][i][0]) continue;
+                char k[16];
+                snprintf(k, sizeof k, "%s_p%d", STAGE_KEY[sl], i + 1);
+                CP_INT(k, PARAM_NAME[m][i], 0, 127);
+            }
+        }
+
+        CP_INT("mix",     "Dry/Wet",   0, 127);
+        CP_INT("level",   "Level",     0, 127);
+        CP_INT("pan",     "Pan",       0, 127);
+        CP_INT("track",   "Track",     0, WORK_TRACKS - 1);
+        CP_INT("seq_on",  "Sequencer", 0, 1);
+        CP_INT("seq_len", "Length",    1, WORK_STEPS);
+        CP_INT("pattern", "Pattern",   0, WORK_PATTERNS - 1);
+
+        for (int i = 0; i < WORK_VFILT_FIELDS; ++i)
+            CP_INT(VFILT_KEY[i], VFILT_NAME[i], 0, 127);
+
+        /* An LFO's destination range depends on its FAMILY — a voice LFO
+         * addresses the source stage and the filter, an FX LFO addresses the
+         * two inserts, and both count from zero. Handing a client one range
+         * for both is how "dest 8" comes to mean two different things. */
+        for (int l = 0; l < WORK_LFOS; ++l) {
+            char pfx[8], k[24], nm[32];
+            lfo_param_prefix(l, pfx, sizeof pfx);
+
+            snprintf(k, sizeof k, "%s_dest", pfx);
+            snprintf(nm, sizeof nm, "%s Dest", pfx);
+            CP_INT(k, nm, -1, work_lfo_dest_count(l) - 1);
+
+            static const char *const F[] = { "spd", "mult", "depth", "phase" };
+            static const char *const N[] = { "Speed", "Mult", "Depth", "Phase" };
+            for (size_t f = 0; f < sizeof F / sizeof *F; ++f) {
+                snprintf(k, sizeof k, "%s_%s", pfx, F[f]);
+                snprintf(nm, sizeof nm, "%s %s", pfx, N[f]);
+                CP_INT(k, nm, 0, 127);
+            }
+
+            CP_SEP();
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                "{\"key\":\"%s_wave\",\"name\":\"%s Wave\",\"type\":\"enum\","
+                "\"options\":[\"Tri\",\"Sin\",\"Sqr\",\"Saw\",\"Ramp\",\"Exp\",\"Rnd\"]},"
+                "{\"key\":\"%s_trig\",\"name\":\"%s Trig\",\"type\":\"enum\","
+                "\"options\":[\"Free\",\"Retrig\"]}",
+                pfx, pfx, pfx, pfx), cap);
+        }
+
+        CP_INT("menv_dest",  "Env Dest",  -1, WORK_STAGES * WORK_PARAMS - 1);
+        CP_INT("menv_atk",   "Env Attack", 0, 127);
+        CP_INT("menv_hold",  "Env Hold",   0, 127);
+        CP_INT("menv_dec",   "Env Decay",  0, 127);
+        CP_INT("menv_depth", "Env Depth",  0, 127);
+
+        #undef CP_INT
+        #undef CP_SEP
+        return nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "]"), cap);
+    }
 
     /* How long the whole blob is, so a caller can page it without having to
      * know the size of the host binding's buffer. Reading until a short answer

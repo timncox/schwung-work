@@ -1162,33 +1162,138 @@ static void test_transport_restarts_pattern(void) {
 /* The Shadow UI and the Master FX knob pages get their labels from here.
  * module.json can only ever say "A".."H"; this must say TUNE, WIN, FDBK... and
  * must change when the machine changes. */
-/* Serving ui_hierarchy DIVERTS the host away from our own chain UI:
+/* ui_hierarchy serves the BROWSER and must not claim the device.
+ *
+ * Answering this key at all used to divert the host away from ui_chain.js:
  * enterComponentEdit() tries getComponentHierarchy() first and only falls
- * through to loadModuleUi() -> ui_chain.js when it returns nothing. The
- * generic hierarchy editor caches the hierarchy at entry and never re-fetches,
- * which is what left the settings page stuck on the previous machine. So the
- * engine must stay quiet on this key. */
-static void test_ui_hierarchy_not_served(void) {
-    printf("ui_hierarchy is not served, so the host reaches our chain UI\n");
+ * through to loadModuleUi() when it returns nothing, and the generic editor
+ * caches the hierarchy at entry, which left the settings page stuck on the
+ * previous machine. So the engine stayed silent — and the Remote UI, which
+ * builds its whole control list from this key and has no other source, showed
+ * "No parameters available" forever.
+ *
+ * "remote_only": true is the split. Losing that flag would silently cost the
+ * on-device chain UI, so it is checked as hard as the content. */
+static void test_ui_hierarchy_is_remote_only(void) {
+    printf("ui_hierarchy serves the browser and releases the device editor\n");
     work_t *w = work_create(&host);
     assert(w);
+    /* Every stage holds a real machine: a Bypass stage has no parameters to
+     * name, so a hierarchy built over the defaults would prove nothing about
+     * whether the source stage and the second insert are reachable at all. */
+    set_stage(w, WORK_STAGE_SRC, WORK_FX_POLYSAMPLE);
     set_stage(w, WORK_STAGE_FX1, WORK_FX_CLOCK);
+    set_stage(w, WORK_STAGE_FX1 + 1, WORK_FX_IRONROOM);
 
     char buf[65536];
     memset(buf, 0x5A, sizeof(buf));
     int n = work_get_param(w, "ui_hierarchy", buf, sizeof(buf));
-    CHECK(n < 0, "ui_hierarchy answered with %d bytes — that diverts the host "
-                 "into the caching hierarchy editor and bypasses ui_chain.js", n);
+    CHECK(n > 0, "ui_hierarchy answered %d — the Remote UI has no other source "
+                 "for its control list", n);
+    CHECK(strstr(buf, "\"remote_only\":true") != NULL,
+          "the hierarchy does not carry remote_only, so it takes the device's "
+          "component editor away from ui_chain.js");
+    CHECK((int)strlen(buf) == n, "ui_hierarchy length %d disagrees with the string", n);
 
-    /* the labels the chain UI actually uses must still be there */
+    /* Labels follow the LOADED machine — the whole reason this is built here
+     * rather than declared in module.json, which can only say "A".."H". */
+    CHECK(strstr(buf, "\"label\":\"TUNE\"") != NULL,
+          "the hierarchy does not carry the loaded machine's knob names");
+    CHECK(strstr(buf, "Clock Pitch") != NULL,
+          "the hierarchy does not name the loaded machine");
+    set_stage(w, WORK_STAGE_FX1, WORK_FX_FBANK);
+    work_get_param(w, "ui_hierarchy", buf, sizeof(buf));
+    CHECK(strstr(buf, "\"label\":\"90Hz\"") != NULL,
+          "the hierarchy did not follow the machine change");
+    CHECK(strstr(buf, "Clock Pitch") == NULL,
+          "the hierarchy still names the machine that was replaced");
+
+    /* Every stage reachable, spelled the way the setters read. */
+    CHECK(strstr(buf, "\"key\":\"src_p1\"") != NULL, "no source stage knobs");
+    CHECK(strstr(buf, "\"key\":\"fx2_p8\"") != NULL, "no second insert knobs");
+    CHECK(strstr(buf, "\"key\":\"machine1\"") != NULL, "insert 1's machine select is unreachable");
+    CHECK(strstr(buf, "\"key\":\"vf_width\"") != NULL, "the voice filter is unreachable");
+    CHECK(strstr(buf, "\"key\":\"vlfo1_dest\"") != NULL, "voice LFO 1 is unreachable");
+    CHECK(strstr(buf, "\"key\":\"flfo2_trig\"") != NULL, "FX LFO 2 is unreachable");
+    CHECK(strstr(buf, "\"key\":\"menv_hold\"") != NULL, "the mod envelope is unreachable");
+
+    /* The labels the chain UI actually uses must still be there. */
     char lab[256];
     int ln = work_get_param(w, "labels1", lab, sizeof(lab));
-    CHECK(ln > 0 && strstr(lab, "TUNE") != NULL,
+    CHECK(ln > 0 && strstr(lab, "90Hz") != NULL,
           "labels1 must still serve the loaded machine's labels (%s)", lab);
+    work_destroy(w);
+}
+
+/* ui_hierarchy lists the controls; chain_params says what each one IS. A key
+ * in one and not the other is a control the browser draws with no range, or a
+ * range for something nothing shows — so check them against each other rather
+ * than each against a hand-written list, which is a third copy to drift. */
+static void test_chain_params_annotates_the_hierarchy(void) {
+    printf("chain_params covers every key the hierarchy lists\n");
+    work_t *w = work_create(&host);
+    assert(w);
+    set_stage(w, WORK_STAGE_SRC, WORK_FX_SLICER);
     set_stage(w, WORK_STAGE_FX1, WORK_FX_FBANK);
-    work_get_param(w, "labels1", lab, sizeof(lab));
-    CHECK(strstr(lab, "90Hz") != NULL,
-          "labels1 did not follow the machine change (%s)", lab);
+    set_stage(w, WORK_STAGE_FX1 + 1, WORK_FX_DRIVEDELAY);
+
+    static char hier[65536], cp[65536];
+    int hn = work_get_param(w, "ui_hierarchy", hier, sizeof hier);
+    int cn = work_get_param(w, "chain_params", cp, sizeof cp);
+    CHECK(hn > 0 && cn > 0, "hierarchy %d / chain_params %d", hn, cn);
+    CHECK(cp[0] == '[' && cp[cn - 1] == ']',
+          "chain_params is not a whole array: starts '%c' ends '%c'", cp[0], cp[cn - 1]);
+
+    /* Every "key":"X" in the hierarchy must appear as a chain_params key. */
+    int missing = 0;
+    for (const char *p = hier; (p = strstr(p, "\"key\":\"")) != NULL; ) {
+        p += 7;
+        const char *end = strchr(p, '"');
+        if (!end || end - p > 30) break;
+        char k[48], needle[64];
+        int len = (int)(end - p);
+        memcpy(k, p, (size_t)len); k[len] = '\0';
+        snprintf(needle, sizeof needle, "{\"key\":\"%s\",", k);
+        if (!strstr(cp, needle)) {
+            CHECK(0, "hierarchy lists \"%s\" but chain_params does not describe it", k);
+            missing++;
+        }
+        p = end;
+    }
+    CHECK(missing == 0, "%d hierarchy keys have no metadata", missing);
+
+    /* The family gate, as the client sees it: a source machine list that
+     * offered a reverb would have the browser write something the engine then
+     * refuses, and the control would look broken rather than forbidden. */
+    const char *src = strstr(cp, "\"key\":\"src\",");
+    CHECK(src != NULL, "no machine list for the source stage");
+    if (src) {
+        const char *close = strchr(src, ']');
+        CHECK(close != NULL, "the source machine list never closes");
+        if (close) {
+            const size_t span = (size_t)(close - src);
+            CHECK(memmem(src, span, "Polysample", 10) != NULL,
+                  "the source stage does not offer Polysample");
+            CHECK(memmem(src, span, "Iron Room Reverb", 16) == NULL,
+                  "the source stage offers a reverb, which the engine would refuse");
+        }
+    }
+
+    /* Destination ranges follow the LFO family. Handing one range to both is
+     * how "dest 8" comes to mean the filter's BASE and insert 2's knob A at
+     * the same time. */
+    CHECK(strstr(cp, "\"key\":\"vlfo1_dest\",\"name\":\"vlfo1 Dest\",\"type\":\"int\","
+                     "\"min\":-1,\"max\":14") != NULL,
+          "voice LFO 1's destination range is not the voice family's 15");
+    CHECK(strstr(cp, "\"key\":\"flfo1_dest\",\"name\":\"flfo1 Dest\",\"type\":\"int\","
+                     "\"min\":-1,\"max\":15") != NULL,
+          "FX LFO 1's destination range is not the FX family's 16");
+
+    /* Knob names follow the loaded machine here too, not just in the
+     * hierarchy — a stale copy in either is a mislabelled control. */
+    CHECK(strstr(cp, "\"name\":\"90Hz\"") != NULL,
+          "chain_params does not carry the loaded machine's knob names");
+
     work_destroy(w);
 }
 
@@ -3710,7 +3815,8 @@ int main(void) {
     test_machine_load_installs_defaults();
     test_midi_clock();
     test_param_name_table();
-    test_ui_hierarchy_not_served();
+    test_ui_hierarchy_is_remote_only();
+    test_chain_params_annotates_the_hierarchy();
     test_reverbs_are_distinct();
     test_granulator();
 
