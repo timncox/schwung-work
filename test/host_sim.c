@@ -476,51 +476,71 @@ static void test_every_machine_has_a_stage(void) {
     }
 }
 
-/* The lock index map is APPEND-ONLY: the last stage's parameters sit above the
- * machine and mix entries, because renumbering would move every lock in every
- * pattern ever saved. This test is the guard on that promise, and it is written
- * in LITERAL indices on purpose — deriving them from the same helpers the
- * engine uses would make it agree with any renumbering rather than catch one. */
-static void test_lock_map_is_append_only(void) {
-    printf("the last stage's locks append; the old indices still mean what they meant\n");
+/* The v2 lock map, written out in LITERAL indices on purpose. Deriving them
+ * from the same helpers the engine uses would make this test agree with any
+ * renumbering rather than catch one.
+ *
+ * The map was rebuilt exactly once, in v0.9.0, because the eight-lane pattern
+ * format broke anyway — and it is append-only again from here. Add new
+ * lockables at 36. */
+static void test_lock_map_is_per_track(void) {
+    printf("the lock map is per-track: stages contiguous, then machines, level, pan, filter\n");
     work_t *w = work_create(&host);
     set_stage(w, WORK_STAGE_SRC, WORK_FX_POLYSAMPLE);
     set_stage(w, WORK_STAGE_FX1, WORK_FX_CLOCK);
     set_stage(w, WORK_STAGE_FX1 + 1, WORK_FX_CLOCK);
 
-    char s[64];
-    /* Index 0..17 kept their numbers through the SRC promotion; what they MEAN
-     * moved by one stage, which is the break DESIGN-8TRACK.md budgets for. */
-    work_get_param(w, "locklabel0",  s, sizeof(s));
-    CHECK(strcmp(s, "SRC:TUNE") == 0, "lock 0 reads %s, expected SRC:TUNE", s);
-    work_get_param(w, "locklabel8",  s, sizeof(s));
-    CHECK(strcmp(s, "FX1:TUNE") == 0, "lock 8 reads %s, expected FX1:TUNE", s);
-    work_get_param(w, "locklabel16", s, sizeof(s));
-    CHECK(strcmp(s, "SRC:MACH") == 0, "lock 16 reads %s, expected SRC:MACH", s);
-    work_get_param(w, "locklabel17", s, sizeof(s));
-    CHECK(strcmp(s, "FX1:MACH") == 0, "lock 17 reads %s, expected FX1:MACH", s);
-    work_get_param(w, "locklabel18", s, sizeof(s));
-    CHECK(strcmp(s, "MIX") == 0, "lock 18 reads %s, expected MIX", s);
-    /* and the appended ones */
-    work_get_param(w, "locklabel19", s, sizeof(s));
-    CHECK(strcmp(s, "FX2:TUNE") == 0, "lock 19 reads %s, expected FX2:TUNE", s);
-    work_get_param(w, "locklabel26", s, sizeof(s));
-    CHECK(strcmp(s, "FX2:MIX") == 0, "lock 26 reads %s, expected FX2:MIX", s);
-    work_get_param(w, "locklabel27", s, sizeof(s));
-    CHECK(strcmp(s, "FX2:MACH") == 0, "lock 27 reads %s, expected FX2:MACH", s);
+    const struct { int index; const char *label; } expect[] = {
+        { 0,  "SRC:TUNE" }, { 7,  "SRC:PAN"  },
+        { 8,  "FX1:TUNE" }, { 15, "FX1:MIX"  },
+        { 16, "FX2:TUNE" }, { 23, "FX2:MIX"  },
+        { 24, "SRC:MACH" }, { 25, "FX1:MACH" }, { 26, "FX2:MACH" },
+        { 27, "LEVEL" },    { 28, "PAN" },
+        { 29, "VF:BASE" },  { 35, "VF:KEY" },
+    };
+    for (size_t i = 0; i < sizeof(expect) / sizeof(expect[0]); ++i) {
+        char key[16], s[64];
+        snprintf(key, sizeof(key), "locklabel%d", expect[i].index);
+        work_get_param(w, key, s, sizeof(s));
+        CHECK(strcmp(s, expect[i].label) == 0,
+              "lock %d reads %s, expected %s", expect[i].index, s, expect[i].label);
+    }
 
     /* A lock on the last stage must actually reach it when the step fires. */
+    char s[64];
     work_set_param(w, "seq_len", "1");
     work_set_param(w, "step0", "1:0:0:0");
-    work_set_param(w, "locks0", "19=7");
+    work_set_param(w, "locks0", "16=7");
     work_set_param(w, "seq_on", "1");
     int dummy;
     run_blocks(w, 4, &dummy);
     s[0] = '\0';
     work_get_param(w, "eff2", s, sizeof(s));
-    CHECK(atoi(s) == 7, "a lock at 19 left the last stage's effective knobs at "
+    CHECK(atoi(s) == 7, "a lock at 16 left the last stage's effective knobs at "
           "\"%s\", expected knob A to be 7", s);
 
+    work_destroy(w);
+}
+
+/* Every index the map claims must produce a real label. A "?" means the map
+ * grew and work_lock_label did not — invisible until a lock is displayed on
+ * hardware, and exactly how the last stage added once shipped showing "?" for
+ * its machine select. */
+static void test_every_lock_index_has_a_label(void) {
+    printf("every lockable index has a label\n");
+    work_t *w = work_create(&host);
+    for (int i = 0; i < WORK_LOCKABLE; ++i) {
+        char key[16], s[64];
+        snprintf(key, sizeof(key), "locklabel%d", i);
+        work_get_param(w, key, s, sizeof(s));
+        CHECK(s[0] && strcmp(s, "?") != 0,
+              "lock index %d has no label (reads \"%s\")", i, s);
+    }
+    /* and one past the end must still read "?" rather than off the map */
+    char key[16], s[64];
+    snprintf(key, sizeof(key), "locklabel%d", WORK_LOCKABLE);
+    work_get_param(w, key, s, sizeof(s));
+    CHECK(strcmp(s, "?") == 0, "index %d past the map reads \"%s\"", WORK_LOCKABLE, s);
     work_destroy(w);
 }
 
@@ -781,7 +801,7 @@ static void test_machine_lock(void) {
     work_set_param(w, "step1", "1:0:0:0");
     char v[8];
     snprintf(v, sizeof(v), "%d", WORK_FX_DECIMATOR);
-    work_set_param(w, "lock1_17", v);          /* lock 17 = FX 1's machine */
+    work_set_param(w, "lock1_25", v);          /* lock 25 = FX 1's machine */
     work_set_param(w, "seq_on", "1");
 
     /* effm is one field per stage then the mix, so insert 1's machine is the
@@ -976,10 +996,12 @@ static void test_lock_labels(void) {
     work_get_param(w, "locklabel8", s, sizeof(s));
     CHECK(strcmp(s, "FX1:90Hz") == 0, "insert 1 knob A under Filterbank reads %s", s);
 
-    work_get_param(w, "locklabel17", s, sizeof(s));
-    CHECK(strcmp(s, "FX1:MACH") == 0, "lock 17 should be insert 1's machine, reads %s", s);
-    work_get_param(w, "locklabel18", s, sizeof(s));
-    CHECK(strcmp(s, "MIX") == 0, "lock 18 should be MIX, reads %s", s);
+    work_get_param(w, "locklabel25", s, sizeof(s));
+    CHECK(strcmp(s, "FX1:MACH") == 0, "lock 25 should be insert 1's machine, reads %s", s);
+    /* LEVEL and the voice filter are track-wide rather than per-machine, so
+     * their labels do NOT follow the loaded machine. */
+    work_get_param(w, "locklabel27", s, sizeof(s));
+    CHECK(strcmp(s, "LEVEL") == 0, "lock 27 should be LEVEL, reads %s", s);
 
     work_destroy(w);
 }
@@ -1431,6 +1453,189 @@ static void test_midi_cc(void) {
 
     work_destroy(w);
 }
+
+
+/* ------------------------------------------------------- v1 -> v2 presets */
+
+/* A v1 blob's lock indices mean something else under the v2 map, so loading one
+ * has to TRANSLATE rather than take the numbers at face value. Getting this
+ * wrong is silent: the preset loads, every parameter is restored, and the locks
+ * land on the wrong stage. */
+static void test_v1_preset_locks_migrate(void) {
+    printf("a v1 preset's locks are translated, not taken at face value\n");
+    work_t *w = work_create(&host);
+    assert(w);
+
+    /* v1 indices: 0 = SRC knob A, 8 = FX 1 knob A, 17 = FX 1's machine,
+     * 19 = FX 2 knob A, 18 = the global mix, which v2 has no home for.
+     * The flat mirror names it "fp_src", dating it to after the SRC promotion. */
+    const char *v1 =
+        "{\"v\":1,\"mix\":64,\"fp_src\":\"0,0,0,0,0,0,0,0\","
+        "\"stp\":\"0,1,0,0,0,100,0+0=11+8=22+17=5+19=33+18=99|\"}";
+    work_set_param(w, "state", v1);
+
+    char s[128];
+    work_get_param(w, "locks0", s, sizeof(s));
+    /* 0 stays 0 (SRC), 8 stays 8 (FX 1), 17 -> 25 (FX 1's machine),
+     * 19 -> 16 (FX 2 knob A), 18 is dropped. */
+    CHECK(strstr(s, "0=11") != NULL,  "SRC knob A lock did not survive: %s", s);
+    CHECK(strstr(s, "8=22") != NULL,  "FX 1 knob A lock did not survive: %s", s);
+    CHECK(strstr(s, "25=5") != NULL,  "FX 1 machine lock did not move to 25: %s", s);
+    CHECK(strstr(s, "16=33") != NULL, "FX 2 knob A lock did not move to 16: %s", s);
+    CHECK(strstr(s, "18=") == NULL,   "the v1 mix lock was kept at 18: %s", s);
+
+    /* and the load must SAY it dropped something rather than doing it quietly */
+    work_get_param(w, "load_note", s, sizeof(s));
+    CHECK(s[0] != '\0', "a migrated load left no note for the UI");
+    CHECK(strstr(s, "mix") != NULL,
+          "the note does not mention the dropped mix locks: \"%s\"", s);
+
+    work_destroy(w);
+}
+
+/* v1 covers TWO maps: before the SRC promotion, index 0 addressed the first FX
+ * slot; after it, the source stage. Both wrote "v":1. The flat-mirror key names
+ * are what dates the blob, because they were renumbered in the same change. */
+static void test_pre_promotion_preset_shifts_a_stage(void) {
+    printf("a pre-promotion v1 preset has its stages shifted, not just renumbered\n");
+    work_t *w = work_create(&host);
+    assert(w);
+
+    /* "fp3" says this blob predates the promotion: its index 0 was FX slot 1,
+     * which is now insert 1 at index 8. */
+    const char *old =
+        "{\"v\":1,\"mix\":64,\"fp1\":\"0\",\"fp2\":\"0\",\"fp3\":\"0\","
+        "\"stp\":\"0,1,0,0,0,100,0+0=77|\"}";
+    work_set_param(w, "state", old);
+
+    char s[128];
+    work_get_param(w, "locks0", s, sizeof(s));
+    CHECK(strstr(s, "8=77") != NULL,
+          "a pre-promotion lock on slot 1 should land on insert 1 (index 8), got %s", s);
+    CHECK(strstr(s, "0=77") == NULL,
+          "a pre-promotion lock on slot 1 landed on the SOURCE stage: %s", s);
+
+    work_get_param(w, "load_note", s, sizeof(s));
+    CHECK(strstr(s, "shifted") != NULL,
+          "the note does not mention the stage shift: \"%s\"", s);
+    work_destroy(w);
+}
+
+/* A v2 blob must round-trip untouched, and must NOT be run through the
+ * translation — that would move every lock one map further along. */
+static void test_v2_preset_is_not_migrated(void) {
+    printf("a v2 preset round-trips without translation\n");
+    work_t *a = work_create(&host);
+    work_set_param(a, "seq_len", "4");
+    work_set_param(a, "step0", "1:0:0:0");
+    work_set_param(a, "locks0", "0=11,16=33,27=40,29=55");
+    work_set_param(a, "level", "90");
+    work_set_param(a, "pan", "30");
+
+    static char blob[16384];
+    work_get_param(a, "state", blob, sizeof(blob));
+    CHECK(strstr(blob, "\"v\":2") != NULL, "the blob does not declare v2");
+
+    work_t *b = work_create(&host);
+    work_set_param(b, "state", blob);
+
+    char s[128];
+    work_get_param(b, "locks0", s, sizeof(s));
+    CHECK(strcmp(s, "0=11,16=33,27=40,29=55") == 0,
+          "v2 locks came back as %s", s);
+    work_get_param(b, "level", s, sizeof(s));
+    CHECK(atoi(s) == 90, "level came back as %s", s);
+    work_get_param(b, "pan", s, sizeof(s));
+    CHECK(atoi(s) == 30, "pan came back as %s", s);
+    work_get_param(b, "load_note", s, sizeof(s));
+    CHECK(s[0] == '\0', "a v2 load left a migration note: \"%s\"", s);
+
+    work_destroy(a); work_destroy(b);
+}
+
+/* ------------------------------------------------------------ level / pan */
+
+/* Level and pan sit at the routing end of the track. Untouched they must be
+ * EXACTLY transparent, because bypass transparency depends on them: a
+ * constant-power pan whose centre is -3 dB puts a 4358-LSB dent in it. */
+static void test_track_level_and_pan(void) {
+    printf("track level and pan place the track, and are transparent at their defaults\n");
+
+    int16_t in[BLOCK * 2], out[BLOCK * 2];
+    double ph = 0.0;
+    fill_signal(in, BLOCK, &ph);
+
+    work_t *w = work_create(&host);
+    memcpy(out, in, sizeof(in));
+    work_process(w, out, out, BLOCK);
+    int worst = 0;
+    for (int i = 0; i < BLOCK * 2; ++i) {
+        int d = abs((int)out[i] - (int)in[i]);
+        if (d > worst) worst = d;
+    }
+    CHECK(worst <= 1, "the default level and pan altered the signal by %d LSB", worst);
+    work_destroy(w);
+
+    /* level 0 is silence */
+    w = work_create(&host);
+    work_set_param(w, "level", "0");
+    memcpy(out, in, sizeof(in));
+    work_process(w, out, out, BLOCK);
+    int64_t e = 0;
+    for (int i = 0; i < BLOCK * 2; ++i) e += llabs(out[i]);
+    CHECK(e == 0, "level 0 left %lld of signal", (long long)e);
+    work_destroy(w);
+
+    /* hard left puts the signal in the left channel and silences the right */
+    w = work_create(&host);
+    work_set_param(w, "pan", "0");
+    memcpy(out, in, sizeof(in));
+    work_process(w, out, out, BLOCK);
+    int64_t left = 0, right = 0;
+    for (int i = 0; i < BLOCK; ++i) {
+        left  += llabs(out[i * 2]);
+        right += llabs(out[i * 2 + 1]);
+    }
+    CHECK(right == 0, "hard left leaked %lld into the right channel", (long long)right);
+    CHECK(left > 0, "hard left silenced the left channel too");
+    work_destroy(w);
+}
+
+/* Both are lockable, which is what replaces locking the global dry/wet. */
+static void test_level_and_pan_are_lockable(void) {
+    printf("level and pan can be parameter-locked\n");
+    work_t *w = work_create(&host);
+    work_set_param(w, "level", "127");
+    work_set_param(w, "seq_len", "2");
+    work_set_param(w, "step0", "1:0:0:0");
+    work_set_param(w, "step1", "1:0:0:0");
+    work_set_param(w, "lock1_27", "0");        /* index 27 = LEVEL */
+    work_set_param(w, "seq_on", "1");
+
+    int16_t in[BLOCK * 2], out[BLOCK * 2];
+    double ph = 0.0;
+
+    idle(w, 2);
+    int64_t loud = 0;
+    for (int b = 0; b < 2; ++b) {
+        fill_signal(in, BLOCK, &ph);
+        work_process(w, in, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) loud += llabs(out[i]);
+    }
+    CHECK(loud > 0, "step 0 at full level produced silence");
+
+    idle(w, blocks_per_step());
+    int64_t quiet = 0;
+    for (int b = 0; b < 2; ++b) {
+        fill_signal(in, BLOCK, &ph);
+        work_process(w, in, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) quiet += llabs(out[i]);
+    }
+    CHECK(quiet == 0, "a level lock of 0 left %lld of signal on step 1",
+          (long long)quiet);
+    work_destroy(w);
+}
+
 
 /* ------------------------------------------------------------- Tier A */
 
@@ -1923,6 +2128,121 @@ static void test_voice_filter(void) {
 
     work_destroy(a); work_destroy(b); work_destroy(c);
     work_destroy(d); work_destroy(e); work_destroy(f);
+}
+
+/* The voice filter is lockable too, so a sampled patch can move per step
+ * without spending one of the machine's eight knobs on a filter. */
+static int64_t oneshot_energy_with_locks(const char *locks) {
+    work_t *w = work_create(&host);
+    const int frames = 4000;
+    static int16_t pcm[4000 * 2];
+    make_ramp(pcm, frames);            /* broadband: energy at every frequency */
+    send_sample(w, pcm, frames, 600);
+
+    /* Explicit rather than default, the way test_single_player sets it up: the
+     * defaults leave LEV and the envelope somewhere that makes this measure
+     * the envelope instead of the filter. */
+    work_set_param(w, "src", "21");
+    work_set_param(w, "mix", "127");
+    work_set_param(w, "src_p1", "64");    /* TUNE unity */
+    work_set_param(w, "src_p2", "0");     /* STRT at the beginning */
+    work_set_param(w, "src_p3", "127");   /* LEN full   */
+    work_set_param(w, "src_p4", "0");     /* LOOP off   */
+    work_set_param(w, "src_p5", "0");     /* ATK instant */
+    work_set_param(w, "src_p6", "127");   /* DEC long   */
+    work_set_param(w, "src_p7", "127");   /* LEV full   */
+    work_set_param(w, "src_p8", "64");    /* PAN centre */
+    work_set_param(w, "seq_on", "1");
+    work_set_param(w, "step0", "1:0:0:0");
+    work_set_param(w, "seq_len", "16");
+    if (locks) work_set_param(w, "locks0", locks);
+
+    /* The transport has to be RUNNING, not just the sequencer enabled — a trig
+     * fires on a step edge and there are no step edges until the clock starts. */
+    uint8_t start[1] = { 0xFA };
+    work_on_midi(w, start, 1, MOVE_MIDI_SOURCE_EXTERNAL);
+
+    int16_t in[BLOCK * 2] = {0}, out[BLOCK * 2];
+    int64_t e = 0;
+    for (int b = 0; b < 40; ++b) {
+        work_process(w, in, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) e += llabs(out[i]);
+    }
+    work_destroy(w);
+    return e;
+}
+
+
+/* A trig in the SAME BLOCK as a machine change must still sound. The machine
+ * change resets the slot to clear the previous machine's tail, and the reset
+ * used to run after the trig had already started a voice — so the voice was
+ * wiped before it made a sample. That is every first block after loading a
+ * machine, and every step carrying a MACHINE LOCK: locking a machine onto a
+ * step is meant to make the step sound like that machine, not to silence it. */
+static void test_trig_survives_a_machine_change(void) {
+    printf("a trig in the same block as a machine change still sounds\n");
+
+    /* No warm-up block: the very first work_process both loads the machine
+     * (last_machine 0 -> One Shot) and fires step 0. */
+    int64_t first = oneshot_energy_with_locks(NULL);
+    CHECK(first > 0,
+          "a trig on the first block after a machine change made no sound");
+
+    /* And the same through a machine LOCK, which changes the machine on the
+     * step that is trying to fire. The trigger used to switch on the BASE
+     * machine, so the locked machine was never started at all.
+     *
+     * Base is One Shot and the lock swaps in Polysample, rather than locking
+     * over Bypass: a stage keeps ONE set of eight parameter values and every
+     * machine reads them in its own order, so a machine lock hands the new
+     * machine whatever the old one's knobs were set to. Over Bypass those are
+     * all zero, which includes LEV — the step would be correctly silent, and
+     * the test would pass or fail for a reason that has nothing to do with the
+     * trigger. */
+    work_t *w = work_create(&host);
+    const int frames = 4000;
+    static int16_t pcm[4000 * 2];
+    make_ramp(pcm, frames);
+    send_sample(w, pcm, frames, 600);
+    work_set_param(w, "src", "21");                /* One Shot at rest */
+    work_set_param(w, "mix", "127");
+    work_set_param(w, "src_p1", "64");             /* TUNE unity */
+    work_set_param(w, "src_p2", "0");
+    work_set_param(w, "src_p3", "127");
+    work_set_param(w, "src_p4", "0");
+    work_set_param(w, "src_p5", "0");
+    work_set_param(w, "src_p6", "127");
+    work_set_param(w, "src_p7", "127");            /* LEV, same index for both */
+    work_set_param(w, "src_p8", "64");
+    work_set_param(w, "seq_on", "1");
+    work_set_param(w, "step0", "1:0:0:0");
+    work_set_param(w, "seq_len", "16");
+    char v[24];
+    snprintf(v, sizeof v, "24=%d", WORK_FX_POLYSAMPLE);  /* 24 = SRC machine */
+    work_set_param(w, "locks0", v);
+    uint8_t start[1] = { 0xFA };
+    work_on_midi(w, start, 1, MOVE_MIDI_SOURCE_EXTERNAL);
+
+    int16_t in[BLOCK * 2] = {0}, out[BLOCK * 2];
+    int64_t e = 0;
+    for (int b = 0; b < 20; ++b) {
+        work_process(w, in, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) e += llabs(out[i]);
+    }
+    CHECK(e > 0, "a step that locks a different source machine made no sound — "
+          "the trig is being started from the base machine, not the locked one");
+    work_destroy(w);
+}
+
+static void test_voice_filter_is_lockable(void) {
+    printf("the voice filter can be parameter-locked\n");
+    int64_t open   = oneshot_energy_with_locks(NULL);
+    int64_t narrow = oneshot_energy_with_locks("30=8");   /* 30 = VF width */
+
+    CHECK(open > 0, "the unfiltered patch made no sound");
+    CHECK(narrow < open / 2,
+          "a voice-filter lock barely changed anything (%lld vs %lld)",
+          (long long)narrow, (long long)open);
 }
 
 /* schwung's remote UI polls this instead of reading the whole state blob. If
@@ -2666,7 +2986,13 @@ int main(void) {
     test_stages_run_in_series();
     test_stages_refuse_the_wrong_family();
     test_every_machine_has_a_stage();
-    test_lock_map_is_append_only();
+    test_lock_map_is_per_track();
+    test_every_lock_index_has_a_label();
+    test_v1_preset_locks_migrate();
+    test_pre_promotion_preset_shifts_a_stage();
+    test_v2_preset_is_not_migrated();
+    test_track_level_and_pan();
+    test_level_and_pan_are_lockable();
     test_machine_lock_respects_the_family();
     test_machine_load_installs_defaults();
     test_midi_clock();
@@ -2710,6 +3036,8 @@ int main(void) {
     test_remote_ui_poll_digest();
     test_remote_ui_bridge();
     test_voice_filter();
+    test_voice_filter_is_lockable();
+    test_trig_survives_a_machine_change();
     test_sample_transfer();
     test_sample_bounds();
     test_single_player();

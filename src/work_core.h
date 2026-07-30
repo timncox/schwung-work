@@ -10,9 +10,10 @@
  *   - work_fx.c        audio_fx_api_v2 wrapper (chain slots + Master FX slots)
  *   - work_overtake.c  plugin_api_v2 wrapper (full-surface overtake)  [phase 2]
  *
- * Architecture: TWO insert FX slots in series, each loaded with one of 26
- * machines, each exposing up to 8 parameters — one per Move knob, a 1:1 map.
- * Three FX LFOs and a modulation envelope reach any FX-slot parameter.
+ * Architecture: a SOURCE stage followed by TWO insert FX, in series, each
+ * loaded with one of 26 machines and each exposing up to 8 parameters — one
+ * per Move knob, a 1:1 map. Three FX LFOs and a modulation envelope reach any
+ * stage parameter.
  *
  * Realtime rules (schwung docs/REALTIME_SAFETY.md): the render path never
  * allocates, never blocks, never logs. All buffers come from work_create().
@@ -162,69 +163,105 @@ typedef enum {
 #define WORK_PATTERNS   16     /* a bank; song mode chains them  */
 #define WORK_SONG_ROWS  32     /* rows in the song               */
 #define WORK_PAGE_STEPS 16
-/* Lockable parameters, in lock-index order. Indices are numbered by STAGE, so
- * 0 is the source stage and 1..2 are the inserts:
- *   0..7   stage 0 (SRC)  parameters A-H
- *   8..15  stage 1 (FX 1) parameters A-H
- *   16     stage 0 machine
- *   17     stage 1 machine
- *   18     global dry/wet
- *   19..26 stage 2 (FX 2) parameters A-H     (v0.8.0)
- *   27     stage 2 machine                   (v0.8.0)
+/* Lockable parameters, in lock-index order. The map is PER TRACK: index 12
+ * means the same thing on every track, and a pattern holds one lane of these
+ * per track.
  *
- * Append only — the index is part of the pattern format. That is why stage 2
- * sits ABOVE the machine and mix entries instead of following stage 1's
- * parameters: renumbering would silently move every lock in every pattern ever
- * saved. The map is not contiguous, so go through the helpers below rather than
- * computing stage * WORK_PARAMS.
+ *    0..7   stage 0 (SRC)  parameters A-H
+ *    8..15  stage 1 (FX 1) parameters A-H
+ *   16..23  stage 2 (FX 2) parameters A-H
+ *   24      SRC machine
+ *   25      FX 1 machine
+ *   26      FX 2 machine
+ *   27      track level
+ *   28      track pan
+ *   29..35  voice filter: base, width, reso, env, attack, decay, track
+ *   ------
+ *   36 lockable
  *
- * These indices predate the SRC promotion, so what index 0..7 MEANS changed
- * even though the number did not: it addressed the first FX slot, and now
- * addresses the source stage. That is the one-time break DESIGN-8TRACK.md
- * budgets for, and step 3 rebuilds the map per track with a "v":2 blob and a
- * migration. Until then a v1 preset whose first slot held an effect loads its
- * locks onto SRC. Do not add a fourth stage on top of this map — lock_mask is
- * a uint32_t and four stages need 37 indices. */
-#define WORK_LOCK_MACH0  16     /* stage 1's machine is the next index    */
-#define WORK_LOCK_MIX    18
-#define WORK_LOCK_S2P0   19     /* stage 2 parameters A-H run from here   */
-#define WORK_LOCK_MACH2  27
-#define WORK_LOCKABLE    28
+ * This map was REBUILT ONCE, in v0.9.0, and it is append-only again from here.
+ * Add new lockables at 36 and up.
+ *
+ * The rebuild was allowed because the eight-lane pattern format broke anyway,
+ * and it bought two things the old map could not have: the stage parameters are
+ * now contiguous, so an index is `stage * WORK_PARAMS + knob` rather than a
+ * special case for whichever stage was bolted on last; and the map describes a
+ * TRACK rather than a global chain, which is what makes eight lanes possible.
+ *
+ * The global dry/wet is deliberately NOT here. It used to be lockable at index
+ * 18, and it is not per-track: with eight tracks, "track 5 step 3 changes the
+ * global mix" is exactly the kind of cross-track surprise that makes a pattern
+ * unpredictable. Per-track LEVEL at 27 is the control that replaces it. A v1
+ * mix lock is dropped on load and the load reports it — see "load_note".
+ *
+ * See DESIGN-8TRACK.md. */
+#define WORK_LOCK_MACH0     24     /* stage N's machine is WORK_LOCK_MACH0 + N */
+#define WORK_LOCK_LEVEL     27
+#define WORK_LOCK_PAN       28
+#define WORK_LOCK_VF0       29     /* the seven voice-filter fields run here   */
+#define WORK_LOCK_VF_COUNT  7
+#define WORK_LOCKABLE       36
+
+/* The previous map, kept only so a v1 blob can be translated on load. Nothing
+ * outside migrate_v1_lock() may use these. */
+#define WORK_LOCK_V1_MACH0  16     /* stage 0 and 1's machines           */
+#define WORK_LOCK_V1_MIX    18
+#define WORK_LOCK_V1_S2P0   19     /* stage 2 parameters A-H             */
+#define WORK_LOCK_V1_MACH2  27
+#define WORK_LOCK_V1_COUNT  28
 
 /* (stage, knob) -> lock index, and back. Both return -1 for anything out of
  * range so a caller cannot quietly address the wrong parameter. */
 static inline int work_lock_param_index(int stage, int knob) {
     if (stage < 0 || stage >= WORK_STAGES || knob < 0 || knob >= WORK_PARAMS)
         return -1;
-    return stage < 2 ? stage * WORK_PARAMS + knob : WORK_LOCK_S2P0 + knob;
+    return stage * WORK_PARAMS + knob;
 }
 
 static inline int work_lock_machine_index(int stage) {
     if (stage < 0 || stage >= WORK_STAGES) return -1;
-    return stage < 2 ? WORK_LOCK_MACH0 + stage : WORK_LOCK_MACH2;
+    return WORK_LOCK_MACH0 + stage;
 }
 
 /* Decode a lock index to the stage parameter it addresses. Returns the stage
- * and writes the knob, or -1 when the index is a machine select or the mix. */
+ * and writes the knob, or -1 when the index addresses anything else. */
 static inline int work_lock_decode(int index, int *knob) {
-    if (index >= 0 && index < 2 * WORK_PARAMS) {
-        if (knob) *knob = index % WORK_PARAMS;
-        return index / WORK_PARAMS;
-    }
-    if (index >= WORK_LOCK_S2P0 && index < WORK_LOCK_S2P0 + WORK_PARAMS) {
-        if (knob) *knob = index - WORK_LOCK_S2P0;
-        return 2;
-    }
-    return -1;
+    if (index < 0 || index >= WORK_STAGES * WORK_PARAMS) return -1;
+    if (knob) *knob = index % WORK_PARAMS;
+    return index / WORK_PARAMS;
 }
 
-/* Decode a lock index to the stage whose MACHINE it selects, or -1. The
- * counterpart to work_lock_decode, and separate because a machine lock carries
- * a machine code rather than a 0..127 parameter value. */
+/* Decode a lock index to the stage whose MACHINE it selects, or -1. Separate
+ * from work_lock_decode because a machine lock carries a machine code rather
+ * than a 0..127 parameter value. */
 static inline int work_lock_decode_machine(int index) {
-    if (index == WORK_LOCK_MACH2) return 2;
-    if (index == WORK_LOCK_MACH0 || index == WORK_LOCK_MACH0 + 1)
-        return index - WORK_LOCK_MACH0;
+    if (index < WORK_LOCK_MACH0 || index >= WORK_LOCK_MACH0 + WORK_STAGES)
+        return -1;
+    return index - WORK_LOCK_MACH0;
+}
+
+/* Decode a lock index to a voice-filter field (0..6), or -1. */
+static inline int work_lock_decode_vfilt(int index) {
+    if (index < WORK_LOCK_VF0 || index >= WORK_LOCK_VF0 + WORK_LOCK_VF_COUNT)
+        return -1;
+    return index - WORK_LOCK_VF0;
+}
+
+/* v1 lock index -> v2, or -1 for one that has no v2 home.
+ *
+ * v1 is the map as it stood AFTER the SRC promotion: 0..7 SRC, 8..15 FX 1,
+ * 16/17 those two machines, 18 the global mix, 19..26 FX 2, 27 FX 2's machine.
+ * A blob written BEFORE that promotion carries the same numbers meaning one
+ * stage earlier, and nothing in the blob distinguishes the two — see
+ * apply_state, which uses the flat-mirror key names to tell them apart. */
+static inline int work_lock_migrate_v1(int index) {
+    if (index >= 0 && index < 2 * WORK_PARAMS) return index;   /* SRC, FX 1 */
+    if (index == WORK_LOCK_V1_MACH0)     return WORK_LOCK_MACH0;
+    if (index == WORK_LOCK_V1_MACH0 + 1) return WORK_LOCK_MACH0 + 1;
+    if (index == WORK_LOCK_V1_MIX)       return -1;            /* dropped   */
+    if (index >= WORK_LOCK_V1_S2P0 && index < WORK_LOCK_V1_S2P0 + WORK_PARAMS)
+        return 2 * WORK_PARAMS + (index - WORK_LOCK_V1_S2P0);
+    if (index == WORK_LOCK_V1_MACH2)     return WORK_LOCK_MACH0 + 2;
     return -1;
 }
 
@@ -271,7 +308,10 @@ typedef struct {
      * 1..100, where 100 means always. Both gates must pass to fire. */
     uint8_t  prob;
     uint8_t  trig_type;               /* work_trigtype_t                    */
-    uint32_t lock_mask;               /* bit i set = parameter i is locked  */
+    /* bit i set = parameter i is locked. 64 bits because the map is 36 wide;
+     * a uint32_t is what capped the old map at 28 and forced the last stage
+     * to be bolted on above the machine selects. */
+    uint64_t lock_mask;
     uint8_t  lock[WORK_LOCKABLE];
 } work_step_t;
 

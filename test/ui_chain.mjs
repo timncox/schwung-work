@@ -358,6 +358,13 @@ function layoutProblems(screen) {
     for (const s of screen) {
         const w = `${s.text}`.length * CHAR_W;
         if (s.x + w > SCREEN_W) problems.push(`"${s.text}" runs to x=${s.x + w} (>${SCREEN_W})`);
+        /* A NON-NUMERIC coordinate is the interesting failure, and it slipped
+         * through every comparison below: `undefined < 0` and
+         * `undefined > 57` are both false. That is how the MIX row drew at
+         * y=undefined for as long as there have been three stages — a row
+         * table with three entries and a page with four knobs. */
+        if (!Number.isFinite(s.x) || !Number.isFinite(s.y))
+            problems.push(`"${s.text}" has a non-numeric position (x=${s.x}, y=${s.y})`);
         if (s.y < 0 || s.y > SCREEN_H - 7) problems.push(`"${s.text}" at y=${s.y} is off-screen`);
     }
     /* overlap: two strings drawn on the same baseline must not collide */

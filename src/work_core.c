@@ -309,6 +309,19 @@ typedef struct {
     work_lfo_cfg_t       lfo[WORK_LFOS];
     work_slot_t          slot[WORK_STAGES];
 
+    /* Where the track sits in the mix, applied after the last insert — the
+     * "routing" end of the reference device's per-track chain.
+     *
+     * They exist now, at one track, because the LOCK MAP needs them: it is
+     * rebuilt exactly once and the two indices had to be either real or absent,
+     * not reserved holes that answer "?" to every UI that asks. They are also
+     * what replaces locking the global dry/wet, which stops being per-track.
+     *
+     * level 127 is unity and pan 64 is centre, so a preset that has never heard
+     * of either loads sounding exactly as it did. */
+    uint8_t              level;        /* 0..127, 127 = unity   */
+    uint8_t              pan;          /* 0..127, 64 = centre   */
+
     /* Effective values, recomputed per block as
      *   base (cfg) -> parameter locks from the current step -> FX LFOs
      * which is the order that makes locks predictable: a lock sets the value,
@@ -316,6 +329,8 @@ typedef struct {
      * whatever the lock set. */
     uint8_t              eff[WORK_STAGES][WORK_PARAMS];
     uint8_t              eff_machine[WORK_STAGES];
+    uint8_t              eff_level, eff_pan;
+    work_vfilt_cfg_t     eff_vfilt;
     float                lfo_ph[WORK_LFOS];
 
     /* modulation envelope, and its per-trig runtime */
@@ -428,7 +443,15 @@ struct work {
     int                  pre_result;    /* last conditional outcome, for PRE   */
     uint32_t             cond_rng;      /* probability conditions              */
     uint8_t              held[WORK_LOCKABLE];   /* values latched by the trig  */
-    uint32_t             held_mask;
+    uint64_t             held_mask;
+
+    /* What the last state load had to change or drop, for the UI to show. A
+     * migration that silently lands a lock somewhere else is exactly the
+     * failure this exists to prevent: the preset would load, sound wrong, and
+     * say nothing. Empty when the blob needed no translation. */
+    char                 load_note[64];
+
+    uint8_t              src_trig_pending;  /* a trig wants a voice started */
 
     /* transport */
     float                bpm;
@@ -518,27 +541,42 @@ static const char *const STAGE_TAG[WORK_STAGES] = { "SRC", "FX1", "FX2" };
  * STAGE_TAG so the two cannot drift apart. */
 static const char *const STAGE_SFX[WORK_STAGES] = { "_src", "1", "2" };
 
+/* The voice filter's seven fields, in edit-page and lock-index order. */
+static const char *const VFILT_NAME[WORK_LOCK_VF_COUNT] = {
+    "BASE", "WDTH", "RESO", "ENV", "ATK", "DEC", "KEY"
+};
+
 /* "SRC:TUNE" for the source stage's knob A, "FX2:MACH" for the second insert's
- * machine select, "MIX" for the global dry/wet. The label follows whichever
+ * machine select, "LEVEL" for the track level. The label follows whichever
  * machine the stage holds.
  *
- * Derived from the two decode helpers rather than a hand-written chain of
- * cases. The chain is how the last stage added ended up labelled "?" — it was
- * added to the map and to the UI and not to this function, and nothing failed
- * until a lock was displayed on hardware. */
+ * Derived from the decode helpers rather than a hand-written chain of cases.
+ * The chain is how the last stage added ended up labelled "?" — it was added to
+ * the map and to the UI and not to this function, and nothing failed until a
+ * lock was displayed on hardware.
+ *
+ * Every index below WORK_LOCKABLE must produce a real label. A "?" here means
+ * the map grew and this function did not, which is a bug rather than a display
+ * quirk — test_every_lock_index_has_a_label is the guard. */
 int work_lock_label(work_t *w, int index, char *buf, int buf_len) {
     if (!w || !buf || buf_len <= 1) return -1;
     int cap = buf_len - 1;
 
     if (index < 0 || index >= WORK_LOCKABLE)
         return nclamp(snprintf(buf, (size_t)buf_len, "?"), cap);
-    if (index == WORK_LOCK_MIX)
-        return nclamp(snprintf(buf, (size_t)buf_len, "MIX"), cap);
+    if (index == WORK_LOCK_LEVEL)
+        return nclamp(snprintf(buf, (size_t)buf_len, "LEVEL"), cap);
+    if (index == WORK_LOCK_PAN)
+        return nclamp(snprintf(buf, (size_t)buf_len, "PAN"), cap);
 
     int mstage = work_lock_decode_machine(index);
     if (mstage >= 0)
         return nclamp(snprintf(buf, (size_t)buf_len, "%s:MACH",
                                STAGE_TAG[mstage]), cap);
+
+    int vf = work_lock_decode_vfilt(index);
+    if (vf >= 0)
+        return nclamp(snprintf(buf, (size_t)buf_len, "VF:%s", VFILT_NAME[vf]), cap);
 
     int knob = 0;
     int stage = work_lock_decode(index, &knob);
@@ -1920,15 +1958,15 @@ static int machine_is_source(int machine);
 /* Refresh every voice filter's coefficients for this block. Called once per
  * work_process, never from the per-sample loop. */
 static void vfilt_prepare(work_t *w, int frames) {
-    const int on = vfilt_active(&TRK(w)->vfilt);
+    const int on = vfilt_active(&TRK(w)->eff_vfilt);
     for (int i = 0; i < WORK_STAGES; ++i) {
         work_slot_t *s = &TRK(w)->slot[i];
         s->vf_on = on && machine_is_source(TRK(w)->eff_machine[i]);
         if (!s->vf_on) continue;
-        vfilt_block(&TRK(w)->vfilt, &s->sp_filt, s->sp_note, frames, &s->sp_hp, &s->sp_lp);
+        vfilt_block(&TRK(w)->eff_vfilt, &s->sp_filt, s->sp_note, frames, &s->sp_hp, &s->sp_lp);
         for (int v = 0; v < WORK_VOICES; ++v) {
             if (s->voice[v].stage == 0) continue;
-            vfilt_block(&TRK(w)->vfilt, &s->voice[v].filt, s->voice[v].note, frames,
+            vfilt_block(&TRK(w)->eff_vfilt, &s->voice[v].filt, s->voice[v].note, frames,
                         &s->v_hp[v], &s->v_lp[v]);
         }
     }
@@ -2536,6 +2574,15 @@ static void song_advance(work_t *w) {
 /* Start every SRC voice from the top of its window. Called by a full trig and
  * by an incoming note; both are the "something happened" edge. Only slots
  * actually holding an SRC machine react, so this is free on an FX-only chain. */
+/* Start whatever voice the stages' machines have, from the EFFECTIVE state.
+ *
+ * Effective, not base, on both counts. A machine lock puts a different machine
+ * on this step — reading the base machine here meant the locked machine was
+ * never triggered at all, so a step that locked a sampler onto the source stage
+ * played silence. And a p-locked STRT or window has to apply to the voice this
+ * trig starts, not to the next one. "Each firing trig is a complete snapshot"
+ * is the documented rule; this is what makes it true of the voice as well as
+ * the parameters. */
 static void work_src_trigger(work_t *w, int note, int vel) {
     const int frames = TRK(w)->sample_frames;
     if (frames <= 0) return;
@@ -2548,9 +2595,9 @@ static void work_src_trigger(work_t *w, int note, int vel) {
 
     for (int i = 0; i < WORK_STAGES; ++i) {
         work_slot_t *s = &TRK(w)->slot[i];
-        switch (TRK(w)->cfg[i].machine) {
+        switch (TRK(w)->eff_machine[i]) {
         case WORK_FX_ONESHOT: {
-            int start = (int)((double)TRK(w)->cfg[i].p[1] / 127.0 * (frames - 1));
+            int start = (int)((double)TRK(w)->eff[i][1] / 127.0 * (frames - 1));
             s->sp_pos   = start;
             s->sp_env   = 0.0f;
             s->sp_stage = 1;
@@ -2559,7 +2606,7 @@ static void work_src_trigger(work_t *w, int note, int vel) {
             break;
         }
         case WORK_FX_POLYSAMPLE: {
-            int start = (int)((double)TRK(w)->cfg[i].p[4] / 127.0 * (frames - 1));
+            int start = (int)((double)TRK(w)->eff[i][4] / 127.0 * (frames - 1));
             work_voice_t *v = voice_alloc(s);
             v->pos = start; v->env = 0.0f; v->stage = 1;
             v->rate = pitch; v->gain = gain; v->dir = 1;
@@ -2568,9 +2615,9 @@ static void work_src_trigger(work_t *w, int note, int vel) {
             break;
         }
         case WORK_FX_SLICER: {
-            const int mode = iclamp((int)TRK(w)->cfg[i].p[1] * 4 / 128, 0, 3);
-            int start = (int)((double)TRK(w)->cfg[i].p[2] / 127.0 * (frames - 1));
-            int len   = (int)((double)TRK(w)->cfg[i].p[3] / 127.0 * (frames - start));
+            const int mode = iclamp((int)TRK(w)->eff[i][1] * 4 / 128, 0, 3);
+            int start = (int)((double)TRK(w)->eff[i][2] / 127.0 * (frames - 1));
+            int len   = (int)((double)TRK(w)->eff[i][3] / 127.0 * (frames - start));
             if (len < 2) len = 2;
             if (start + len > frames) len = frames - start;
             work_voice_t *v = voice_alloc(s);
@@ -2646,8 +2693,33 @@ static void seq_run(work_t *w, int frames) {
         TRK(w)->menv_t     = 0.0f;
         /* An SRC machine has a voice to start, unlike every FX machine before
          * it: a full trig fires the sample from its window start. A LOCK trig
-         * deliberately does not. That is what makes it a lock trig. */
-        work_src_trigger(w, 60, 0);
+         * deliberately does not. That is what makes it a lock trig.
+         *
+         * PENDING rather than immediate, because the machine-change reset has
+         * not run yet: it runs after build_effective, and it clears the slot —
+         * including a voice started here. That swallowed the trig whenever a
+         * machine changed in the same block, which is every first block after
+         * loading one, and every step that carries a MACHINE LOCK. The second
+         * is the one that matters: locking a machine onto a step is meant to
+         * make that step sound like the new machine, not to make it silent. */
+        w->src_trig_pending = 1;
+    }
+}
+
+/* The voice filter's fields in edit-page order, which is also lock-index order.
+ * A switch rather than pointer arithmetic across the struct: the seven fields
+ * are all uint8_t, but C is free to pad between members, and "it works on this
+ * compiler" is not a reason to index a struct as an array. */
+static void vfilt_set_field(work_vfilt_cfg_t *v, int field, uint8_t value) {
+    switch (field) {
+        case 0: v->base   = value; break;
+        case 1: v->width  = value; break;
+        case 2: v->reso   = value; break;
+        case 3: v->env    = value; break;
+        case 4: v->attack = value; break;
+        case 5: v->decay  = value; break;
+        case 6: v->track  = value; break;
+        default: break;
     }
 }
 
@@ -2658,16 +2730,26 @@ static void build_effective(work_t *w, int frames) {
         for (int i = 0; i < WORK_PARAMS; ++i)
             TRK(w)->eff[s][i] = TRK(w)->cfg[s].p[i];
     for (int s = 0; s < WORK_STAGES; ++s) TRK(w)->eff_machine[s] = TRK(w)->cfg[s].machine;
+    TRK(w)->eff_level = TRK(w)->level;
+    TRK(w)->eff_pan   = TRK(w)->pan;
+    TRK(w)->eff_vfilt = TRK(w)->vfilt;
     w->eff_mix = w->mix;
 
     if (w->seq_on && w->held_mask) {
         for (int i = 0; i < WORK_LOCKABLE; ++i) {
-            if (!(w->held_mask & (1u << i))) continue;
+            if (!(w->held_mask & (1ull << i))) continue;
             uint8_t v = w->held[i];
             int knob = 0;
             int stage = work_lock_decode(i, &knob);
             if (stage >= 0)              { TRK(w)->eff[stage][knob] = v; continue; }
-            if (i == WORK_LOCK_MIX)      { w->eff_mix = v;               continue; }
+            if (i == WORK_LOCK_LEVEL)    { TRK(w)->eff_level = v;        continue; }
+            if (i == WORK_LOCK_PAN)      { TRK(w)->eff_pan   = v;        continue; }
+
+            /* The voice filter's seven fields, in the order the edit page shows
+             * them. Locking these is what makes a sampled patch move per step
+             * without spending one of the machine's eight knobs on a filter. */
+            int vf = work_lock_decode_vfilt(i);
+            if (vf >= 0) { vfilt_set_field(&TRK(w)->eff_vfilt, vf, v); continue; }
 
             /* A machine lock goes through the SAME family gate as
              * work_set_param. A lock is a way to change a machine, not a way
@@ -2816,6 +2898,9 @@ work_t *work_create(const host_api_v1_t *host) {
             tr->lfo[i].depth = 64;
         }
 
+        tr->level = 127;               /* unity  */
+        tr->pan   = 64;                /* centre */
+
         /* Seeded per track as well as per slot, so two tracks holding the same
          * machine do not generate bit-identical noise. */
         tr->rng = 0xC2B2AE35u ^ (uint32_t)(t * 0x27D4EB2Fu);
@@ -2921,6 +3006,7 @@ void work_process(work_t *w, const int16_t *in, int16_t *out, int frames) {
 
     seq_run(w, frames);
     build_effective(w, frames);
+
     vfilt_prepare(w, frames);
 
     /* A machine change resets that slot's state so a reverb tail or delay
@@ -2932,6 +3018,13 @@ void work_process(work_t *w, const int16_t *in, int16_t *out, int frames) {
             slot_reset(&TRK(w)->slot[i]);
             TRK(w)->slot[i].last_machine = keep;
         }
+    }
+
+    /* NOW start the voice a sequencer trig asked for. Doing it inside seq_run
+     * put it before the reset above, which then wiped it. */
+    if (w->src_trig_pending) {
+        work_src_trigger(w, 60, 0);
+        w->src_trig_pending = 0;
     }
 
     /* Multimode Filter envelope gate, from note events seen since last block */
@@ -2948,6 +3041,23 @@ void work_process(work_t *w, const int16_t *in, int16_t *out, int frames) {
     }
 
     float gmix = p01(w->eff_mix);
+
+    /* Level and pan resolve once per block, not per sample: they are block-rate
+     * controls (a lock lands on a step boundary), and two trig calls per sample
+     * per track would be eight of them at eight tracks for no audible gain.
+     *
+     * Constant power, normalised so CENTRE IS UNITY rather than -3 dB. That
+     * normalisation is not a stylistic choice: bypass has to be bit-transparent,
+     * and a -3 dB centre would put a 4358-LSB dent in it. Hard left or right is
+     * correspondingly +3 dB, which is the usual bargain for a 0 dB centre.
+     *
+     * pbi() rather than p01() because pan is a BIPOLAR control: it has an exact
+     * zero at 64, where p01 would give 0.50394 and leave centre 0.4% off unity
+     * — inaudible, and still enough to fail transparency by ~130 LSB. */
+    const float lvl = p01(TRK(w)->eff_level);
+    const float ang = (pbi(TRK(w)->eff_pan) + 1.0f) * 0.25f * 3.14159265f;
+    const float lgain = lvl * cosf(ang) * 1.41421356f;
+    const float rgain = lvl * sinf(ang) * 1.41421356f;
 
     /* Muting at the INPUT rather than the output is deliberate, and differs
      * from Smack: Smack has a recorded loop that stays audible with the live
@@ -2984,6 +3094,17 @@ void work_process(work_t *w, const int16_t *in, int16_t *out, int frames) {
 
         l = dry_l * (1.0f - gmix) + l * gmix;
         r = dry_r * (1.0f - gmix) + r * gmix;
+
+        /* Track level and pan, at the routing end of the chain — after the
+         * stages and after the dry/wet, because they place the WHOLE track in
+         * the mix rather than trimming what one stage produced.
+         *
+         * Constant-power pan, so sweeping across centre does not dip: at 64 both
+         * gains are 1/sqrt(2), which is why the pair is normalised rather than
+         * left at 0.5/0.5. Level is linear in the parameter for now — a dB law
+         * belongs with the eight-track mixer, where levels get compared. */
+        l *= lgain;
+        r *= rgain;
 
         int vl = (int)lrintf(fclampf(l, -1.0f, 1.0f) * 32767.0f);
         int vr = (int)lrintf(fclampf(r, -1.0f, 1.0f) * 32767.0f);
@@ -3253,9 +3374,9 @@ static int parse_lock_key(const char *key, int *stp, int *idx) {
 
 static void step_set_lock(work_step_t *st, int idx, int value) {
     if (value < 0) {
-        st->lock_mask &= ~(1u << idx);       /* -1 clears the lock */
+        st->lock_mask &= ~(1ull << idx);       /* -1 clears the lock */
     } else {
-        st->lock_mask |= (1u << idx);
+        st->lock_mask |= (1ull << idx);
         st->lock[idx] = (uint8_t)iclamp(value, 0, 127);
     }
 }
@@ -3328,10 +3449,41 @@ static int parse_slot_param(const char *key, int *slot, int *idx) {
 
 /* Restore from the blob written by get_param("state"). Keys absent from the
  * blob keep their current value, so a partial blob is a legal patch. */
+/* Which lock map a blob's indices are written in.
+ *
+ * "v" alone is not enough. v1 covers TWO different maps: the one before SRC was
+ * promoted out of the FX slots, where index 0..7 addressed the first FX slot,
+ * and the one after, where it addresses the source stage. Both wrote "v":1 and
+ * nothing in the lock data distinguishes them.
+ *
+ * The FLAT MIRROR key names do distinguish them, and by luck rather than
+ * design: they were renumbered in the same change, from fp1/fp2/fp3 to
+ * fp_src/fp1/fp2. apply_state ignores those fields, so they are pure metadata —
+ * but they are metadata that happens to date the blob exactly. A blob with no
+ * flat mirror at all (hand-written, or truncated) is read as the newer layout,
+ * because that is what the engine has been writing most recently.
+ *
+ * Returns the number of stages the blob's index 0 was one stage behind by: 0
+ * for a modern v1, 1 for a pre-promotion one. */
+static int state_stage_shift(const char *json) {
+    if (strstr(json, "\"fp_src\":")) return 0;   /* written after the promotion */
+    if (strstr(json, "\"fp3\":"))    return 1;   /* written before it           */
+    return 0;
+}
+
 static void apply_state(work_t *w, const char *json) {
     const char *q;
 
+    /* Blob version. Absent means v1: the key was added when the format was
+     * already in use, so an old blob simply has no "v". */
+    int version = 1;
+    if ((q = strstr(json, "\"v\":")) != NULL) version = atoi(q + 4);
+
+    w->load_note[0] = '\0';
+
     if ((q = strstr(json, "\"mix\":")) != NULL) w->mix = (uint8_t)iclamp(atoi(q + 6), 0, 127);
+    if ((q = strstr(json, "\"lvl\":")) != NULL) TRK(w)->level = (uint8_t)iclamp(atoi(q + 6), 0, 127);
+    if ((q = strstr(json, "\"pan\":")) != NULL) TRK(w)->pan   = (uint8_t)iclamp(atoi(q + 6), 0, 127);
 
     /* The sample path the patch expects. The engine does NOT load it — it has
      * no filesystem and work_set_param runs on the audio thread. It only
@@ -3414,6 +3566,8 @@ static void apply_state(work_t *w, const char *json) {
      * complete pattern, so a stale step from the previous patch must not
      * survive underneath it. */
     if ((q = strstr(json, "\"stp\":\"")) != NULL) {
+        const int shift = version < 2 ? state_stage_shift(json) : 0;
+        int dropped = 0;
         memset(CURPAT(w)->step, 0, sizeof(CURPAT(w)->step));
         for (int i = 0; i < WORK_STEPS; ++i) CURPAT(w)->step[i].prob = 100;
         w->held_mask = 0;
@@ -3440,12 +3594,32 @@ static void apply_state(work_t *w, const char *json) {
                 } else if (*c == '+' && st) {
                     int k = atoi(c + 1);
                     const char *eq = strchr(c, '=');
-                    if (eq && k >= 0 && k < WORK_LOCKABLE)
-                        step_set_lock(st, k, atoi(eq + 1));
+                    if (!eq || k < 0) { c++; continue; }
+                    if (version < 2) {
+                        /* Translate, and count what has no v2 home rather than
+                         * dropping it quietly. A pre-promotion blob is shifted
+                         * one stage first, so its "slot 1" lands on insert 1
+                         * and not on the source stage. */
+                        if (shift) k += shift * WORK_PARAMS;
+                        int v2 = work_lock_migrate_v1(k);
+                        if (v2 < 0) { dropped++; c++; continue; }
+                        k = v2;
+                    }
+                    if (k < WORK_LOCKABLE) step_set_lock(st, k, atoi(eq + 1));
                 }
                 c++;
             }
             if (*c == '|') c++;
+        }
+
+        if (version < 2) {
+            /* Say what happened. The global dry/wet was lockable in v1 and is
+             * not per-track, so those locks have nowhere to go — see the lock
+             * map in work_core.h. */
+            snprintf(w->load_note, sizeof(w->load_note),
+                     "v1 preset: locks moved%s%s",
+                     shift ? ", stages shifted" : "",
+                     dropped ? ", mix locks dropped" : "");
         }
     }
 }
@@ -3629,6 +3803,9 @@ void work_set_param(work_t *w, const char *key, const char *val) {
         return;
     }
 
+    /* Track level and pan. Global `mix` stays global — see the lock map. */
+    if (strcmp(key, "level") == 0) { TRK(w)->level = (uint8_t)iclamp(atoi(val), 0, 127); return; }
+    if (strcmp(key, "pan")   == 0) { TRK(w)->pan   = (uint8_t)iclamp(atoi(val), 0, 127); return; }
     if (strcmp(key, "mix") == 0) { w->mix = (uint8_t)iclamp(atoi(val), 0, 127); return; }
     if (strcmp(key, "state") == 0) { if (val[0] == '{') apply_state(w, val); return; }
 
@@ -3885,6 +4062,13 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
 
     if (strcmp(key, "mix") == 0)
         return nclamp(snprintf(buf, buf_len, "%d", w->mix), cap);
+    /* What the last preset load had to translate, if anything. */
+    if (strcmp(key, "load_note") == 0)
+        return nclamp(snprintf(buf, buf_len, "%s", w->load_note), cap);
+    if (strcmp(key, "level") == 0)
+        return nclamp(snprintf(buf, buf_len, "%d", TRK(w)->level), cap);
+    if (strcmp(key, "pan") == 0)
+        return nclamp(snprintf(buf, buf_len, "%d", TRK(w)->pan), cap);
 
     /* The values actually reaching the DSP this block, after locks and LFOs.
      * The UI shows these live so a moving parameter reads as moving. */
@@ -3956,7 +4140,7 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
             const work_step_t *st = &CURPAT(w)->step[n];
             int nl = 0;
             for (int i = 0; i < WORK_LOCKABLE; ++i)
-                if (st->lock_mask & (1u << i)) nl++;
+                if (st->lock_mask & (1ull << i)) nl++;
             return nclamp(snprintf(buf, buf_len, "%d:%d:%d:%d:%d:%d:%d",
                                    st->active, st->cond, st->micro, st->retrig, nl,
                                    st->prob, st->trig_type), cap);
@@ -3971,7 +4155,7 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
         int stp, idx;
         if (parse_lock_key(key, &stp, &idx)) {
             const work_step_t *st = &CURPAT(w)->step[stp];
-            int v = (st->lock_mask & (1u << idx)) ? st->lock[idx] : -1;
+            int v = (st->lock_mask & (1ull << idx)) ? st->lock[idx] : -1;
             return nclamp(snprintf(buf, buf_len, "%d", v), cap);
         }
     }
@@ -3982,7 +4166,7 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
             const work_step_t *st = &CURPAT(w)->step[n];
             int written = 0, out = 0;
             for (int i = 0; i < WORK_LOCKABLE; ++i) {
-                if (!(st->lock_mask & (1u << i))) continue;
+                if (!(st->lock_mask & (1ull << i))) continue;
                 out = nclamp(out + snprintf(buf + out, (size_t)(buf_len - out),
                                             "%s%d=%d", written ? "," : "",
                                             i, st->lock[i]), cap);
@@ -4122,7 +4306,8 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
     if (strcmp(key, "state") == 0) {
         int n = 0;
         n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                "{\"v\":1,\"mix\":%d", w->mix), cap);
+                                "{\"v\":2,\"mix\":%d,\"lvl\":%d,\"pan\":%d",
+                                w->mix, TRK(w)->level, TRK(w)->pan), cap);
         /* The sample PATH, not the audio. A source-machine patch that restored
          * every parameter and then played silence read as a broken module, so
          * the blob records which file the patch expects and the UI reloads it.
@@ -4221,7 +4406,7 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
                                     st->prob, st->trig_type), cap);
             emitted = 1;
             for (int k = 0; k < WORK_LOCKABLE; ++k) {
-                if (!(st->lock_mask & (1u << k))) continue;
+                if (!(st->lock_mask & (1ull << k))) continue;
                 n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
                                         "+%d=%d", k, st->lock[k]), cap);
             }

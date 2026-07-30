@@ -88,7 +88,8 @@ int main(void) {
 
     printf("{\n  \"get\": {");
     const char *simple[] = {
-        "machines", "conds", "effm", "mix", "seq_on", "seq_len", "fill",
+        "machines", "conds", "effm", "mix", "level", "pan", "load_note",
+        "seq_on", "seq_len", "fill",
         "seq_pos", "meter", "state", "live_rec",
         "menv_dest", "menv_atk", "menv_hold", "menv_dec", "menv_depth",
         "pattern", "page_mask", "song_on", "song_len", "song_pos", "undo_state",
@@ -155,7 +156,7 @@ int main(void) {
          * source; 5 and 9 are effects. */
         {"src", "21"}, {"fx1", "5"}, {"fx2", "9"},
         {"machine1", "5"}, {"machine2", "3"},   /* the insert aliases */
-        {"mix", "77"},
+        {"mix", "77"}, {"level", "90"}, {"pan", "30"},
         {"seq_on", "0"}, {"seq_len", "9"}, {"fill", "1"}, {"seq_clear", "1"},
         {"src_p1", "40"}, {"fx1_p1", "42"}, {"fx2_p8", "13"},
         /* Every LFO field, on every LFO. A partial probe list here is worse

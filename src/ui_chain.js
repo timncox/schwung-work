@@ -117,7 +117,11 @@ const MACHINE_PAGE = [];
 for (let s = 0; s < N_STAGES; s++)
     MACHINE_PAGE.push({ key: STAGE_KEY[s], label: STAGE_LABEL[s],
                         min: 0, max: 0, step: 1 });
-MACHINE_PAGE.push({ key: 'mix', label: 'MIX', min: 0, max: 127, step: 1 });
+MACHINE_PAGE.push({ key: 'mix',   label: 'MIX', min: 0, max: 127, step: 1 });
+/* Where this track sits in the mix, at the routing end of the chain. Global MIX
+ * is the chain's dry/wet; LVL and PAN place the whole track. */
+MACHINE_PAGE.push({ key: 'level', label: 'LVL', min: 0, max: 127, step: 1 });
+MACHINE_PAGE.push({ key: 'pan',   label: 'PAN', min: 0, max: 127, step: 1 });
 
 const PAGES = [MACHINE_PAGE];
 for (let s = 0; s < N_STAGES; s++) PAGES.push(FX_KNOBS(s));
@@ -332,17 +336,37 @@ function drawFooter(hint) {
     print(0, 57, fit(hint, SCREEN_W), 1);
 }
 
-/* The machines page carries three values, so it gets full-width rows and the
- * whole machine name — "Wide Chorus", not "Panora". */
-const ROW_Y       = [14, 27, 40];
+/* The machines page gives each STAGE a full-width row, because a machine name
+ * is long and "Wide Chorus" cut to "Panora" is what this layout exists to
+ * avoid. Everything after the stages is a short number, so those share one row
+ * of cells along the bottom.
+ *
+ * Both are DERIVED from N_STAGES. A written-down [14, 27, 40] is what left the
+ * MIX row printing at y=undefined the moment a third stage was added: the row
+ * table still had three entries, the page had four knobs, and print() was
+ * handed undefined — invisible in every test until a second overflowing row
+ * turned up to collide with it. */
+const ROW_TOP     = 14;
+const ROW_STEP    = 13;
 const ROW_LABEL_W = 24;
 const ROW_VALUE_X = 28;
+const CELL_Y      = ROW_TOP + N_STAGES * ROW_STEP - 5;
 
 function drawMachinePage() {
     const knobs = PAGES[PAGE_MACHINES];
-    for (let i = 0; i < knobs.length; i++) {
-        print(0, ROW_Y[i], fit(knobs[i].label, ROW_LABEL_W), 1);
-        print(ROW_VALUE_X, ROW_Y[i], fit(knobValue(i), SCREEN_W - ROW_VALUE_X), 1);
+    for (let i = 0; i < N_STAGES && i < knobs.length; i++) {
+        const y = ROW_TOP + i * ROW_STEP;
+        print(0, y, fit(knobs[i].label, ROW_LABEL_W), 1);
+        print(ROW_VALUE_X, y, fit(knobValue(i), SCREEN_W - ROW_VALUE_X), 1);
+    }
+    /* the scalars, side by side */
+    const rest = knobs.length - N_STAGES;
+    if (rest > 0) {
+        const cell = Math.floor(SCREEN_W / rest);
+        for (let i = 0; i < rest; i++) {
+            const k = N_STAGES + i;
+            print(i * cell, CELL_Y, fit(`${knobs[k].label} ${knobValue(k)}`, cell - 2), 1);
+        }
     }
 }
 
@@ -538,11 +562,13 @@ globalThis.init = function () {
     refreshCursor = 0;
     tickCount = 0;
 
-    /* Four reads at load — the machine list plus the three values the first
-     * page draws. Everything else fills in over the following ticks and reads
-     * "--" until it does. */
+    /* The machine list plus the three machine SELECTS — the values whose
+     * absence would leave the first page reading "--" where a name belongs.
+     * MIX, LVL and PAN fill in over the following ticks like every other
+     * page's values do; each read here is a blocking ~23 ms round-trip, and
+     * the first frame is what the player is waiting for. */
     refreshStep();
-    for (const k of PAGES[PAGE_MACHINES]) readNum(k.key);
+    for (let st = 0; st < N_STAGES; st++) readNum(STAGE_KEY[st]);
     syncMachineNames();
 
     burst = BURST_READS;

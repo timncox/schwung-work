@@ -420,24 +420,28 @@ function paramKey(stage, knob) { return `${STAGE_KEY[stage]}_p${knob + 1}`; }
 function labelsKey(stage) { return stage === STAGE_SRC ? 'labels_src' : `labels${stage}`; }
 function effKey(stage)    { return stage === STAGE_SRC ? 'eff_src'    : `eff${stage}`; }
 
-/* Lock indices, mirroring the map in work_core.h. The map is APPEND-ONLY, so
- * stage 2's parameters sit ABOVE the machine and mix entries rather than after
- * stage 1's — computing stage * 8 + knob gives the wrong index for the last
- * stage and would write a lock onto the SRC MACHINE select. */
-const LOCK_MACH0    = 16;
-const LOCK_MIX      = 18;
-const LOCK_S2P0     = 19;
-const LOCK_MACH2    = 27;
+/* Lock indices, mirroring the map in work_core.h — which is PER TRACK, and was
+ * rebuilt once in v0.9.0 so the stage parameters are contiguous. That is why
+ * lockForParam is now plain arithmetic instead of a special case for whichever
+ * stage was bolted on last.
+ *
+ * The global dry/wet is deliberately NOT lockable: it is not per-track, and
+ * "this track's step 3 changes the global mix" is the kind of cross-track
+ * surprise that makes a pattern unpredictable. Track LEVEL replaces it. */
+const LOCK_MACH0    = 24;      /* stage N's machine is LOCK_MACH0 + N */
+const LOCK_LEVEL    = 27;
+const LOCK_PAN      = 28;
+const LOCK_VF0      = 29;      /* the seven voice-filter fields run from here */
 const DEST_MAX      = N_STAGES * 8 - 1;
 
 function lockForParam(stage, knob) {
-    return stage < 2 ? stage * 8 + knob : LOCK_S2P0 + knob;
+    return stage * 8 + knob;
 }
 function isMachineKey(key) {
     return STAGE_KEY.indexOf(key) >= 0;
 }
 function lockForMachine(stage) {
-    return stage < 2 ? LOCK_MACH0 + stage : LOCK_MACH2;
+    return LOCK_MACH0 + stage;
 }
 
 /* The knob descriptors for the current edit page. Stage labels come from the
@@ -457,16 +461,18 @@ function pageKnobs() {
         return out;
     }
     if (editPage === EDIT_VFILT) {
-        return [
-            { key: 'vf_base',  label: 'BASE',  lock: -1, min: 0, max: 127 },
-            { key: 'vf_width', label: 'WDTH',  lock: -1, min: 0, max: 127 },
-            { key: 'vf_reso',  label: 'RESO',  lock: -1, min: 0, max: 127 },
-            { key: 'vf_env',   label: 'ENV',   lock: -1, min: 0, max: 127 },
-            { key: 'vf_atk',   label: 'ATK',   lock: -1, min: 0, max: 127 },
-            { key: 'vf_dec',   label: 'DEC',   lock: -1, min: 0, max: 127 },
-            { key: 'vf_track', label: 'KEY',   lock: -1, min: 0, max: 127 },
-            { key: '', label: '', lock: -1, min: 0, max: 0 }
-        ];
+        /* All seven are lockable, in the order the map lists them — so a
+         * sampled patch can move its filter per step without spending one of
+         * the machine's eight knobs on one. */
+        const F = ['base', 'width', 'reso', 'env', 'atk', 'dec', 'track'];
+        const L = ['BASE', 'WDTH', 'RESO', 'ENV', 'ATK', 'DEC', 'KEY'];
+        const out = [];
+        for (let i = 0; i < F.length; i++) {
+            out.push({ key: `vf_${F[i]}`, label: L[i], lock: LOCK_VF0 + i,
+                       min: 0, max: 127 });
+        }
+        out.push({ key: '', label: '', lock: -1, min: 0, max: 0 });
+        return out;
     }
     if (editPage === EDIT_MENV) {
         return [
@@ -503,7 +509,10 @@ function pageKnobs() {
         out.push({ key: STAGE_KEY[s], label: STAGE_LABEL[s], stage: s,
                    lock: lockForMachine(s), min: 0, max: nMachines() - 1 });
     }
-    out.push({ key: 'mix',     label: 'MIX', lock: LOCK_MIX, min: 0, max: 127 });
+    /* MIX carries no lock: it is global, and the map is per-track. */
+    out.push({ key: 'mix',     label: 'MIX', lock: -1, min: 0, max: 127 });
+    out.push({ key: 'level',   label: 'LVL', lock: LOCK_LEVEL, min: 0, max: 127 });
+    out.push({ key: 'pan',     label: 'PAN', lock: LOCK_PAN,   min: 0, max: 127 });
     out.push({ key: 'seq_len', label: 'LEN', lock: -1, min: 1, max: MAX_STEPS });
     while (out.length < 8) out.push({ key: '', label: '', lock: -1, min: 0, max: 0 });
     return out;
@@ -512,8 +521,8 @@ function pageKnobs() {
 /* The scalars fetchAll mirrors, in one place so the batch and the unpack
  * cannot drift apart. */
 const SCALAR_KEYS = [
-    'mix', 'seq_len', 'seq_on', 'fill', 'live_rec', 'song_on', 'pattern',
-    'monitor', 'hw_input'
+    'mix', 'level', 'pan', 'seq_len', 'seq_on', 'fill', 'live_rec', 'song_on',
+    'pattern', 'monitor', 'hw_input'
 ];
 
 /* Everything the screen and LEDs show, pulled in one pass — two bulk

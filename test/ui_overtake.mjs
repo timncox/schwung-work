@@ -418,13 +418,12 @@ async function testHoldStepPlusKnobLocks() {
           `release after locking should not rewrite the step, got ${JSON.stringify(stepWrites)}`);
 }
 
-/* The lock index map is APPEND-ONLY: the LAST stage's parameters live at 19-26,
- * not at 16-23, because 16/17/18 were already the machine selects and the mix.
- * Get this wrong and holding a step while turning a knob on FX 2 writes a lock
- * onto the SRC MACHINE — the patch would change machine mid-pattern and nothing
- * would say why. */
+/* The v2 lock map is CONTIGUOUS across the stages: SRC at 0-7, FX 1 at 8-15,
+ * FX 2 at 16-23, then the three machine selects. Get this wrong and holding a
+ * step while turning a knob on FX 2 writes a lock onto a machine select — the
+ * patch would change machine mid-pattern and nothing would say why. */
 async function testLastStageLocksAppendRatherThanCollide() {
-    console.log("FX 2's locks land at 19-26, clear of the machine and mix indices");
+    console.log("FX 2's locks land at 16-23, below the machine selects");
     const ctx = await loadUI();
     ctx.host.init();
 
@@ -443,8 +442,8 @@ async function testLastStageLocksAppendRatherThanCollide() {
     check(locks.length === 1,
           `expected one lock write, got ${JSON.stringify(ctx.writes)}`);
     if (locks.length) {
-        check(locks[0].key === 'lock2_19',
-              `FX 2 knob A must lock index 19, got ${locks[0].key} — 16 is ` +
+        check(locks[0].key === 'lock2_16',
+              `FX 2 knob A must lock index 16, got ${locks[0].key} — 24 is ` +
               `the SRC machine select, so an off-by-map here silently ` +
               `changes machine mid-pattern`);
     }
