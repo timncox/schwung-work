@@ -357,6 +357,28 @@ $(brew --prefix python@3.12)/bin/python3.12 -m venv .venv-e2e
 .venv-e2e/bin/pip install -e ../schwung/tools/pytest-schwung pytest
 ```
 
+**No manual step now** (2026-07-30): `bus.set_open_tool('overwork')` works —
+schwung's lookup falls back to `scanForOvertakeModules()`, so the fixture
+launches Overwork itself. The paragraph below is kept for the history.
+
+**Deploy with the tool CLOSED.** `scripts/deploy.sh` overwrites `dsp.so`; doing
+that while an overtake module has it mapped crashed MoveOriginal on 2026-07-30
+and needed a power cycle. Check `bus.state().overtake_mode == 0` first, deploy,
+then `set_open_tool`. The script's own warning is about stale code — this is the
+worse failure it does not mention.
+
+**The suite is flaky on the device, and the cause is in schwung, not here.**
+`shadow_ui.js:15208` logs EVERY MIDI message while in overtake mode, before any
+filtering, with the comment "Debug: log all MIDI ... to diagnose escape issues".
+Two synchronous appends per event to `/data/UserData/schwung/debug.log`, which
+reached **1.2 GB** and grows at **143 KB per 10 s while idle** — the ring
+misalignment that degrades to an endless run of `status=0 d1=0 d2=0` is written
+out in full. Every injected test event pays for that on eMMC, on a thread
+sharing budget with audio, and injected events then arrive late, out of order,
+or not at all. Symptoms: raw protocol corruption on the test bus
+(`unexpected reply 'seq_pos7'`), palette slots resolving two positions off, and
+different tests failing on every run. Fix the log before trusting a red result.
+
 **One manual step remains.** Overwork must already be open on the device.
 `bus.set_open_tool('overwork')` writes the command and shadow_ui reads it, but
 answers `tool not found: overwork` — its open_tool path searches
