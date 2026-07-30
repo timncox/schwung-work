@@ -566,7 +566,7 @@ function pageKnobs() {
  * cannot drift apart. */
 const SCALAR_KEYS = [
     'mix', 'level', 'pan', 'seq_len', 'seq_on', 'fill', 'live_rec', 'song_on',
-    'pattern', 'monitor', 'hw_input', 'track'
+    'pattern', 'monitor', 'hw_input', 'track', 'focus'
 ];
 
 /* Everything the screen and LEDs show, pulled in one pass — two bulk
@@ -633,6 +633,13 @@ function fetchAll() {
     monitor = num('monitor');
     hwInput = num('hw_input');
     selTrack = num('track');
+    /* Read back too, so a write from outside — the on-device suite, or the
+     * browser editor — actually MOVES the surface instead of being silently
+     * overwritten by the next local change. */
+    if (v.focus !== undefined && v.focus !== '') {
+        const f = num('focus');
+        if (f >= 0 && f < N_STAGES) focusStage = f;
+    }
     if (v.tracks) nTracks = Math.max(1, num("tracks"));
     if (v.lfo_dests) {
         const d = `${v.lfo_dests}`.split(",").map((x) => parseInt(x, 10));
@@ -1785,6 +1792,10 @@ function handlePadPress(note) {
             return;
         case PAD_STAGE:
             focusStage = (focusStage + 1) % N_STAGES;
+            /* Mirror it to the engine. Nothing there reads it — it is published
+             * so the focus is OBSERVABLE, which is what the on-device suite
+             * needs to stop inferring it. */
+            host_module_set_param('focus', `${focusStage}`);
             fetchAll();
             /* Repaint at once rather than waiting for the periodic pass: the
              * palette under the pads just changed to a different family, and

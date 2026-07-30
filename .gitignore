@@ -11,3 +11,4 @@ docs/*.pdf
 .playwright-mcp/
 
 .venv-e2e/
+test/__pycache__/

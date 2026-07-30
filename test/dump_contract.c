@@ -89,7 +89,7 @@ int main(void) {
     printf("{\n  \"get\": {");
     const char *simple[] = {
         "machines", "conds", "effm", "mix", "level", "pan", "load_note",
-        "track", "tracks", "track_map",
+        "track", "tracks", "track_map", "focus",
         "seq_on", "seq_len", "fill",
         "seq_pos", "meter", "state", "live_rec",
         /* The windowed preset read. "state@0" is here so the harness's
@@ -175,7 +175,7 @@ int main(void) {
          * accept". That is the same false negative that once dropped "src";
          * it is noted rather than defended against, because a one-track build
          * has no track picker to test. */
-        {"track", "1"},
+        {"track", "1"}, {"focus", "2"},
         {"seq_on", "0"}, {"seq_len", "9"}, {"fill", "1"}, {"seq_clear", "1"},
         {"src_p1", "40"}, {"fx1_p1", "42"}, {"fx2_p8", "13"},
         /* Every LFO field, on every LFO. A partial probe list here is worse

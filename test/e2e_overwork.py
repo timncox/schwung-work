@@ -56,7 +56,23 @@ STEP_FIRST = 16          # step buttons are NOTES 16-31 — verified on device
 PAD_PLAY = 68
 PAD_SLOT = 70
 PAD_EPAGE = 72
-PALETTE_ROW1 = 92        # machines 0-7; +Shift reaches 21-28
+PALETTE_ROW1 = 92
+
+# The machine palette: pad rows 1-3 in reading order, minus the three function
+# pads sitting inside row 3. Mirrors PALETTE_SLOTS in ui_overtake.js.
+#
+# A pad's position here indexes the FOCUSED STAGE'S FAMILY, not a machine code.
+# It used to be a machine code, with Shift reaching a second bank at 21+; the
+# SRC promotion split the machines into 21 effects and 6 sources, each of which
+# fits these 21 slots outright, so the bank went away.
+PAD_UNDO, PAD_MEMO, PAD_SONG = 81, 82, 83
+PAD_STAGE = 70           # cycles the focused stage: SRC -> FX 1 -> FX 2
+N_STAGES = 3
+
+PALETTE_SLOTS = [
+    p for p in (list(range(92, 100)) + list(range(84, 92)) + list(range(76, 84)))
+    if p not in (PAD_UNDO, PAD_MEMO, PAD_SONG)
+]
 
 
 @pytest.fixture(scope="module")
@@ -108,6 +124,14 @@ def _param(bus, key, tries=6):
 
 def _machines(bus):
     return _param(bus, "machines").split(",")
+
+
+def _codes(bus, key):
+    """A family's machine codes, from the ENGINE. Never recomputed here — a
+    local copy of a table the engine owns is a copy that drifts, and catching
+    exactly that drift is what this suite is for."""
+    raw = _param(bus, key)
+    return [int(c) for c in raw.split(",") if c.strip().isdigit()] if raw else []
 
 
 def _shift_latched_on_device(bus):
@@ -223,42 +247,97 @@ def test_hold_step_plus_knob_writes_a_parameter_lock(overwork):
 
 # ------------------------------------------------------------------ palette
 
-@pytest.mark.flaky_modifier          # see the note in the body
-@pytest.mark.parametrize("shift,offset", [(False, 0), (True, 21)])
-def test_palette_pads_load_machines(overwork, shift, offset):
-    """Unshifted pads reach machines 0-20, Shift reaches 21 and up. The Shift
-    bank exists because 26 machines do not fit 21 palette slots.
+def _focus_stage(bus, stage):
+    """Point the surface at `stage`, and confirm it went.
 
-    KNOWN FLAKY, roughly one run in three, and worth being straight about: the
-    two parametrisations differ only in modifier state, and injected Shift
-    releases can be dropped when they share a frame with the previous test's
-    pad traffic. A dropped release leaves Shift latched and the next case loads
-    machine+21 — which is the very failure this suite exists to detect, so the
-    test cannot simply paper over it by retrying.
+    WRITES the focus rather than cycling PAD_STAGE and inferring where it
+    landed. The inferring version is why this test was unreliable: the UI held
+    the focus locally and served nothing, so a test could only park every stage
+    on a known machine, press a palette pad, and see which one moved — then
+    cycle. Four sweeps of the 21 slots produced four different sets of
+    failures, and one failed all twenty-one because the focus had ended up
+    somewhere else entirely. The mapping was correct every time; the test could
+    not hold the state it was testing against.
 
-    The right fix is for the bus to report the module's modifier state so the
-    test can establish it rather than infer it. Until then, read a failure here
-    as "check whether Shift latched" rather than "the palette is broken"."""
+    The engine now publishes `focus` (see the setter in work_core.c) and the UI
+    mirrors it in both directions."""
+    bus.set_param("focus", str(stage))
+    bus.wait_frame(6)
+    got = _param(bus, "focus")
+    assert got == str(stage), (
+        f"asked for stage {stage}, engine reports focus {got!r}"
+    )
+
+
+@pytest.mark.parametrize("stage", range(N_STAGES))
+def test_palette_pads_load_the_focused_stage_family(overwork, stage):
+    """A palette pad loads the FOCUSED stage, from that stage's own family.
+
+    Rewritten 2026-07-30. The old version asserted that pad N loads machine N,
+    with Shift reaching a second bank at 21+ — the contract from before the SRC
+    promotion, when all three slots were interchangeable and a pad index WAS a
+    machine code. Neither half survives: a pad now indexes the focused stage's
+    FAMILY, and the Shift bank is gone because splitting 26 machines into 21
+    effects and 6 sources made each list fit rows 1-3 outright.
+
+    The expectation comes from the engine's own src_codes / fx_codes rather
+    than from arithmetic here. A test that recomputed the family locally would
+    keep passing while the two drifted apart, which is the whole failure this
+    suite exists to catch."""
     bus = overwork
     _release_modifiers(bus)
-    machines = _machines(bus)
-    target = offset + 3
-    if target >= len(machines):
-        pytest.skip(f"only {len(machines)} machines")
 
-    if shift:
-        bus.inject_midi(bytes([0x0B, 0xB0, 49, 127]))
-        bus.wait_frame(2)
-    bus.press_pad(PALETTE_ROW1 + 3)
-    bus.wait_frame(4)
-    bus.release_pad(PALETTE_ROW1 + 3)
-    bus.wait_frame(10)
+    family = _codes(bus, "src_codes" if stage == 0 else "fx_codes")
+    assert family, "the engine served no family for this stage"
+
+    _focus_stage(bus, stage)
+    key = ("src", "machine1", "machine2")[stage]
+    machines = _machines(bus)
+
+    # Two positions: one near the start and one at the very end of the family.
+    # The last is the one that matters — reaching it is exactly what a missing
+    # palette slot breaks, and it has broken twice.
+    for slot in (3, len(family) - 1):
+        if slot >= len(PALETTE_SLOTS):
+            continue
+        bus.press_pad(PALETTE_SLOTS[slot])
+        bus.wait_frame(4)
+        bus.release_pad(PALETTE_SLOTS[slot])
+        bus.wait_frame(10)
+
+        got = int(_param(bus, key))
+        want = family[slot]
+        assert got == want, (
+            f"stage {stage}: palette slot {slot} (pad {PALETTE_SLOTS[slot]}) "
+            f"loaded {got} ({machines[got]}), expected {want} ({machines[want]})"
+        )
+
+
+def test_palette_slots_past_a_family_load_nothing(overwork):
+    """The source family is six long and the palette is twenty-one slots. The
+    fifteen slots past its end must do NOTHING while SRC is focused — not wrap,
+    not fall through to the effect family, which would put a reverb in the
+    source stage."""
+    bus = overwork
     _release_modifiers(bus)
 
-    got = int(_param(bus, "machine1"))
-    assert got == target, (
-        f"palette pad 4 {'with' if shift else 'without'} Shift loaded machine "
-        f"{got} ({machines[got]}), expected {target} ({machines[target]})"
+    family = _codes(bus, "src_codes")
+    if len(family) >= len(PALETTE_SLOTS):
+        pytest.skip("the source family fills the palette; nothing is past its end")
+
+    _focus_stage(bus, 0)
+    bus.set_param("src", "21")               # One Shot
+    bus.wait_frame(4)
+
+    bus.press_pad(PALETTE_SLOTS[len(family)])
+    bus.wait_frame(4)
+    bus.release_pad(PALETTE_SLOTS[len(family)])
+    bus.wait_frame(10)
+
+    got = _param(bus, "src")
+    assert int(got) == 21, (
+        f"a palette slot past the source family's end changed the stage to "
+        f"{got}; slots past a family must be inert"
     )
 
 

@@ -436,6 +436,9 @@ struct work {
     /* Which track the PARAMETER interface addresses. The render path ignores
      * it entirely — see the loop in work_process. */
     uint8_t              sel_track;
+    /* Which STAGE the surface is pointed at. UI state, mirrored here so it is
+     * observable; the engine never reads it. See the setter. */
+    uint8_t              focus_stage;
     uint8_t              seq_on;
 
     /* edit history: one undo level plus a separate memorize slot, both
@@ -4330,6 +4333,27 @@ void work_set_param(work_t *w, const char *key, const char *val) {
         if (t >= 0 && t < WORK_TRACKS) w->sel_track = (uint8_t)t;
         return;
     }
+
+    /* Which stage the SURFACE is pointed at — the one a palette pad loads and
+     * the one the knobs edit on the FX page.
+     *
+     * Pure UI state: the engine never reads it. It lives here because the
+     * alternative is that it lives ONLY in ui_overtake.js, where nothing can
+     * see it — and something needs to. The on-device suite could only infer
+     * the focus by pressing a palette pad and watching which stage moved, then
+     * cycling a pad the right number of times, and inference across injected
+     * events is exactly as reliable as it sounds: the same sweep produced four
+     * different sets of failures in four runs, and once failed all twenty-one
+     * slots because the focus had landed somewhere else.
+     *
+     * The mapping itself was never wrong. The test could not hold the state it
+     * was testing against. `sel_track` set the precedent — the render path
+     * ignores that too. */
+    if (strcmp(key, "focus") == 0) {
+        int s = atoi(val);
+        if (s >= 0 && s < WORK_STAGES) w->focus_stage = (uint8_t)s;
+        return;
+    }
     if (strcmp(key, "level") == 0) { TRK(w)->level = (uint8_t)iclamp(atoi(val), 0, 127); return; }
     if (strcmp(key, "pan")   == 0) { TRK(w)->pan   = (uint8_t)iclamp(atoi(val), 0, 127); return; }
     if (strcmp(key, "mix") == 0) { w->mix = (uint8_t)iclamp(atoi(val), 0, 127); return; }
@@ -4777,6 +4801,8 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
         return nclamp(snprintf(buf, buf_len, "%d", w->sel_track), cap);
     if (strcmp(key, "tracks") == 0)
         return nclamp(snprintf(buf, buf_len, "%d", WORK_TRACKS), cap);
+    if (strcmp(key, "focus") == 0)
+        return nclamp(snprintf(buf, buf_len, "%d", w->focus_stage), cap);
 
     /* Everything the track strip draws, in ONE read: per track, the number of
      * active steps in the current pattern and the machine loaded in its source
