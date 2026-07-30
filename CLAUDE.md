@@ -361,9 +361,21 @@ $(brew --prefix python@3.12)/bin/python3.12 -m venv .venv-e2e
 .venv-e2e/bin/pip install -e ../schwung/tools/pytest-schwung pytest
 ```
 
-**No manual step now** (2026-07-30): `bus.set_open_tool('overwork')` works —
-schwung's lookup falls back to `scanForOvertakeModules()`, so the fixture
-launches Overwork itself. The paragraph below is kept for the history.
+**`set_open_tool` does NOT work on the host built from `main`** (2026-07-30,
+second finding of the day). `bus.set_open_tool('overwork')` returns without
+error and leaves `overtake_mode` at 0; the manager still reports no active
+tool. It was recorded as working earlier the same day, against whichever host
+happened to be installed then — so read that as describing one build, not the
+contract. Open Overwork by hand (Shift+Vol+Jog Click -> Tools) before the suite.
+
+Two ways to misread the daemon's state, both of which cost time today:
+
+- `pgrep -f schwung-testd` **over SSH matches its own command line** and
+  reports the daemon running when nothing is. Use `ps aux | grep "[s]chwung-testd"`.
+- An SSH port-forward established before a reboot **survives locally while
+  forwarding to nothing**, and fails with `ConnectionResetError` that reads
+  exactly like a daemon crash. Every reboot kills testd; it is not
+  auto-started.
 
 **Deploy with the tool CLOSED.** `scripts/deploy.sh` overwrites `dsp.so`; doing
 that while an overtake module has it mapped crashed MoveOriginal on 2026-07-30
