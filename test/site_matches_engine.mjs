@@ -202,6 +202,51 @@ for (const fn of [81, 82, 83]) {
   const found = retired.filter((w) => html.includes(w));
   check(found.length === 0,
         `the manual still contains retired names: ${found.join(', ')}`);
+
+  /* And the same names must not survive as IDENTIFIERS in the source.
+   *
+   * This guard only ever read the manual page, and CLAUDE.md's rule is "code,
+   * comments, tests or docs" — which is why the v0.7.0 rename could change
+   * every user-facing name and the whole machine enum while leaving SEVENTEEN
+   * DSP functions still called after the Elektron originals: m_steelbox under
+   * a header reading "Iron Room Reverb", m_phase98 under "Phase Array",
+   * m_shape under "Tilt". Green suite, correct on screen, retired names all
+   * through the file.
+   *
+   * Matched as identifiers rather than as substrings, and that distinction is
+   * the whole design. A plain sweep flags "tape pitch warble + noise" in
+   * work_core.h, which is the English word for what Flutter does, and the
+   * three verbatim quotes of a hardware bug report ("fx 2 only does warble or
+   * bypass") that record what the machine was called at the time. Neither is a
+   * name being USED; both would have to be falsified to satisfy a blunt check,
+   * and a guard that forces you to edit history is a guard people switch off.
+   *
+   * So: `m_<name>` and `test_<name>` in any spelling, plus the name as a
+   * capitalised word. That catches every real leak and none of the prose. */
+  const ident = (w) => w.toLowerCase().replace(/[^a-z0-9]+/g, '[_ ]?');
+  const rules = retired.flatMap((w) => [
+    /* The trailing (?:_|\b) matters: `_` is a word character, so a plain \b
+     * after the name does NOT match test_wavefinder_needs_a_wavetable — the
+     * boundary never occurs. Verified by planting exactly that and watching an
+     * earlier version of this rule stay green. */
+    { re: new RegExp(`\\b(?:m|test)_${ident(w)}(?:_|\\b)`, 'i'), how: `an identifier named after "${w}"` },
+    { re: new RegExp(`\\b${w.replace(/[^A-Za-z0-9]+/g, '\\s*')}\\b`), how: `the name "${w}"` }
+  ]);
+
+  /* This file is the one place the words must appear — listing them is how
+   * they are forbidden. The gitignored manual extract is Elektron's own
+   * document and is not ours to rewrite. */
+  const SKIP = new Set(['site_matches_engine.mjs']);
+  for (const dir of ['src', 'test']) {
+    for (const f of fs.readdirSync(path.join(root, dir))) {
+      if (SKIP.has(f)) continue;
+      const p = path.join(root, dir, f);
+      if (!fs.statSync(p).isFile()) continue;
+      const text = fs.readFileSync(p, 'utf8');
+      const bad = rules.filter((r) => r.re.test(text)).map((r) => r.how);
+      check(bad.length === 0, `${dir}/${f} still carries ${bad.join(', ')}`);
+    }
+  }
 }
 
 console.log(`\n${checks} checks, ${failures} failed`);

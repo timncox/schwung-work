@@ -16,7 +16,7 @@
 
 #include "work_core.h"
 
-/* Machine ids as level-name fragments: "chrono_pitch", "comb_filter", ... */
+/* Machine ids as level-name fragments: "clock_pitch", "comb_filter", ... */
 static void slug(const char *name, char *out, size_t n) {
     size_t j = 0;
     for (size_t i = 0; name[i] && j + 1 < n; ++i) {

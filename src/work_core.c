@@ -195,7 +195,7 @@ static const int AP_TUNE[WORK_TANK_APS]     = {556, 441, 341, 225};
 
 typedef struct {
     /* generic delay line, stereo interleaved: delays, combs, flanger,
-     * chorus, warble, chrono-pitch grains */
+     * chorus, Flutter, Clock Pitch grains */
     float *dl;
     int    dw;
 
@@ -285,7 +285,7 @@ typedef struct {
 
     /* Tilt: shelving filter state, two channels each. TWO poles per band,
      * one pole per band: `in - low` is an exact complementary highpass only for a
-     * single pole, and cascading a second one breaks the null. See m_shape. */
+     * single pole, and cascading a second one breaks the null. See m_tilt. */
     float  sh_lo[2], sh_hi[2];
 
     int    last_machine;         /* reset state when the machine changes  */
@@ -730,7 +730,7 @@ static void predelay(work_slot_t *s, float l, float r, float back,
  * (1 - rate), and two taps a half-window apart are crossfaded with a raised
  * sine so the wrap is inaudible. Feedback re-injects the shifted signal, so
  * held notes climb or fall in steps. */
-static void m_chrono(mctx_t *m, float *l, float *r) {
+static void m_clock_pitch(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
     const uint8_t *p = m->p;
 
@@ -871,7 +871,7 @@ static void m_comp(mctx_t *m, float *l, float *r) {
  * Drive into the line, tempo-synced base time, SKEW pulling the two channels
  * into a rhythmic relationship, and a tilt filter that low-passes to the left
  * and high-passes to the right. */
-static void m_daisy(mctx_t *m, float *l, float *r) {
+static void m_chain_delay(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
     const uint8_t *p = m->p;
 
@@ -918,7 +918,7 @@ static void m_daisy(mctx_t *m, float *l, float *r) {
  * The lo-fi collection: bit reduction, overdrive, sample-rate redux, random
  * drop-outs, sine ring modulation, and random freezes whose length is either
  * a step division or, at the RAND setting, re-rolled each time. */
-static void m_degrader(mctx_t *m, float *l, float *r) {
+static void m_decimator(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
     const uint8_t *p = m->p;
 
@@ -1000,7 +1000,7 @@ static void m_degrader(mctx_t *m, float *l, float *r) {
 /* --- A.3.7 Gritshaper -----------------------------------------------------
  * HPF is bipolar and selects WHERE the filter sits: to the left it filters
  * before the distortion, to the right after the rectifier. */
-static void m_dirt(mctx_t *m, float *l, float *r) {
+static void m_gritshaper(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
     const uint8_t *p = m->p;
 
@@ -1045,7 +1045,7 @@ static void m_dirt(mctx_t *m, float *l, float *r) {
 /* --- A.3.8 Fold Filter --------------------------------------------------
  * The manual gives the chain explicitly:
  *   Input level > High-pass > Wavefolder > Multimode filter > Dist > Output */
-static void m_folder(mctx_t *m, float *l, float *r) {
+static void m_fold_filter(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
     const uint8_t *p = m->p;
 
@@ -1125,7 +1125,7 @@ static void m_fbank(mctx_t *m, float *l, float *r) {
  * True single-sideband frequency shifting via a Hilbert pair. SBND blends the
  * up-shifted and down-shifted outputs, which is the "alternate output signal
  * with different characteristics" the manual describes. */
-static void m_warper(mctx_t *m, float *l, float *r) {
+static void m_spectrum_bender(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
     const uint8_t *p = m->p;
 
@@ -1341,7 +1341,7 @@ static void m_chorus(mctx_t *m, float *l, float *r) {
 /* --- A.3.15 Phase Array ------------------------------------------------------
  * Six allpass stages; STG blends the tap after four with the tap after six.
  * SHP morphs the LFO from a descending ramp through triangle to ascending. */
-static void m_phase98(mctx_t *m, float *l, float *r) {
+static void m_phase_array(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
     const uint8_t *p = m->p;
 
@@ -1391,7 +1391,7 @@ static void m_phase98(mctx_t *m, float *l, float *r) {
 static const float ER_TAP[6]  = {0.0043f, 0.0215f, 0.0268f, 0.0362f, 0.0498f, 0.0677f};
 static const float ER_GAIN[6] = {0.841f, 0.504f, 0.491f, 0.379f, 0.320f, 0.250f};
 
-static void m_rumsklang(mctx_t *m, float *l, float *r) {
+static void m_roomtone(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
     const uint8_t *p = m->p;
 
@@ -1469,7 +1469,7 @@ static float plate_tap(const float *line, int cap, int w, int len) {
     return line[i];
 }
 
-static void m_steelbox(mctx_t *m, float *l, float *r) {
+static void m_iron_room(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
     const uint8_t *p = m->p;
 
@@ -1579,7 +1579,7 @@ static const float SATDLY_DIV[16] = {
     10.67f, 12.0f, 16.0f, 21.33f, 24.0f, 32.0f, 64.0f, 128.0f
 };
 
-static void m_satdelay(mctx_t *m, float *l, float *r) {
+static void m_drive_delay(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
     const uint8_t *p = m->p;
 
@@ -1637,7 +1637,7 @@ static const int FDN_LEN[WORK_FDN_LINES] = {
     1063, 1291, 1583, 1867, 2153, 2411, 2719, 3011   /* mutually prime */
 };
 
-static void m_supervoid(mctx_t *m, float *l, float *r) {
+static void m_voidspace(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
     const uint8_t *p = m->p;
 
@@ -1697,7 +1697,7 @@ static void m_supervoid(mctx_t *m, float *l, float *r) {
  * Tape wobble. SPEED 0 means random, per the manual, so at that setting the
  * modulator becomes a smoothed random walk instead of a sine. The added noise
  * is deliberately outside the MIX law, again per the manual. */
-static void m_warble(mctx_t *m, float *l, float *r) {
+static void m_flutter(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
     const uint8_t *p = m->p;
 
@@ -2063,7 +2063,7 @@ static void pan_gains(uint8_t p, float *gl, float *gr) {
  * The remaining four knobs carry STRT/LEN/LEV/PAN so the machine is playable
  * without a second page, which Work has no room for.
  */
-static void m_multi(mctx_t *m, float *l, float *r) {
+static void m_polysample(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
     const uint8_t *p = m->p;
 
@@ -2135,7 +2135,7 @@ static void m_multi(mctx_t *m, float *l, float *r) {
  */
 enum { SUB_FWD = 0, SUB_REV, SUB_FWD_LOOP, SUB_REV_LOOP };
 
-static void m_subtracks(mctx_t *m, float *l, float *r) {
+static void m_slicer(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
     const uint8_t *p = m->p;
 
@@ -2234,7 +2234,7 @@ static float wf_anim_shape(int shape, float t, float *sh, uint32_t *rng) {
     }
 }
 
-static void m_wavefinder(mctx_t *m, float *l, float *r) {
+static void m_wavescan(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
     const uint8_t *p = m->p;
 
@@ -2294,7 +2294,7 @@ static void m_wavefinder(mctx_t *m, float *l, float *r) {
     *r = (*r) * (1.0f - mix) + orr * lev * mix;
 }
 
-/* Shelf gain from a bipolar 0..127 knob, 64 = flat. See the table in m_shape. */
+/* Shelf gain from a bipolar 0..127 knob, 64 = flat. See the table in m_tilt. */
 static float shelf_gain(uint8_t v) {
     if (v >= 64) {
         const float db = ((float)v - 64.0f) / 63.0f * 12.0f;
@@ -2317,7 +2317,7 @@ static float shelf_gain(uint8_t v) {
  * It is an EFFECT, not a source: it has nothing to play. See
  * machine_in_src_family.
  */
-static void m_shape(mctx_t *m, float *l, float *r) {
+static void m_tilt(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
     const uint8_t *p = m->p;
 
@@ -2412,7 +2412,7 @@ static void m_shape(mctx_t *m, float *l, float *r) {
  * Realtime rules: no allocation, and every read of the sample buffer is
  * clamped against sample_frames rather than trusting the cursor. A transfer
  * running concurrently only ever moves sample_fill, which this never reads. */
-static void m_single(mctx_t *m, float *l, float *r) {
+static void m_one_shot(mctx_t *m, float *l, float *r) {
     work_slot_t *s = m->s;
 
     const int frames = m->tr->sample_frames;
@@ -2483,31 +2483,31 @@ static void m_single(mctx_t *m, float *l, float *r) {
 
 static void run_machine(mctx_t *m, int machine, float *l, float *r) {
     switch (machine) {
-        case WORK_FX_CLOCK:    m_chrono(m, l, r);    break;
+        case WORK_FX_CLOCK:    m_clock_pitch(m, l, r);    break;
         case WORK_FX_COMB:      m_comb(m, l, r);      break;
         case WORK_FX_COMP:      m_comp(m, l, r);      break;
-        case WORK_FX_CHAIN:     m_daisy(m, l, r);     break;
-        case WORK_FX_DECIMATOR:  m_degrader(m, l, r);  break;
-        case WORK_FX_GRIT:      m_dirt(m, l, r);      break;
-        case WORK_FX_FOLD:    m_folder(m, l, r);    break;
+        case WORK_FX_CHAIN:     m_chain_delay(m, l, r);     break;
+        case WORK_FX_DECIMATOR:  m_decimator(m, l, r);  break;
+        case WORK_FX_GRIT:      m_gritshaper(m, l, r);      break;
+        case WORK_FX_FOLD:    m_fold_filter(m, l, r);    break;
         case WORK_FX_FBANK:     m_fbank(m, l, r);     break;
-        case WORK_FX_BENDER:    m_warper(m, l, r);    break;
+        case WORK_FX_BENDER:    m_spectrum_bender(m, l, r);    break;
         case WORK_FX_FLANGER:   m_flanger(m, l, r);   break;
         case WORK_FX_LPF:       m_lpf(m, l, r);       break;
         case WORK_FX_MMF:       m_mmf(m, l, r);       break;
         case WORK_FX_CHORUS:    m_chorus(m, l, r);    break;
-        case WORK_FX_PHASEARRAY:   m_phase98(m, l, r);   break;
-        case WORK_FX_ROOMTONE: m_rumsklang(m, l, r); break;
-        case WORK_FX_DRIVEDELAY:  m_satdelay(m, l, r);  break;
-        case WORK_FX_IRONROOM:  m_steelbox(m, l, r);  break;
-        case WORK_FX_VOIDSPACE: m_supervoid(m, l, r); break;
-        case WORK_FX_FLUTTER:    m_warble(m, l, r);    break;
+        case WORK_FX_PHASEARRAY:   m_phase_array(m, l, r);   break;
+        case WORK_FX_ROOMTONE: m_roomtone(m, l, r); break;
+        case WORK_FX_DRIVEDELAY:  m_drive_delay(m, l, r);  break;
+        case WORK_FX_IRONROOM:  m_iron_room(m, l, r);  break;
+        case WORK_FX_VOIDSPACE: m_voidspace(m, l, r); break;
+        case WORK_FX_FLUTTER:    m_flutter(m, l, r);    break;
         case WORK_FX_GRANULATOR:   m_granulator(m, l, r);   break;
-        case WORK_FX_ONESHOT:    m_single(m, l, r);    break;
-        case WORK_FX_POLYSAMPLE:     m_multi(m, l, r);     break;
-        case WORK_FX_SLICER: m_subtracks(m, l, r); break;
-        case WORK_FX_WAVESCAN:m_wavefinder(m, l, r);break;
-        case WORK_FX_TILT:     m_shape(m, l, r);     break;
+        case WORK_FX_ONESHOT:    m_one_shot(m, l, r);    break;
+        case WORK_FX_POLYSAMPLE:     m_polysample(m, l, r);     break;
+        case WORK_FX_SLICER: m_slicer(m, l, r); break;
+        case WORK_FX_WAVESCAN:m_wavescan(m, l, r);break;
+        case WORK_FX_TILT:     m_tilt(m, l, r);     break;
         case WORK_FX_BYPASS:
         default:                                      break;
     }

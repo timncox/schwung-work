@@ -176,7 +176,7 @@ static void test_all_machines_bounded(void) {
              * SRC machines are the exception, and it is not a loophole: they
              * REPLACE their input instead of processing it, so with no sample
              * loaded and no trig fired, silence is the correct output. Their
-             * real coverage is test_sample_transfer / test_single_player
+             * real coverage is test_sample_transfer / test_one_shot
              * below, which load audio and fire it. */
             const int is_src = (mc == WORK_FX_ONESHOT || mc == WORK_FX_POLYSAMPLE ||
                                 mc == WORK_FX_SLICER || mc == WORK_FX_WAVESCAN);
@@ -2547,7 +2547,7 @@ static int64_t oneshot_energy_with_locks(const char *locks) {
     make_ramp(pcm, frames);            /* broadband: energy at every frequency */
     send_sample(w, pcm, frames, 600);
 
-    /* Explicit rather than default, the way test_single_player sets it up: the
+    /* Explicit rather than default, the way test_one_shot sets it up: the
      * defaults leave LEV and the envelope somewhere that makes this measure
      * the envelope instead of the filter. */
     work_set_param(w, "src", "21");
@@ -2833,7 +2833,7 @@ static void test_sample_bounds(void) {
     work_destroy(w);
 }
 
-static void test_single_player(void) {
+static void test_one_shot(void) {
     printf("One Shot fires on a trig and honours its window\n");
     work_t *w = work_create(&host);
 
@@ -2991,7 +2991,7 @@ static int64_t src_energy(int machine, int note, int blocks,
     return e;
 }
 
-static void test_multi_player_is_polyphonic(void) {
+static void test_polysample_is_polyphonic(void) {
     printf("Polysample is polyphonic and tracks note pitch\n");
 
     work_t *w = work_create(&host);
@@ -3052,7 +3052,7 @@ static void test_multi_player_is_polyphonic(void) {
 
 /* A note an octave up must read through the sample about twice as fast, so it
  * runs out sooner. Comparing durations is a pitch test that needs no FFT. */
-static void test_multi_player_pitch(void) {
+static void test_polysample_pitch(void) {
     printf("a higher note plays the sample faster\n");
     int64_t low  = src_energy(22, 48, 200, NULL);   /* an octave below unity */
     int64_t high = src_energy(22, 72, 200, NULL);   /* an octave above       */
@@ -3067,7 +3067,7 @@ static void test_multi_player_pitch(void) {
 static void set_reverse(work_t *w)  { work_set_param(w, "src_p2", "40");  }
 static void set_fwd_loop(work_t *w) { work_set_param(w, "src_p2", "80");  }
 
-static void test_subtracks_play_modes(void) {
+static void test_slicer_play_modes(void) {
     printf("Slicer plays forward, reverse and loops\n");
 
     int64_t fwd = src_energy(23, 60, 60, NULL);
@@ -3103,7 +3103,7 @@ static void test_subtracks_play_modes(void) {
     work_destroy(w);
 }
 
-static void test_wavefinder_needs_a_wavetable(void) {
+static void test_wavescan_needs_a_wavetable(void) {
     printf("Wavescan oscillates from the sample, and is silent without one\n");
 
     /* Too short to hold two 2048-frame waves: silent rather than reading junk. */
@@ -3454,14 +3454,14 @@ int main(void) {
     test_trig_survives_a_machine_change();
     test_sample_transfer();
     test_sample_bounds();
-    test_single_player();
+    test_one_shot();
 
     test_granulator_reads_the_sample();
 
-    test_multi_player_is_polyphonic();
-    test_multi_player_pitch();
-    test_subtracks_play_modes();
-    test_wavefinder_needs_a_wavetable();
+    test_polysample_is_polyphonic();
+    test_polysample_pitch();
+    test_slicer_play_modes();
+    test_wavescan_needs_a_wavetable();
     test_shape_shelves();
 
     test_source_machine_ignores_the_input();
