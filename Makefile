@@ -2,7 +2,8 @@ CC ?= cc
 CFLAGS ?= -O2 -g -Wall -Wextra -Wpedantic -Iinclude -Isrc
 LDLIBS = -lm
 
-.PHONY: test test-ui test-site contract module-json bench sanitize arm clean
+.PHONY: test test-ui test-site contract module-json bench bench-tracks \
+        bench-tracks-arm sanitize arm clean
 
 # The parameter hierarchy is served by the DSP at get_param("ui_hierarchy"),
 # which the host tries FIRST and reads into a 64 KB buffer. It must NOT go into
@@ -51,6 +52,24 @@ build/hierarchy.json: build/gen_hierarchy
 
 bench: build/benchmark
 	./build/benchmark
+
+# How many SRC+2FX tracks fit. A laptop run of this settles nothing -- the
+# question is what the A53 does -- so bench-tracks-arm cross-compiles it and
+# bench-tracks-move copies it to the Move and runs it there.
+bench-tracks: build/bench_tracks
+	./build/bench_tracks
+
+build/bench_tracks: src/work_core.c src/work_core.h test/bench_tracks.c include/plugin_api_v1.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) src/work_core.c test/bench_tracks.c -o $@ $(LDLIBS)
+
+bench-tracks-arm: build/bench_tracks_arm
+
+build/bench_tracks_arm: src/work_core.c src/work_core.h test/bench_tracks.c include/plugin_api_v1.h
+	@mkdir -p build
+	docker run --rm -v "$$PWD":/w -w /w smack-build \
+	    aarch64-linux-gnu-gcc -O2 -ffast-math -Iinclude -Isrc -static \
+	    src/work_core.c test/bench_tracks.c -o build/bench_tracks_arm -lm
 
 build/benchmark: src/work_core.c src/work_core.h test/benchmark.c include/plugin_api_v1.h
 	@mkdir -p build

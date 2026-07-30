@@ -282,12 +282,37 @@ mock cannot quietly become too forgiving to catch the bug that broke Mono.
 polyphony and voice stealing; note-to-pitch tracking; anything about how the
 machines actually SOUND as opposed to producing signal.
 
-**CPU is still unmeasured on the A53.** `make bench` on a Mac puts the heaviest
-machine (Roomtone Reverb) at ~164x realtime and two of them at ~93x. Belt
-benched 65x and was *extrapolated* to ~10-15% of an A53 core, so this looks
-affordable — but that is an extrapolation from a different module, not a
-measurement. A source machine in slot 1 with a reverb in slot 2 is the
-combination to watch. Measure on device before claiming headroom.
+**CPU, measured on the A53 for the first time on 2026-07-29.** `make
+bench-tracks-arm` cross-compiles `test/bench_tracks.c`; copy it to the Move and
+run it there. A "track" is 1 SRC machine + 2 insert FX + the voice filter +
+sounding voices — the shape the reference device uses. Percentages are of ONE
+core:
+
+| profile                    | 1 trk | 4 trk | 8 trk | 12 trk | 16 trk |
+|----------------------------|-------|-------|-------|--------|--------|
+| light  1shot+tilt+fbank    |  4%   | 15%   | 30%   |  44%   |  59%   |
+| mid    poly+mmf+drivedelay |  4%   | 15%   | 29%   |  47%   |  61%   |
+| heavy  poly+2 reverbs      |  9%   | 38%   | 74%   | 115%   | 152%   |
+
+Cost is essentially linear in track count, and light vs mid barely differ — the
+fixed per-track overhead (voices, filter, modulators, sequencer) dominates
+unless a reverb is involved. Reverbs are the only machines that move the needle.
+So **eight tracks fits**; twelve fits unless every track runs two reverbs.
+
+The Mac-vs-Move ratio came out at ~8x (8 heavy tracks: 9% on a Mac, 74% here),
+which is worth knowing when reading `make bench` output.
+
+**Read the caveat before quoting these.** The benchmark runs as its own process
+on a free core. `MoveOriginal` is a 20-thread process sitting at roughly one
+core's worth on a 4-core box, and DSP hosted inside its audio callback shares
+*that* thread's budget, not a free core's. So the table is an upper bound on
+what the hardware can do, not a measurement of what is left inside the render
+callback. Whether audio_fx slots on different Move tracks are rendered on
+different threads is UNKNOWN and worth settling before betting on it.
+
+Memory is not a constraint: one 3-slot track is 6.1 MB (1.35 MB sample RAM,
+1.58 MB of delay/reverb lines per slot), so 8 two-slot tracks is ~36 MB against
+~1.3 GB free.
 
 ## Roadmap
 
