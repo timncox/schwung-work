@@ -126,6 +126,13 @@ function makeVFS() {
 
 function makeHost() {
     const store = Object.assign({}, contract.get);
+
+    /* rui_poll is "rev:on:tick:bpm". Only the revision moves here. */
+    const bumpRev = (by = 1) => {
+        const parts = `${store.rui_poll || '0:0:0:120'}`.split(':');
+        parts[0] = `${(parseInt(parts[0], 10) || 0) + by}`;
+        store.rui_poll = parts.join(':');
+    };
     const writes = [];
     const reads = [];
     const unknownReads = new Set();
@@ -298,6 +305,13 @@ function makeHost() {
                 || [...settable].some((s) => s.replace(/\d+/g, '#') === fam);
             if (!known) unknownWrites.add(key);
             store[key] = `${val}`;
+            /* work_set_param bumps rui_rev on EVERY write, unconditionally —
+             * see the comment at the top of it. The UI now polls that revision
+             * to notice edits it did not make, so a mock that left the digest
+             * still would let the UI look correct here while missing every
+             * external change on hardware. Reproduce the engine, not the
+             * convenient version of it. */
+            bumpRev();
         },
         setLED(note, color) { leds.set(note, color); },
         setButtonLED(cc, color) { leds.set(`cc${cc}`, color); },
@@ -1591,6 +1605,71 @@ async function testEveryPageRendersInsideTheScreen() {
  * character count standing in for a pixel budget, on a proportional font. The
  * preset footer was not cut at all: "Click:load  Shift+click:exit" is 143px on
  * a 128px screen, so the exit gesture ran off the edge unread. */
+/* An edit that did not come from this surface must reach the screen.
+ *
+ * The UI mirrors every value locally and only refilled that mirror on a page
+ * change or a resume, so a browser edit, an external CC, or a MIDI channel
+ * belonging to another track moved the sound and left the display showing the
+ * old number. Reported from the Remote UI on 2026-07-30: the writes landed and
+ * the device never showed them.
+ *
+ * The engine bumps rui_rev on EVERY write, ours included, so the test has to
+ * prove both halves — that an outside edit is picked up, and that our own
+ * edits do NOT trigger a re-read, because a couple of blocking round trips per
+ * knob detent is its own bug. */
+async function testAnEditFromElsewhereReachesTheScreen() {
+    console.log('an edit made somewhere else shows up on this screen');
+    const ctx = await loadUI();
+    ctx.host.init();
+
+    const settle = () => { for (let i = 0; i < 24; i++) ctx.host.tick(); };
+    settle();
+
+    /* Park on the page that displays MIX so the value is observable. */
+    const pageOf = () => ctx.screen.map((l) => l.text).join(' ');
+    for (let i = 0; i < ctx.host.__editPageCount(); i++) {
+        ctx.host.tick();
+        if (/GLOBAL/.test(pageOf())) break;
+        ctx.host.onMidiMessageInternal(noteOn(72));
+        ctx.host.onMidiMessageInternal(noteOff(72));
+    }
+    ctx.host.tick();
+    check(/GLOBAL/.test(pageOf()), 'could not reach the page that shows MIX');
+    settle();
+
+    /* --- our own edit must NOT cost a refetch ------------------------- */
+    const before = ctx.roundTrips.length;
+    ctx.host.onMidiMessageInternal(cc(KNOB1 + 3, 1));      /* nudge a knob */
+    settle();
+    const ownCost = ctx.roundTrips.length - before;
+
+    /* --- an edit from ELSEWHERE must reach the screen ------------------ */
+    ctx.store.mix = '42';
+    const parts = `${ctx.store.rui_poll}`.split(':');
+    parts[0] = `${parseInt(parts[0], 10) + 1}`;     /* someone else wrote */
+    ctx.store.rui_poll = parts.join(':');
+
+    settle();
+    ctx.host.tick();
+    const shown = pageOf();
+    check(/\b42\b/.test(shown),
+          `an outside edit set mix to 42 and the screen still reads "${shown}"`);
+
+    /* And the cost check is only meaningful next to a refetch that DID
+     * happen — otherwise "cheap" could just mean "never polls at all". */
+    const extBefore = ctx.roundTrips.length;
+    ctx.store.mix = '99';
+    const p2 = `${ctx.store.rui_poll}`.split(':');
+    p2[0] = `${parseInt(p2[0], 10) + 1}`;
+    ctx.store.rui_poll = p2.join(':');
+    settle();
+    const extCost = ctx.roundTrips.length - extBefore;
+
+    check(extCost > ownCost,
+          `an outside edit cost ${extCost} round trips and our own cost ${ownCost} — ` +
+          `if they are the same the revision check is not distinguishing them`);
+}
+
 async function testBrowserScreensFitTheirContent() {
     console.log('the sample and preset browsers fit their longest rows');
     const ctx = await loadUI();
@@ -2130,6 +2209,7 @@ const tests = [
     testColoursAreDistinctWithinAView,
     testEveryPageRendersInsideTheScreen,
     testBrowserScreensFitTheirContent,
+    testAnEditFromElsewhereReachesTheScreen,
     testPaletteNeverShadowsTheFunctionPads,
     testEveryMachineIsReachableFromThePalette,
     testSampleScanFindsNestedFiles,

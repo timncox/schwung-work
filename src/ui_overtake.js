@@ -408,6 +408,24 @@ for (let i = 0; i < MAX_STEPS; i++) {
  * fetchAll() wants ~58 keys, which one at a time is over a second of stall.
  * schwung provides a bulk path for exactly this (host_module_get_params, the
  * BULK_GET request the shim answers in a single frame), so use it. */
+/* Every write to the engine goes through here, and is COUNTED.
+ *
+ * work_set_param bumps rui_rev unconditionally, so the engine's revision moves
+ * for our own edits exactly as it does for a browser's. Polling the revision
+ * without accounting for that would have the device re-read its whole state
+ * after every knob turn — a couple of blocking round trips per detent.
+ *
+ * Counting ours lets the poll below tell "the revision moved because I moved
+ * it" from "the revision moved because something else did", which is the only
+ * distinction that matters. */
+let ownWrites = 0;
+let lastRev = -1;   /* engine revision at the last poll; -1 = never polled */
+
+function setParam(key, val) {
+    ownWrites++;
+    host_module_set_param(key, val);
+}
+
 function getParam(key) {
     const v = host_module_get_param(key);
     return v === null || v === undefined ? '' : `${v}`;
@@ -475,7 +493,7 @@ function getParams(keys) {
 
 function setNum(key, v) {
     cfg[key] = v;
-    host_module_set_param(key, `${v}`);
+    setParam(key, `${v}`);
 }
 
 /* Stages, mirroring work_core.h: stage 0 is SRC and the two inserts follow it.
@@ -916,12 +934,12 @@ function sendSample(name, wav, maxFrames) {
     let frames = wav.frames;
     if (maxFrames > 0 && frames > maxFrames) frames = maxFrames;
 
-    host_module_set_param('sample_begin', `${frames}:${name.slice(0, 24)}`);
+    setParam('sample_begin', `${frames}:${name.slice(0, 24)}`);
     for (let at = 0; at < frames; at += CHUNK_FRAMES) {
         const n = Math.min(CHUNK_FRAMES, frames - at);
-        host_module_set_param('sample_chunk', bytesToB64(wav.bytes, at * 4, n * 4));
+        setParam('sample_chunk', bytesToB64(wav.bytes, at * 4, n * 4));
     }
-    host_module_set_param('sample_end', '1');
+    setParam('sample_end', '1');
     return frames;
 }
 
@@ -973,7 +991,7 @@ function loadSampleFile(path, quiet) {
     /* Record WHERE it came from, so saving this patch saves a patch that can
      * find its audio again. The engine only carries the string — it has no
      * filesystem, and work_set_param runs on the audio thread. */
-    host_module_set_param('sample_path', path);
+    setParam('sample_path', path);
     samplePath = path;
 
     const secs = (sampleFrames / 44100).toFixed(1);
@@ -1115,9 +1133,9 @@ function familyMove(stage, delta) {
 function toggleStep(idx) {
     const st = steps[idx];
     st.active = st.active ? 0 : 1;
-    host_module_set_param(`step${idx}`, `${st.active}:${st.cond}:${st.micro}:${st.retrig}`);
+    setParam(`step${idx}`, `${st.active}:${st.cond}:${st.micro}:${st.retrig}`);
     if (!st.active) {
-        host_module_set_param(`locks${idx}`, '');
+        setParam(`locks${idx}`, '');
         st.nlocks = 0;
     }
     announce(`Step ${idx + 1} ${st.active ? 'on' : 'off'}`);
@@ -1126,7 +1144,7 @@ function toggleStep(idx) {
 
 function writeStepAttrs(idx) {
     const st = steps[idx];
-    host_module_set_param(`step${idx}`, `${st.active}:${st.cond}:${st.micro}:${st.retrig}`);
+    setParam(`step${idx}`, `${st.active}:${st.cond}:${st.micro}:${st.retrig}`);
 }
 
 /* Hold a step and turn a knob: that knob's parameter is locked on that step.
@@ -1161,7 +1179,7 @@ function lockKnob(idx, knob, delta) {
         if (v < k.min) v = k.min;
         if (v > k.max) v = k.max;
     }
-    host_module_set_param(`lock${idx}_${k.lock}`, `${v}`);
+    setParam(`lock${idx}_${k.lock}`, `${v}`);
 
     heldUsed = true;
     fetchSteps();
@@ -1170,7 +1188,7 @@ function lockKnob(idx, knob, delta) {
 }
 
 function clearStepLocks(idx) {
-    host_module_set_param(`locks${idx}`, '');
+    setParam(`locks${idx}`, '');
     steps[idx].nlocks = 0;
     heldUsed = true;
     announce(`Step ${idx + 1} locks cleared`);
@@ -1196,7 +1214,7 @@ function adjustHeldAttr(delta) {
         announceParameter(`Step ${heldStep + 1} retrig`, `${st.retrig}`);
     } else if (attrMode === MODE_PROB) {
         st.prob = Math.max(1, Math.min(100, (st.prob || 100) + delta));
-        host_module_set_param(`prob${heldStep}`, `${st.prob}`);
+        setParam(`prob${heldStep}`, `${st.prob}`);
         announceParameter(`Step ${heldStep + 1} probability`, `${st.prob}%`);
     } else {
         announce('Pick a mode: cond, micro, retrig or prob');
@@ -1262,8 +1280,8 @@ function pastePage() {
     const base = patPage * PAGE_STEPS;
     for (let i = 0; i < PAGE_STEPS; i++) {
         const idx = base + i;
-        host_module_set_param(`step${idx}`, copyBuf[i].attrs);
-        host_module_set_param(`locks${idx}`, copyBuf[i].locks);
+        setParam(`step${idx}`, copyBuf[i].attrs);
+        setParam(`locks${idx}`, copyBuf[i].locks);
     }
     fetchSteps();
     announce(`Pasted to page ${patPage + 1}`);
@@ -1273,8 +1291,8 @@ function pastePage() {
 function clearPage() {
     const base = patPage * PAGE_STEPS;
     for (let i = 0; i < PAGE_STEPS; i++) {
-        host_module_set_param(`step${base + i}`, '0:0:0:0');
-        host_module_set_param(`locks${base + i}`, '');
+        setParam(`step${base + i}`, '0:0:0:0');
+        setParam(`locks${base + i}`, '');
     }
     fetchSteps();
     announce(`Page ${patPage + 1} cleared`);
@@ -1302,7 +1320,7 @@ function pollFeedbackGuard() {
     const want = risk ? 0 : 1;
     if (want !== monitor) {
         monitor = want;
-        host_module_set_param('monitor', `${monitor}`);
+        setParam('monitor', `${monitor}`);
         announce(risk ? 'Feedback risk, input muted' : 'Input restored');
         needsRedraw = true;
     }
@@ -1311,7 +1329,7 @@ function pollFeedbackGuard() {
 function toggleMonitor() {
     monitor = monitor ? 0 : 1;
     monitorUser = monitor;
-    host_module_set_param('monitor', `${monitor}`);
+    setParam('monitor', `${monitor}`);
     announce(monitor
         ? (atRisk ? 'Input on, feedback risk' : 'Input on')
         : 'Input muted');
@@ -1439,7 +1457,7 @@ function loadPreset(entry) {
     catch (e) { announce('Preset unreadable'); return; }
     if (!payload.state) { announce('Preset is empty'); return; }
 
-    host_module_set_param('state', payload.state);
+    setParam('state', payload.state);
     fetchAll();
     restoreSample();
     announce(`Loaded ${entry.name}`);
@@ -1834,7 +1852,7 @@ function handlePadPress(note) {
                 return;
             case PAD_LIVE_REC:
                 liveRec = liveRec ? 0 : 1;
-                host_module_set_param('live_rec', `${liveRec}`);
+                setParam('live_rec', `${liveRec}`);
                 announce(liveRec ? 'Live record armed' : 'Live record off');
                 needsRedraw = true;
                 return;
@@ -1845,7 +1863,7 @@ function handlePadPress(note) {
 
     switch (note) {
         case PAD_UNDO:
-            host_module_set_param(shiftDown() ? 'redo' : 'undo', '1');
+            setParam(shiftDown() ? 'redo' : 'undo', '1');
             fetchAll();
             announce(shiftDown() ? 'Redo' : 'Undo');
             return;
@@ -1854,20 +1872,20 @@ function handlePadPress(note) {
             return;
         case PAD_SONG:
             songOn = songOn ? 0 : 1;
-            host_module_set_param('song_on', `${songOn}`);
+            setParam('song_on', `${songOn}`);
             announce(songOn ? 'Song mode' : 'Pattern mode');
             needsRedraw = true;
             return;
         case PAD_PLAY:
             seqOn = seqOn ? 0 : 1;
-            host_module_set_param('seq_on', `${seqOn}`);
+            setParam('seq_on', `${seqOn}`);
             announce(seqOn ? 'Play' : 'Stop');
             needsRedraw = true;
             return;
         case PAD_FILL:
             fillAt = Date.now();
             fillLatched = !fillLatched;
-            host_module_set_param('fill', fillLatched ? '1' : '0');
+            setParam('fill', fillLatched ? '1' : '0');
             announce(fillLatched ? 'Fill on' : 'Fill off');
             needsRedraw = true;
             return;
@@ -1876,7 +1894,7 @@ function handlePadPress(note) {
             /* Mirror it to the engine. Nothing there reads it — it is published
              * so the focus is OBSERVABLE, which is what the on-device suite
              * needs to stop inferring it. */
-            host_module_set_param('focus', `${focusStage}`);
+            setParam('focus', `${focusStage}`);
             fetchAll();
             /* Repaint at once rather than waiting for the periodic pass: the
              * palette under the pads just changed to a different family, and
@@ -1919,7 +1937,7 @@ function handlePadPress(note) {
 function handlePadRelease(note) {
     if (note === PAD_MEMO) {
         const held = Date.now() - memoAt;
-        host_module_set_param(held >= HOLD_MS ? 'memorize' : 'recall', '1');
+        setParam(held >= HOLD_MS ? 'memorize' : 'recall', '1');
         if (held < HOLD_MS) fetchAll();
         announce(held >= HOLD_MS ? 'Memorized' : 'Recalled');
         memoAt = 0;
@@ -1929,7 +1947,7 @@ function handlePadRelease(note) {
     if (note === PAD_CLEAR) {
         const held = Date.now() - clearAt;
         if (held >= HOLD_MS) {
-            host_module_set_param('seq_clear', '1');
+            setParam('seq_clear', '1');
             fetchSteps();
             announce('Pattern cleared');
         } else {
@@ -1942,7 +1960,7 @@ function handlePadRelease(note) {
     if (note === PAD_FILL && Date.now() - fillAt >= HOLD_MS) {
         /* a long press was momentary — drop fill again on release */
         fillLatched = false;
-        host_module_set_param('fill', '0');
+        setParam('fill', '0');
         announce('Fill off');
         needsRedraw = true;
     }
@@ -1961,7 +1979,7 @@ function handlePadRelease(note) {
 function selectTrack(t) {
     if (t < 0 || t >= nTracks || t === selTrack) return;
     selTrack = t;
-    host_module_set_param('track', `${t}`);
+    setParam('track', `${t}`);
     fetchAll();
     /* Named rather than numbered alone: with eight tracks "Track 5" on its own
      * says nothing about what is on it, and the source machine is the fastest
@@ -1988,7 +2006,7 @@ function handleStepNote(note, velocity) {
     /* SHIFT + a step selects that pattern from the bank. */
     if (shiftDown() && velocity > 0) {
         const p = note - STEP_FIRST;
-        host_module_set_param('pattern', `${p}`);
+        setParam('pattern', `${p}`);
         curPattern = p;
         fetchAll();
         announceView(`Pattern ${p + 1}`);
@@ -2099,7 +2117,7 @@ function onMidiMessageInternal(data) {
                 if (v > MAX_STEPS) v = MAX_STEPS;
                 if (v !== seqLen) {
                     seqLen = v;
-                    host_module_set_param('seq_len', `${v}`);
+                    setParam('seq_len', `${v}`);
                     announceParameter('Length', `${v}`);
                     needsRedraw = true;
                 }
@@ -2243,6 +2261,41 @@ globalThis.tick = function () {
         fetchSteps();
         paintAll(false);
         needsRedraw = true;
+
+        /* Notice edits that did not come from this surface.
+         *
+         * The UI keeps its own mirror of every value and only refilled it on a
+         * page change or a resume, so anything that changed the engine from
+         * somewhere else — the browser editor, an external CC, a MIDI channel
+         * belonging to another track — moved the sound and left the screen
+         * showing the old number. Reported from the Remote UI on 2026-07-30:
+         * edits landed, the device never showed them.
+         *
+         * rui_poll is the CHEAP digest the engine publishes for exactly this,
+         * "rev:on:tick:bpm", one read rather than a full state fetch. The
+         * revision moves on every write including ours, so subtract the writes
+         * we made: if the whole difference is ours, the mirror is already
+         * right and a fetch would be two blocking round trips for nothing. */
+        const digest = getParam('rui_poll');
+        const rev = parseInt(digest, 10);
+        if (Number.isFinite(rev)) {
+            const mine = ownWrites;
+            ownWrites = 0;
+            if (lastRev < 0) {
+                lastRev = rev;                     /* first poll: adopt */
+            } else if (rev !== lastRev) {
+                /* Unsigned wrap on the engine side makes the difference
+                 * meaningless rather than negative — treat anything that is
+                 * not exactly our own count as external and re-read. That errs
+                 * toward one extra fetch, which is the safe direction: the
+                 * other way loses an edit silently, which is the bug. */
+                if (rev - lastRev !== mine) {
+                    fetchAll();
+                    paintAll(false);
+                }
+                lastRev = rev;
+            }
+        }
     }
 
     if (resumeRepaints > 0 && tickCount % 8 === 0) {
