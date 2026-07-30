@@ -126,6 +126,27 @@ def _machines(bus):
     return _param(bus, "machines").split(",")
 
 
+def _await_param(bus, key, was, tries=30):
+    """Poll `key` until it moves off `was`.
+
+    A fixed wait after an injected press is a GUESS about latency, and the
+    guess is wrong often enough to matter. With the guess in place this test
+    read values that belonged to other presses in the same run — pad 97 came
+    back holding pad 95's machine, one and two events out of step, and the
+    apparent offset was different every time.
+
+    Waiting for the change is the only thing that actually synchronises with
+    an injected event. The caller parks the parameter somewhere the press must
+    move it off, so "not `was`" is an unambiguous signal that the press
+    landed."""
+    for _ in range(tries):
+        v = _param(bus, key)
+        if v and v != was:
+            return v
+        bus.wait_frame(3)
+    return _param(bus, key)
+
+
 def _codes(bus, key):
     """A family's machine codes, from the ENGINE. Never recomputed here — a
     local copy of a table the engine owns is a copy that drifts, and catching
@@ -248,24 +269,36 @@ def test_hold_step_plus_knob_writes_a_parameter_lock(overwork):
 # ------------------------------------------------------------------ palette
 
 def _focus_stage(bus, stage):
-    """Point the surface at `stage`, and confirm it went.
+    """Point the surface at `stage` by CYCLING the stage pad, confirming each
+    step against the engine's published `focus`.
 
-    WRITES the focus rather than cycling PAD_STAGE and inferring where it
-    landed. The inferring version is why this test was unreliable: the UI held
-    the focus locally and served nothing, so a test could only park every stage
-    on a known machine, press a palette pad, and see which one moved — then
-    cycle. Four sweeps of the 21 slots produced four different sets of
-    failures, and one failed all twenty-one because the focus had ended up
-    somewhere else entirely. The mapping was correct every time; the test could
-    not hold the state it was testing against.
+    Driven by the pad, not by writing `focus`. Writing it moves the engine's
+    copy and nothing else: the UI keeps its own `focusStage` and only re-reads
+    the engine's in fetchAll(), which does not run on a tick — so the palette
+    went on loading into whichever stage the surface was really pointed at
+    while the test believed it had moved. Stage 0 passed and the two inserts
+    failed with the parked value untouched, which is what "the press went
+    somewhere else" looks like.
 
-    The engine now publishes `focus` (see the setter in work_core.c) and the UI
-    mirrors it in both directions."""
-    bus.set_param("focus", str(stage))
-    bus.wait_frame(6)
+    What publishing `focus` is actually for is the READ. Before it, this had to
+    infer the focus by pressing a palette pad and seeing which stage moved, and
+    that inference is why four sweeps gave four different answers. Now the pad
+    drives and the parameter confirms."""
+    for _ in range(N_STAGES + 1):
+        cur = _param(bus, "focus")
+        if cur == str(stage):
+            return
+        bus.press_pad(PAD_STAGE)
+        bus.wait_frame(4)
+        bus.release_pad(PAD_STAGE)
+        # Wait for the engine to report the move rather than assuming a
+        # latency; the pad is injected and arrives when it arrives.
+        _await_param(bus, "focus", cur)
+
     got = _param(bus, "focus")
     assert got == str(stage), (
-        f"asked for stage {stage}, engine reports focus {got!r}"
+        f"cycled the stage pad {N_STAGES + 1} times and focus is {got!r}, "
+        f"not {stage}"
     )
 
 
@@ -300,13 +333,19 @@ def test_palette_pads_load_the_focused_stage_family(overwork, stage):
     for slot in (3, len(family) - 1):
         if slot >= len(PALETTE_SLOTS):
             continue
+        want = family[slot]
+
+        # Park somewhere the press MUST move off, so the wait below has an
+        # unambiguous signal. Bypass unless that is what we are expecting.
+        park = str(family[0]) if want != family[0] else str(family[1])
+        bus.set_param(key, park)
+        bus.wait_frame(6)
+
         bus.press_pad(PALETTE_SLOTS[slot])
         bus.wait_frame(4)
         bus.release_pad(PALETTE_SLOTS[slot])
-        bus.wait_frame(10)
 
-        got = int(_param(bus, key))
-        want = family[slot]
+        got = int(_await_param(bus, key, park))
         assert got == want, (
             f"stage {stage}: palette slot {slot} (pad {PALETTE_SLOTS[slot]}) "
             f"loaded {got} ({machines[got]}), expected {want} ({machines[want]})"

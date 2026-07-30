@@ -367,17 +367,32 @@ and needed a power cycle. Check `bus.state().overtake_mode == 0` first, deploy,
 then `set_open_tool`. The script's own warning is about stale code — this is the
 worse failure it does not mention.
 
-**The suite is flaky on the device, and the cause is in schwung, not here.**
-`shadow_ui.js:15208` logs EVERY MIDI message while in overtake mode, before any
-filtering, with the comment "Debug: log all MIDI ... to diagnose escape issues".
-Two synchronous appends per event to `/data/UserData/schwung/debug.log`, which
-reached **1.2 GB** and grows at **143 KB per 10 s while idle** — the ring
-misalignment that degrades to an endless run of `status=0 d1=0 d2=0` is written
-out in full. Every injected test event pays for that on eMMC, on a thread
-sharing budget with audio, and injected events then arrive late, out of order,
-or not at all. Symptoms: raw protocol corruption on the test bus
-(`unexpected reply 'seq_pos7'`), palette slots resolving two positions off, and
-different tests failing on every run. Fix the log before trusting a red result.
+**The suite reaches fully green — 10 passed, 1 skipped, 1 xfailed — but only
+about half of runs get there.** Both causes are in schwung, not here.
+
+*Fixed 2026-07-30:* `shadow_ui.js:15208` logs EVERY MIDI message while in
+overtake mode, before any filtering ("Debug: log all MIDI ... to diagnose
+escape issues"). Two synchronous appends per event to `debug.log`, which had
+reached **1.2 GB** and grew at **143 KB per 10 s while IDLE** — the ring
+misalignment that degrades to an endless run of `status=0 d1=0 d2=0` was
+written out in full. Disabled by renaming the flag file
+`/data/UserData/schwung/debug_log_on` (it gates all unified logging;
+`unified_log.h` checks for it periodically). Growth went 286,000 -> 3,231 bytes
+per 20 s, and the suite went from never green to green roughly half the time.
+**Rename the flag back to restore logging.**
+
+*Still open:* the param channel is ONE shared-memory slot, and schwung's test
+daemon reads through the same one as a running module with no arbitration. When
+they collide, testd's protocol reads back the module's own bulk buffer —
+`unexpected reply 'seq_pos7'`, `'eff_src4'`, which are exactly the keys
+`ui_overtake.js`'s tick polls. A failing run is fast (3-14 s) and full of those;
+a good run takes 35-80 s. **Read a fast red run as bus contention, not as a
+module failure**, and re-run before believing it.
+
+Idling the tick poll when nothing can have changed (see `pollLive`) narrows the
+window and is worth having anyway — a blocking ~23 ms round-trip 22x/sec to
+read a stopped playhead is half the param channel for nothing — but it does NOT
+fix this, because the FX page is the default and keeps the poll live.
 
 **One manual step remains.** Overwork must already be open on the device.
 `bus.set_open_tool('overwork')` writes the command and shadow_ui reads it, but

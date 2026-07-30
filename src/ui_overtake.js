@@ -2123,7 +2123,24 @@ globalThis.tick = function () {
      * one-read-per-tick playhead poll was claiming every frame the param
      * channel had — which is what made other reads time out and return
      * nothing. Twenty-two updates a second is still smoother than the eye. */
-    if (tickCount % 2 === 0) {
+    /* Poll only what something can actually be looking at.
+     *
+     * seq_pos moves the step LEDs and cannot change while the sequencer is
+     * stopped; the effective values are drawn ONLY on the FX page. Outside
+     * those two cases this was a blocking SPI round-trip, twenty-two times a
+     * second, to learn nothing — about half a second of param channel per
+     * second of wall clock, claimed permanently.
+     *
+     * That is its own reason, and there is a second: the channel is a single
+     * shared slot, and schwung's test daemon reads parameters through the same
+     * one with no arbitration between them. A module polling flat out means an
+     * on-device test run collides with it — the failure surfaces as the
+     * daemon's protocol reading back this module's own bulk buffer
+     * ("unexpected reply 'seq_pos7'"), and it took four runs in seven. Idling
+     * the poll does not fix that race, which is not ours to fix, but it stops
+     * standing in front of it. */
+    const pollLive = seqOn || editPage === EDIT_FX;
+    if (pollLive && tickCount % 2 === 0) {
         const keys = ['seq_pos'];
         for (let s = 0; s < N_STAGES; s++) keys.push(effKey(s));
         const v = getParams(keys);
