@@ -252,6 +252,48 @@ static void test_state_roundtrip(void) {
     work_destroy(b);
 }
 
+/* Blob-to-blob equality cannot see a field the blob never carried.
+ *
+ * test_state_roundtrip above compares a's state to b's and passes when BOTH
+ * are missing something — which is how the modulation envelope went unnoticed:
+ * menv_* had a setter and a getter and no presence in the format at all, so a
+ * preset restored every knob and quietly reset the envelope to defaults.
+ *
+ * Check the VALUES back out through the parameter interface, not the string. */
+static void test_every_modulator_survives_a_preset(void) {
+    printf("a preset restores the LFOs and the modulation envelope\n");
+    work_t *a = work_create(&host);
+    work_t *b = work_create(&host);
+    assert(a && b);
+
+    set_stage(a, WORK_STAGE_FX1, WORK_FX_MMF);
+
+    static const struct { const char *key; const char *val; } set[] = {
+        { "menv_dest",  "12"  }, { "menv_atk",   "9"   },
+        { "menv_hold",  "77"  }, { "menv_dec",   "41"  },
+        { "menv_depth", "111" },
+        { "vlfo1_dest", "5"   }, { "vlfo2_depth", "23" },
+        { "flfo1_wave", "3"   }, { "flfo2_mult",  "96" },
+    };
+    for (size_t i = 0; i < sizeof set / sizeof *set; ++i)
+        work_set_param(a, set[i].key, set[i].val);
+
+    char blob[WORK_STATE_MAX];
+    CHECK(work_get_param(a, "state", blob, sizeof blob) > 0, "no state blob");
+    work_set_param(b, "state", blob);
+
+    for (size_t i = 0; i < sizeof set / sizeof *set; ++i) {
+        char got[32] = "";
+        work_get_param(b, set[i].key, got, sizeof got);
+        CHECK(strcmp(got, set[i].val) == 0,
+              "%s came back as \"%s\", not \"%s\" — the preset did not carry it",
+              set[i].key, got, set[i].val);
+    }
+
+    work_destroy(a);
+    work_destroy(b);
+}
+
 /* The Smack v0.8.2 bug: get_param("state") built its blob with unclamped
  * `n += snprintf(...)`, so a large state walked the cursor past the buffer and
  * the next append wrote out of bounds. Read the biggest possible state into
@@ -2083,6 +2125,9 @@ static void test_one_dense_track_fits_a_single_read(void) {
     CHECK(n > 0 && n < HOST_STATE_BUFFER - 1,
           "one dense track is %d bytes against a %d byte host buffer",
           n, HOST_STATE_BUFFER);
+    /* Printed, not just asserted: the sizes are quoted in CLAUDE.md, and a
+     * table nothing measures is a table that drifts. */
+    printf("    one dense track: %d B of a %d B read\n", n, HOST_STATE_BUFFER);
 
     work_t *b = work_create(&host);
     work_set_param(b, "state", blob);
@@ -2124,6 +2169,10 @@ static void test_every_track_survives_the_window_protocol(void) {
     CHECK(blob[0] == '{' && blob[total - 1] == '}',
           "the assembled blob is not a whole object: starts '%c', ends '%c', %d bytes",
           blob[0], blob[total - 1], total);
+    printf("    %d tracks, every lock set: %d B, %d reads of %d B\n",
+           WORK_TRACKS, total,
+           (total + HOST_STATE_BUFFER - 2) / (HOST_STATE_BUFFER - 1),
+           HOST_STATE_BUFFER);
 
     work_t *b = work_create(&host);
     work_set_param(b, "state", blob);
@@ -2140,6 +2189,85 @@ static void test_every_track_survives_the_window_protocol(void) {
     }
 
     work_destroy(w); work_destroy(b);
+}
+
+/* The blob-size table in CLAUDE.md, measured rather than remembered.
+ *
+ * Those numbers decide whether a realistic pattern costs one host read or
+ * three, which is the difference between the chain slot feeling instant and
+ * paying a paging cliff nobody asked for. They were quoted from a run that is
+ * now several format changes old. Print them every suite so an edit that
+ * doubles the blob shows up as a number moving, not as a slow feeling. */
+static void test_blob_sizes_are_reported(void) {
+    printf("the blob sizes the docs quote, measured\n");
+
+    static char blob[WORK_STATE_MAX * 2];
+    struct { const char *what; int bytes; } row[4];
+
+    work_t *w = work_create(&host);
+    assert(w);
+    row[0].what = "empty";
+    row[0].bytes = read_state_windowed(w, blob, (int)sizeof blob);
+    work_destroy(w);
+
+    w = work_create(&host);
+    work_set_param(w, "seq_len", "64");
+    for (int t = 0; t < WORK_TRACKS; ++t) {
+        char tk[8];
+        snprintf(tk, sizeof tk, "%d", t);
+        work_set_param(w, "track", tk);
+        for (int i = 0; i < WORK_STEPS; ++i) {
+            char k[16];
+            snprintf(k, sizeof k, "step%d", i);
+            work_set_param(w, k, "1:0:0:0");
+        }
+    }
+    row[1].what = "64 trigs on every lane";
+    row[1].bytes = read_state_windowed(w, blob, (int)sizeof blob);
+
+    for (int t = 0; t < WORK_TRACKS; ++t) {
+        char tk[8];
+        snprintf(tk, sizeof tk, "%d", t);
+        work_set_param(w, "track", tk);
+        for (int i = 0; i < WORK_STEPS; ++i) {
+            char k[16], v[64];
+            snprintf(v, sizeof v, "0=64,8=64,16=64,24=64");
+            snprintf(k, sizeof k, "locks%d", i);
+            work_set_param(w, k, v);
+        }
+    }
+    row[2].what = "...plus 4 locks per step";
+    row[2].bytes = read_state_windowed(w, blob, (int)sizeof blob);
+    work_destroy(w);
+
+    w = work_create(&host);
+    densest_pattern(w);
+    row[3].what = "...plus all locks per step";
+    row[3].bytes = read_state_windowed(w, blob, (int)sizeof blob);
+    work_destroy(w);
+
+    for (int i = 0; i < 4; ++i) {
+        const int reads = (row[i].bytes + HOST_STATE_BUFFER - 2) / (HOST_STATE_BUFFER - 1);
+        printf("    %-28s %6d B  %d read%s\n",
+               row[i].what, row[i].bytes, reads, reads == 1 ? "" : "s");
+        CHECK(row[i].bytes > 0 && row[i].bytes < (int)sizeof blob,
+              "%s measured %d bytes, which is not plausible", row[i].what, row[i].bytes);
+    }
+
+    /* The one that is a promise rather than a measurement: a realistic
+     * pattern — trigs everywhere and a handful of locks — must still be ONE
+     * read, because a chain slot holds one track and paging there is a cliff. */
+    CHECK(row[2].bytes < HOST_STATE_BUFFER,
+          "a realistic 8-track pattern is %d bytes and no longer fits one %d byte read",
+          row[2].bytes, HOST_STATE_BUFFER);
+
+    /* And the ceiling that actually governs the browser: the manager reads
+     * through the shim's param channel, SHADOW_PARAM_VALUE_LEN = 64 KB, in a
+     * SINGLE un-windowed read. Past that the browser gets truncated JSON,
+     * fetchAllParams fails to parse, and the page seeds with nothing at all. */
+    CHECK(row[3].bytes < 65536,
+          "the worst-case blob is %d bytes, past the 64 KB the manager reads in one go — "
+          "the browser editor would seed empty", row[3].bytes);
 }
 
 /* ------------------------------------------------------------- Tier A */
@@ -2857,16 +2985,38 @@ static void test_remote_ui_bridge(void) {
     work_get_param(w, "mix", v, sizeof v);
     CHECK(atoi(v) == 33, "a malformed rui_set changed mix to %s", v);
 
-    /* the flat mirror: strings, not arrays, or the seed drops them */
+    /* The flat mirror: strings, not arrays, or the seed drops them. Per TRACK
+     * now — the browser editor shows all eight, and the page cannot ask for a
+     * track it was not sent, since schwungRemote.getParam reads its own cache
+     * of this parse rather than the device. */
     static char blob[65536];
     work_set_param(w, "machine1", "15");
     work_get_param(w, "state", blob, sizeof blob);
     CHECK(strstr(blob, "\"fp_src\":\"") != NULL, "no flat parameter mirror in the blob");
     CHECK(strstr(blob, "\"fvf\":\"") != NULL, "no flat voice-filter mirror");
-    CHECK(strstr(blob, "\"fn1\":\"Roomtone Reverb\"") != NULL,
+    CHECK(strstr(blob, "\"t0fn1\":\"Roomtone Reverb\"") != NULL,
           "the blob does not name insert 1's machine for the browser");
-    CHECK(strstr(blob, "\"fn_src\":\"") != NULL,
+    CHECK(strstr(blob, "\"t0fn_src\":\"") != NULL,
           "the blob does not name the source stage's machine for the browser");
+    CHECK(strstr(blob, "\"fvl1\":\"") != NULL, "no flat voice-LFO mirror");
+    CHECK(strstr(blob, "\"ffl1\":\"") != NULL, "no flat FX-LFO mirror");
+    CHECK(strstr(blob, "\"fme\":\"") != NULL, "no flat modulation-envelope mirror");
+    CHECK(strstr(blob, "\"ftrk\":\"") != NULL,
+          "the blob does not say which track is selected, or how many there are");
+
+    /* Names for every track, knob detail for the selected one — the split the
+     * 16 KB host read forces. Track 1 is the selected track here, so its name
+     * keys and the unprefixed detail describe the same chain; check a track
+     * that is NOT selected still says what it is running. */
+    work_set_param(w, "track", "3");
+    work_set_param(w, "machine1", "17");
+    work_set_param(w, "track", "0");
+    work_get_param(w, "state", blob, sizeof blob);
+    CHECK(strstr(blob, "\"t3fn1\":\"Iron Room Reverb\"") != NULL,
+          "an unselected track does not name its machine for the browser overview");
+    CHECK(strstr(blob, "\"t3fp_src\":") == NULL,
+          "an unselected track carries knob detail, which is the 16 KB budget "
+          "this split exists to protect");
 
     /* and the flat fields must not disturb a reload */
     work_t *r = work_create(&host);
@@ -3536,6 +3686,7 @@ int main(void) {
     test_all_machines_bounded();
     test_global_mix_dry();
     test_state_roundtrip();
+    test_every_modulator_survives_a_preset();
     test_get_param_tiny_buffers();
     test_compressor_reduces_gain();
     test_filterbank_silence();
@@ -3552,6 +3703,7 @@ int main(void) {
     test_v2_preset_loads_into_track_one();
     test_one_dense_track_fits_a_single_read();
     test_every_track_survives_the_window_protocol();
+    test_blob_sizes_are_reported();
     test_track_level_and_pan();
     test_level_and_pan_are_lockable();
     test_machine_lock_respects_the_family();

@@ -3990,6 +3990,26 @@ static int apply_track_state(work_track_t *tr, const char *json, const char *pfx
      * quietly — see load_note. An old LFO that was switched off carries no
      * destination to place it by, so it is skipped and its slot left free for
      * one that does. */
+    /* The modulation envelope. Absent from every blob written before this key
+     * existed, which is every blob written before 2026-07-30: menv_* had a
+     * setter and a getter and no presence in the format, so a preset restored
+     * all the knobs and silently reset the envelope. Missing means defaults,
+     * so old presets load exactly as they did. */
+    if ((q = jfind(json, pfx, "me")) != NULL && *q == '[') {
+        int v[5] = { -1, 0, 8, 48, 64 };
+        const char *p = q + 1;
+        for (int i = 0; i < 5 && p && *p && *p != ']'; ++i) {
+            v[i] = atoi(p);
+            p = strchr(p, ',');
+            if (p) ++p;
+        }
+        tr->menv.dest   = (int8_t)iclamp(v[0], -1, WORK_STAGES * WORK_PARAMS - 1);
+        tr->menv.attack = (uint8_t)iclamp(v[1], 0, 127);
+        tr->menv.hold   = (uint8_t)iclamp(v[2], 0, 127);
+        tr->menv.decay  = (uint8_t)iclamp(v[3], 0, 127);
+        tr->menv.depth  = (uint8_t)iclamp(v[4], 0, 127);
+    }
+
     if (version >= 4) {
         for (int n = 0; n < WORK_LFOS; ++n) {
             char name[8];
@@ -4681,6 +4701,29 @@ static int state_build(work_t *w) {
                                     L->depth, L->phase, L->trig), cap);
         }
 
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                ",\"%sme\":[%d,%d,%d,%d,%d]", pfx,
+                                tr->menv.dest, tr->menv.attack, tr->menv.hold,
+                                tr->menv.decay, tr->menv.depth), cap);
+
+        /* Machine NAMES, for every track. The browser's overview needs to say
+         * what each of the eight is running, and it cannot look a code up:
+         * the engine serves the machine list, but schwungRemote.getParam reads
+         * the iframe's cache of this blob rather than the device, so a name
+         * the blob does not carry is a name the page cannot get. Codes alone
+         * would force the page to keep its own copy of the machine table,
+         * which is the one thing this project will not have.
+         *
+         * Names ONLY out here. The knob detail below stays selected-track, and
+         * that limit is the 16 KB the JS host reads through, not the 64 KB the
+         * manager gets: eight tracks of full mirror measured 15,874 bytes for
+         * a realistic pattern against a 16,384 byte read — 510 bytes of margin
+         * for a view that shows one chain at a time anyway. */
+        for (int sl = 0; sl < WORK_STAGES; ++sl)
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                    ",\"%sfn%s\":\"%s\"", pfx, STAGE_SFX[sl],
+                                    MACHINE_NAME[tr->cfg[sl].machine]), cap);
+
         /* The lane, packed and base64'd. Omitted when empty, which is what
          * keeps a patch that only uses two tracks from carrying six empty
          * ones. */
@@ -4698,23 +4741,29 @@ static int state_build(work_t *w) {
                             ",\"sq\":[%d,%d,%d]",
                             w->seq_on, CURPAT(w)->len, CURPAT(w)->page_mask), cap);
 
-    /* Flat mirrors of the arrays above, as comma-separated STRINGS.
+    /* Why the flat mirrors above exist at all.
      *
      * schwung's remote UI seeds a browser page by parsing this blob as a flat
      * object and keeping only scalar fields — a JSON array is dropped on the
-     * floor. Rather than change the array form, which every saved preset
-     * depends on, the same values go out again as strings under an "f" prefix.
-     * apply_state ignores them, so they cost nothing on the way back in.
-     *
-     * SELECTED TRACK ONLY, and that is deliberate: the page shows one track's
-     * chain at a time, and mirroring all eight would multiply the largest
-     * fixed cost in the blob by eight to serve a view nothing renders.
+     * floor, and the page cannot ask the device for one either, because
+     * schwungRemote.getParam reads the iframe's CACHE of that parse rather
+     * than issuing a read. So anything the browser renders has to leave here
+     * as a scalar or a string. Rather than change the array form, which every
+     * saved preset depends on, the same values go out again as strings under
+     * an "f" prefix. apply_state ignores them, so they cost nothing on the way
+     * back in.
      *
      * Keyed by the STAGE suffix — fp_src / fp1 / fp2 — the same spelling
      * labels and eff use. They used to be numbered from 1, which after the SRC
      * promotion would have made "fp1" the source stage while "labels1" meant
      * the first insert: two conventions in one contract, and the browser
-     * editor would have had to know which key used which. */
+     * editor would have had to know which key used which.
+     *
+     * SELECTED TRACK, and ftrk says which that is. The page edits one chain at
+     * a time and changes track by writing "track", exactly as the surface
+     * does; the write bumps rui_rev, so the manager pushes a fresh blob and
+     * the detail follows. Mirroring all eight instead costs 510 bytes of
+     * margin under the host's read for a view nothing renders. */
     for (int sl = 0; sl < WORK_STAGES; ++sl) {
         n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
                                 ",\"fp%s\":\"", STAGE_SFX[sl]), cap);
@@ -4728,19 +4777,29 @@ static int state_build(work_t *w) {
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s%d",
                                     i ? "," : "", TRK(w)->eff[sl][i]), cap);
         n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "\""), cap);
-        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                ",\"fn%s\":\"%s\"", STAGE_SFX[sl],
-                                MACHINE_NAME[TRK(w)->cfg[sl].machine]), cap);
     }
     n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
                             ",\"fvf\":\"%d,%d,%d,%d,%d,%d,%d\"",
                             TRK(w)->vfilt.base, TRK(w)->vfilt.width, TRK(w)->vfilt.reso,
                             TRK(w)->vfilt.env, TRK(w)->vfilt.attack, TRK(w)->vfilt.decay,
                             TRK(w)->vfilt.track), cap);
+    for (int l = 0; l < WORK_LFOS; ++l) {
+        const work_lfo_cfg_t *L = &TRK(w)->lfo[l];
+        char lk[8];
+        lfo_blob_key(l, lk, sizeof lk);
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                ",\"f%s\":\"%d,%d,%d,%d,%d,%d,%d\"", lk,
+                                L->dest, L->speed, L->mult, L->wave,
+                                L->depth, L->phase, L->trig), cap);
+    }
     n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                            ",\"fseq\":\"%d,%d,%d,%d\"",
+                            ",\"fme\":\"%d,%d,%d,%d,%d\"",
+                            TRK(w)->menv.dest, TRK(w)->menv.attack, TRK(w)->menv.hold,
+                            TRK(w)->menv.decay, TRK(w)->menv.depth), cap);
+    n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                            ",\"fseq\":\"%d,%d,%d,%d\",\"ftrk\":\"%d,%d\"",
                             w->seq_on, CURPAT(w)->len, w->seq_pos,
-                            w->cur_pattern), cap);
+                            w->cur_pattern, w->sel_track, WORK_TRACKS), cap);
 
     n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "}"), cap);
     buf[n] = '\0';

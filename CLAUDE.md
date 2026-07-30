@@ -151,14 +151,18 @@ Three things fixed it, and none of them may be undone casually:
   until a short answer; "short" means "shorter than the host's buffer", and
   that constant lives in schwung, not here.
 
-Measured 2026-07-29, at eight tracks:
+Measured 2026-07-30, at eight tracks:
 
 | pattern | blob | host reads |
 |---|---|---|
-| empty | 515 B | 1 |
-| 64 trigs on every lane | 10,418 B | 1 |
-| …plus 4 locks per step | 13,170 B | 1 |
-| …plus all 36 locks per step | 34,994 B | 3 |
+| empty | 716 B | 1 |
+| 64 trigs on every lane | 11,368 B | 1 |
+| …plus 4 locks per step | 14,120 B | 1 |
+| …plus all 36 locks per step | 35,944 B | 3 |
+
+`test_blob_sizes_are_reported` prints this table every run, because a table
+nothing measures is a table that drifts — these numbers were several format
+changes stale before it existed.
 
 So the realistic case still costs one round trip. `test_one_dense_track_fits_a_single_read`
 guards that, because a chain slot holds one track and paying for paging there
