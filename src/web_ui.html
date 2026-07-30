@@ -687,6 +687,28 @@ function paintPlayhead() {
   }
 }
 
+/* The iframe misses the burst it was created for.
+ *
+ * schwung-manager sends custom_ui and then param_update. Creating the iframe
+ * and loading this script takes longer than the gap, so the first burst is
+ * addressed to a page that is not listening yet — and the next push is
+ * rev-gated, so with nothing changing on the device it may never come. The
+ * page sits on "Waiting for the device…", or renders the header from a later
+ * partial push with no chain controls, until a manual refresh happens to win
+ * the race. Reported 2026-07-30: "I had to refresh the remote ui to see fx
+ * controls."
+ *
+ * Ask once, if and only if nothing arrived. NOT on a timer: schwung remounts
+ * the custom iframe during a full parameter refresh, so a polled resubscribe
+ * reloads this page out from under whoever is using it (the note in smack's
+ * editor is about exactly that). One shot closes the startup race without
+ * joining that one. */
+if (typeof schwungRemote.resubscribe === "function") {
+  setTimeout(function () {
+    if (M.ftrk === undefined) schwungRemote.resubscribe();
+  }, 900);
+}
+
 /* ---- fixed controls ---------------------------------------------------- */
 el("run").onclick = () => send("seq_on", playOn ? 0 : 1);
 el("mix").oninput = () => {

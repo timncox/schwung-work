@@ -273,8 +273,9 @@ footer a{color:var(--rust)}
       <li><a href="#plock">The p-lock gesture</a></li>
       <li><a href="#surface">Surface map</a></li>
       <li><a href="#machines">Machines</a></li>
-      <li><a href="#samples">Samples</a>
-    <a href="#sequencer">Sequencer</a></li>
+      <li><a href="#samples">Samples</a></li>
+      <li><a href="#sequencer">Sequencer</a></li>
+      <li><a href="#browser">Browser editor</a></li>
       <li><a href="#install">Install</a></li>
     </ul>
   </nav>
@@ -640,8 +641,22 @@ footer a{color:var(--rust)}
   <p>Pattern length runs to 64 steps across four pages. The sequencer also exists in the chain build, where it defaults to off &mdash; a sequenced FX in a Signal Chain slot is a real use, not an accident.</p>
 </section>
 
+<section id="browser">
+  <div class="sechead"><span class="secnum">08</span><h2>The browser editor</h2><span class="note">edit from a phone</span></div>
+
+  <p><strong>Overwork</strong> and <strong>Work In</strong> carry a full editor you reach from any browser on the same network. Open <code>move.local:7700</code>, go to the <strong>Tool</strong> tab with Overwork running, or to a chain slot holding Work In. Nothing to install &mdash; the page ships inside the module.</p>
+
+  <p>It shows all eight tracks at once, which the Move&rsquo;s screen cannot: each track&rsquo;s source machine and level along the top, then the selected track in full &mdash; the three stages under their loaded machines&rsquo; own knob names, the voice filter, four LFOs, the modulation envelope, and the pattern. Clicking a track changes the selection on the device too. It is the same instrument, not a copy of it.</p>
+
+  <p>Every parameter shows two numbers when they differ: what the knob is set to, and what the sound is actually using once a parameter lock or an LFO has moved it. A modulated parameter otherwise looks like a stuck one.</p>
+
+  <p><strong>Edits go both ways.</strong> Turn a knob on the Move and the browser follows; change something in the browser and the Move&rsquo;s screen follows within a fraction of a second. The device notices by polling a cheap revision counter rather than re-reading its whole state, so nothing slows down while you play.</p>
+
+  <p class="note">The <strong>Work</strong> chain-slot build has no page of its own &mdash; schwung only serves a custom editor for a slot&rsquo;s instrument, not its effects. It gets schwung&rsquo;s own generated controls instead, with the knob names of whichever machines are loaded, which needs schwung 0.11.7 or newer.</p>
+</section>
+
 <section id="install">
-  <div class="sechead"><span class="secnum">08</span><h2>Install</h2><span class="note">schwung-manager</span></div>
+  <div class="sechead"><span class="secnum">09</span><h2>Install</h2><span class="note">schwung-manager</span></div>
   <div class="install">
     <ol>
       <li>Open <strong>schwung-manager</strong> on your Move &mdash; usually <code>move.local:7700</code>.</li>
