@@ -377,6 +377,16 @@ Two ways to misread the daemon's state, both of which cost time today:
   exactly like a daemon crash. Every reboot kills testd; it is not
   auto-started.
 
+**`tool_info` lies in the `(none)` direction.** The manager's
+`subscribe_tool` reply is the best available check for what is open, and it
+transiently reports `(none)` while a tool is demonstrably running — observed
+2026-07-30, two spurious `(none)` readings inside five seconds with Overwork up
+and answering. It does NOT appear to invent a tool that is not there, so treat
+a tool id as trustworthy and `(none)` as needing corroboration: poll it several
+times a few seconds apart and require the whole run to agree before writing
+over a `dsp.so`. One spurious reading is enough to greenlight a deploy onto a
+mapped module, which is the crash that costs a power cycle.
+
 **You cannot check whether a module is mapped from `ableton`.** `grep
 /data/UserData/schwung/modules /proc/*/maps` returns EMPTY whether or not an
 overtake DSP is loaded, because the shim lives inside MoveOriginal and
