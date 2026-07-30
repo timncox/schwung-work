@@ -48,7 +48,8 @@ import {
     MoveKnob1, MoveShift, MoveMainButton, MoveMainKnob,
     MoveMenu, MoveUp, MoveDown,
     Black, White, LightGrey, DarkGrey, Red, BrightRed, Blue, Green, BrightGreen,
-    Cyan, Purple, SkyBlue, Lime, OrangeRed, BurntOrange, YellowGreen, TealGreen, Rose
+    Cyan, Purple, SkyBlue, Lime, OrangeRed, BurntOrange, YellowGreen, TealGreen, Rose,
+    ElectricViolet, VividYellow, AzureBlue
 } from '/data/UserData/schwung/shared/constants.mjs';
 
 import { decodeDelta, setLED, shouldFilterMessage }
@@ -137,6 +138,22 @@ const EDIT_COUNT  = 8;
 const EDIT_NAME   = ['FX', 'V.LFO 1', 'V.LFO 2', 'FX LFO 1', 'FX LFO 2',
                      'MOD ENV', 'VOICE FLT', 'GLOBAL'];
 
+/* The edit-page pad's colour, one per page and GROUPED: the two voice LFOs
+ * share a colour, the two FX LFOs share another, so the pad says which family
+ * you are in as well as that you moved.
+ *
+ * Written beside EDIT_NAME and length-checked against it, because it was a
+ * six-entry array when the LFO split took the page count to eight — pages 6
+ * and 7 indexed past the end, handed `undefined` to setLED, and the pad simply
+ * went dark on VOICE FLT and GLOBAL. Exactly the failure the machine-colour
+ * table carries a fallback for; this one had none. */
+const EDIT_COLOR  = [White,          /* FX        — the stage's parameters */
+                     Cyan, Cyan,     /* V.LFO 1/2 — voice modulators       */
+                     Purple, Purple, /* FX LFO 1/2 — insert modulators     */
+                     OrangeRed,      /* MOD ENV                            */
+                     BrightGreen,    /* VOICE FLT                          */
+                     LightGrey];     /* GLOBAL                             */
+
 /* Step-attribute modes the jog edits while a step is held */
 const MODE_NONE   = 0;
 const MODE_COND   = 1;
@@ -155,33 +172,66 @@ const HOLD_MS = 600;
  * (a colour is a design choice, not engine data), so instead: the lookup below
  * falls back rather than handing `undefined` to setLED, and a test asserts this
  * table is the same length as the engine's machine list. */
+/* TWO SCHEMES, because the palette shows ONE family at a time and the two
+ * lists never share the grid. Colours only have to be distinct within a view,
+ * so each list gets the scheme that suits its length.
+ *
+ * EFFECTS (21) are coloured BY FAMILY. That many machines is a list you hunt
+ * through, and "the reverbs are the blue ones" is what makes it navigable.
+ *
+ * SOURCES (6) are coloured BY POSITION, as a spectrum running the length of
+ * the family. Family tells you nothing when every machine in the view is a
+ * source, and the three that matter most — One Shot, Polysample, Slicer —
+ * used to be three identical Whites sitting next to each other, which is the
+ * one place on the grid where colour actively cost you something. Running the
+ * hue with the list order means position and colour reinforce each other.
+ *
+ * Rewritten 2026-07-30. The previous table was family-coloured throughout and
+ * had FOUR greens (Green, Lime, TealGreen, YellowGreen) and THREE blues (Blue,
+ * SkyBlue, Cyan) — coherent written down, mud on the LEDs. One green and one
+ * blue-plus-cyan now. Bypass is DarkGrey in both lists because it means the
+ * same thing in both: empty.
+ *
+ * A colour is a design choice, not engine data, so this table cannot be
+ * derived — it is hand-maintained and indexed by machine, the same shape as
+ * the N_MACHINES constant that once made two machines unreachable. Two tests
+ * hold it honest: one pins its length to the engine's machine list, the other
+ * asserts no two machines VISIBLE AT ONCE are indistinguishable. */
 const MACHINE_COLOR = [
-    DarkGrey,      /* 0  Bypass            */
-    Purple,        /* 1  Clock Pitch      pitch family */
-    Green,         /* 2  Comb Filter   filter family */
-    Blue,          /* 3  Compressor        dynamics */
-    BurntOrange,   /* 4  Chain Delay       delay family */
-    Lime,          /* 5  Decimator          destruction */
-    Lime,          /* 6  Gritshaper        destruction */
-    Green,         /* 7  Fold Filter     filter */
-    Green,         /* 8  Filterbank        filter */
-    Purple,        /* 9  Spectrum Bender  pitch */
-    Cyan,          /* 10 Endless Flanger  modulation */
-    Green,         /* 11 Low-Pass Filter   filter */
-    Green,         /* 12 Multimode Filter  filter */
-    Cyan,          /* 13 Wide Chorus  modulation */
-    Cyan,          /* 14 Phase Array          modulation */
-    SkyBlue,       /* 15 Roomtone Reverb  space */
-    BurntOrange,   /* 16 Drive Delay   delay */
-    SkyBlue,       /* 17 Iron Room Reverb  space */
-    SkyBlue,       /* 18 Voidspace Reverb  space */
-    TealGreen,     /* 19 Flutter            tape */
-    Rose,          /* 20 Granulator           granular */
-    White,         /* 21 One Shot     source */
-    White,         /* 22 Polysample      source */
-    White,         /* 23 Slicer         source */
-    YellowGreen,   /* 24 Wavescan        source, wavetable */
-    Blue           /* 25 Tilt              an effect — shelving EQ    */
+    DarkGrey,        /* 0  Bypass             empty, in both families */
+
+    /* --- effects, by family --- */
+    ElectricViolet,  /* 1  Clock Pitch        pitch       */
+    BrightGreen,     /* 2  Comb Filter        filter      */
+    VividYellow,     /* 3  Compressor         dynamics/EQ */
+    BurntOrange,     /* 4  Chain Delay        delay       */
+    BrightRed,       /* 5  Decimator          destruction */
+    BrightRed,       /* 6  Gritshaper         destruction */
+    BrightGreen,     /* 7  Fold Filter        filter      */
+    BrightGreen,     /* 8  Filterbank         filter      */
+    ElectricViolet,  /* 9  Spectrum Bender    pitch       */
+    Cyan,            /* 10 Endless Flanger    modulation  */
+    BrightGreen,     /* 11 Low-Pass Filter    filter      */
+    BrightGreen,     /* 12 Multimode Filter   filter      */
+    Cyan,            /* 13 Wide Chorus        modulation  */
+    Cyan,            /* 14 Phase Array        modulation  */
+    AzureBlue,       /* 15 Roomtone Reverb    space       */
+    BurntOrange,     /* 16 Drive Delay        delay       */
+    AzureBlue,       /* 17 Iron Room Reverb   space       */
+    AzureBlue,       /* 18 Voidspace Reverb   space       */
+    Rose,            /* 19 Flutter            tape        */
+
+    /* --- sources, by position: a spectrum down the family --- */
+    OrangeRed,       /* 20 Granulator         source 1    */
+    VividYellow,     /* 21 One Shot           source 2    */
+    BrightGreen,     /* 22 Polysample         source 3    */
+    AzureBlue,       /* 23 Slicer             source 4    */
+    ElectricViolet,  /* 24 Wavescan           source 5    */
+
+    VividYellow      /* 25 Tilt               dynamics/EQ — a shelving EQ, and
+                      *                       filed with the compressor because
+                      *                       "sets a level" is the nearest
+                      *                       true thing about both */
 ];
 
 
@@ -1673,7 +1723,8 @@ function paintTransport(force) {
         setLED(PAD_LIVE_REC,    liveRec ? Red : 0x0A, force);
         setLED(PAD_MONITOR,     monitor ? (atRisk ? BrightRed : BrightGreen) : DarkGrey, force);
     } else {
-        setLED(PAD_EPAGE, [White, Cyan, Cyan, Cyan, Purple, LightGrey][editPage], force);
+        setLED(PAD_EPAGE, EDIT_COLOR[editPage] !== undefined
+                          ? EDIT_COLOR[editPage] : LightGrey, force);
         setLED(PAD_COPY,  copyBuf ? TealGreen : 0x0A, force);
         setLED(PAD_PASTE, copyBuf ? Lime : 0x06, force);
         setLED(PAD_CLEAR, Red, force);
@@ -2185,6 +2236,12 @@ globalThis.onUnload = function () {
  * gesture attached yet, so this is the only way to drive it. */
 /* Exposed so the harness can check this table against the engine's list. */
 globalThis.__machineColorCount = () => MACHINE_COLOR.length;
+/* For the harness: the colour a machine lights, and the edit-page colours.
+ * Exposed rather than duplicated in the test, because a test carrying its own
+ * copy of this table would go green against a table that had drifted. */
+globalThis.__machineColor = (code) => MACHINE_COLOR[code];
+globalThis.__editColors = () => EDIT_COLOR.slice();
+globalThis.__editPageCount = () => EDIT_COUNT;
 
 globalThis.loadSampleFile = loadSampleFile;
 globalThis.listSamples = listSamples;

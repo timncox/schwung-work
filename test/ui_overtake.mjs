@@ -341,6 +341,10 @@ const STUBS = {
         export const Black=0, White=120, LightGrey=118, DarkGrey=124, Red=127, BrightRed=1;
         export const Blue=125, Green=126, BrightGreen=8, Cyan=14, Purple=22, SkyBlue=47;
         export const Lime=31, OrangeRed=2, BurntOrange=28, YellowGreen=30, TealGreen=12, Rose=24;
+        /* Transcribed from schwung's src/shared/constants.mjs. These are the
+         * real LED codes — a stub that invented them would let two colours the
+         * device shows identically look distinct to the distinctness test. */
+        export const ElectricViolet=20, VividYellow=7, AzureBlue=15;
     `,
     '/data/UserData/schwung/shared/input_filter.mjs': `
         export function decodeDelta(v){ if(v===0) return 0; if(v>=1&&v<=63) return v; if(v>=65&&v<=127) return -(128-v); return 0; }
@@ -1503,6 +1507,65 @@ async function testMachineColorTableCoversEveryMachine() {
 }
 
 
+/* The palette shows ONE family at a time, so the thing that matters is not
+ * "is the table complete" but "can you tell apart the machines you can
+ * actually see at once".
+ *
+ * The source list failed that for a long time and nothing noticed: One Shot,
+ * Polysample and Slicer were three identical Whites, sitting next to each
+ * other, and they are the three you switch between most. A table can be fully
+ * populated, pass the length check above, and still be unreadable.
+ *
+ * Effects deliberately DO share within a family — five filters are all one
+ * green, and that is the scheme working. So the rule is per-list: in the
+ * source list every machine must be distinguishable; in the effect list every
+ * FAMILY must be. */
+async function testColoursAreDistinctWithinAView() {
+    console.log('machines visible at the same time do not share a colour');
+    const ctx = await loadUI();
+    ctx.host.init();
+
+    /* The page count comes from the UI, so this cannot pass by agreeing with a
+     * stale copy of it. */
+    const EDIT_PAGE_COUNT = ctx.host.__editPageCount();
+
+    const srcCodes = codes(contract.get.src_codes);
+    const fxCodes  = codes(contract.get.fx_codes);
+    const machines = contract.get.machines.split(',');
+    const colour   = (c) => ctx.host.__machineColor(c);
+
+    /* --- sources: every one distinct --- */
+    const seen = new Map();
+    for (const c of srcCodes) {
+        const col = colour(c);
+        check(col !== undefined, `${machines[c]} has no colour`);
+        if (seen.has(col)) {
+            check(false,
+                  `the source list shows ${machines[seen.get(col)]} and ` +
+                  `${machines[c]} in the same colour (${col}) — they are on ` +
+                  `screen together and cannot be told apart`);
+        }
+        seen.set(col, c);
+    }
+    check(seen.size === srcCodes.length,
+          `${srcCodes.length} sources use only ${seen.size} colours`);
+
+    /* --- effects: enough distinct colours to be worth having --- */
+    const fxColours = new Set(fxCodes.map(colour));
+    check(!fxColours.has(undefined), 'an effect has no colour');
+    check(fxColours.size >= 6,
+          `the ${fxCodes.length} effects use only ${fxColours.size} colours; ` +
+          `family grouping stops being navigable below about six`);
+
+    /* --- and the edit-page pad covers every page --- */
+    const edit = ctx.host.__editColors();
+    check(edit.length === EDIT_PAGE_COUNT,
+          `EDIT_COLOR has ${edit.length} entries for ${EDIT_PAGE_COUNT} edit ` +
+          `pages — the pages past the end light with undefined`);
+    check(edit.every((c) => c !== undefined), 'an edit page has no pad colour');
+}
+
+
 /* The palette occupies pad rows 1-3, but three of those pads are undo, memo
  * and song. Mapping pad index straight to machine index was safe only while
  * the machine count stayed below the first function pad's index — at 21
@@ -1947,6 +2010,7 @@ const tests = [
     testGarbageMidiIsIgnored,
     testRealInputStillWorksThroughTheFilter,
     testMachineColorTableCoversEveryMachine,
+    testColoursAreDistinctWithinAView,
     testPaletteNeverShadowsTheFunctionPads,
     testEveryMachineIsReachableFromThePalette,
     testSampleScanFindsNestedFiles,
