@@ -305,17 +305,17 @@ typedef struct {
  * to move here explicitly rather than by accident. */
 typedef struct {
     work_vfilt_cfg_t     vfilt;        /* voice filter, shared by this track's slots */
-    work_slot_cfg_t      cfg[WORK_SLOTS];
+    work_slot_cfg_t      cfg[WORK_STAGES];
     work_lfo_cfg_t       lfo[WORK_LFOS];
-    work_slot_t          slot[WORK_SLOTS];
+    work_slot_t          slot[WORK_STAGES];
 
     /* Effective values, recomputed per block as
      *   base (cfg) -> parameter locks from the current step -> FX LFOs
      * which is the order that makes locks predictable: a lock sets the value,
      * and the LFO then moves around
      * whatever the lock set. */
-    uint8_t              eff[WORK_SLOTS][WORK_PARAMS];
-    uint8_t              eff_machine[WORK_SLOTS];
+    uint8_t              eff[WORK_STAGES][WORK_PARAMS];
+    uint8_t              eff_machine[WORK_STAGES];
     float                lfo_ph[WORK_LFOS];
 
     /* modulation envelope, and its per-trig runtime */
@@ -1904,7 +1904,7 @@ static int machine_is_source(int machine);
  * work_process, never from the per-sample loop. */
 static void vfilt_prepare(work_t *w, int frames) {
     const int on = vfilt_active(&TRK(w)->vfilt);
-    for (int i = 0; i < WORK_SLOTS; ++i) {
+    for (int i = 0; i < WORK_STAGES; ++i) {
         work_slot_t *s = &TRK(w)->slot[i];
         s->vf_on = on && machine_is_source(TRK(w)->eff_machine[i]);
         if (!s->vf_on) continue;
@@ -2528,7 +2528,7 @@ static void work_src_trigger(work_t *w, int note, int vel) {
     const float pitch = powf(2.0f, ((float)note - 60.0f) / 12.0f);
     const float gain  = vel > 0 ? (float)vel / 127.0f : 1.0f;
 
-    for (int i = 0; i < WORK_SLOTS; ++i) {
+    for (int i = 0; i < WORK_STAGES; ++i) {
         work_slot_t *s = &TRK(w)->slot[i];
         switch (TRK(w)->cfg[i].machine) {
         case WORK_FX_ONESHOT: {
@@ -2622,7 +2622,7 @@ static void seq_run(work_t *w, int frames) {
     if (st->trig_type == WORK_TRIG_FULL) {
         if (st->retrig != WORK_RETRIG_OFF) {
             for (int n = 0; n < WORK_LFOS; ++n) TRK(w)->lfo_ph[n] = 0.0f;
-            for (int s = 0; s < WORK_SLOTS; ++s) TRK(w)->slot[s].env_stage = 1.0f;
+            for (int s = 0; s < WORK_STAGES; ++s) TRK(w)->slot[s].env_stage = 1.0f;
         }
         TRK(w)->menv_stage = 1.0f;
         TRK(w)->menv_t     = 0.0f;
@@ -2636,10 +2636,10 @@ static void seq_run(work_t *w, int frames) {
 /* Build the effective parameter set for this block: base, then the locks the
  * current trig latched, then the FX LFOs on top. */
 static void build_effective(work_t *w, int frames) {
-    for (int s = 0; s < WORK_SLOTS; ++s)
+    for (int s = 0; s < WORK_STAGES; ++s)
         for (int i = 0; i < WORK_PARAMS; ++i)
             TRK(w)->eff[s][i] = TRK(w)->cfg[s].p[i];
-    for (int s = 0; s < WORK_SLOTS; ++s) TRK(w)->eff_machine[s] = TRK(w)->cfg[s].machine;
+    for (int s = 0; s < WORK_STAGES; ++s) TRK(w)->eff_machine[s] = TRK(w)->cfg[s].machine;
     w->eff_mix = w->mix;
 
     if (w->seq_on && w->held_mask) {
@@ -2679,7 +2679,7 @@ static void build_effective(work_t *w, int frames) {
             if (TRK(w)->menv_val <= 0.0f) { TRK(w)->menv_val = 0.0f; TRK(w)->menv_stage = 0.0f; }
         }
 
-        if (TRK(w)->menv.dest >= 0 && TRK(w)->menv.dest < WORK_SLOTS * WORK_PARAMS) {
+        if (TRK(w)->menv.dest >= 0 && TRK(w)->menv.dest < WORK_STAGES * WORK_PARAMS) {
             int slot = TRK(w)->menv.dest / WORK_PARAMS;
             int idx  = TRK(w)->menv.dest % WORK_PARAMS;
             int out  = TRK(w)->eff[slot][idx] +
@@ -2698,7 +2698,7 @@ static void build_effective(work_t *w, int frames) {
         TRK(w)->lfo_ph[n] += (float)frames / per;
         while (TRK(w)->lfo_ph[n] >= 1.0f) TRK(w)->lfo_ph[n] -= 1.0f;
 
-        if (L->dest < 0 || L->dest >= WORK_SLOTS * WORK_PARAMS) continue;
+        if (L->dest < 0 || L->dest >= WORK_STAGES * WORK_PARAMS) continue;
 
         float ph = TRK(w)->lfo_ph[n] + p01(L->phase);
         if (ph >= 1.0f) ph -= 1.0f;
@@ -2792,7 +2792,7 @@ work_t *work_create(const host_api_v1_t *host) {
          * machine do not generate bit-identical noise. */
         tr->rng = 0xC2B2AE35u ^ (uint32_t)(t * 0x27D4EB2Fu);
 
-        for (int i = 0; i < WORK_SLOTS; ++i) {
+        for (int i = 0; i < WORK_STAGES; ++i) {
             work_slot_t *s = &tr->slot[i];
             s->dl   = (float *)calloc((size_t)WORK_DLY_LEN * 2, sizeof(float));
             s->pre  = (float *)calloc((size_t)WORK_PRE_LEN * 2, sizeof(float));
@@ -2807,7 +2807,7 @@ work_t *work_create(const host_api_v1_t *host) {
                 work_destroy(w); return NULL;
             }
 
-            s->rng = 0x9E3779B9u ^ (uint32_t)((t * WORK_SLOTS + i) * 0x85EBCA6Bu);
+            s->rng = 0x9E3779B9u ^ (uint32_t)((t * WORK_STAGES + i) * 0x85EBCA6Bu);
             s->last_machine = WORK_FX_BYPASS;
 
             tr->cfg[i].machine = WORK_FX_BYPASS;
@@ -2827,7 +2827,7 @@ void work_destroy(work_t *w) {
     for (int t = 0; t < WORK_TRACKS; ++t) {
         work_track_t *tr = &w->trk[t];
         free(tr->sample);
-        for (int i = 0; i < WORK_SLOTS; ++i) {
+        for (int i = 0; i < WORK_STAGES; ++i) {
             free(tr->slot[i].dl);
             free(tr->slot[i].pre);
             free(tr->slot[i].comb);
@@ -2844,6 +2844,41 @@ void work_destroy(work_t *w) {
 /* A SOURCE machine replaces its input instead of processing it. Granulator is
  * deliberately NOT one: with no sample loaded it granulates the live input,
  * which is the behaviour it shipped with and which people may be relying on. */
+/* Which machines each stage will accept.
+ *
+ * The families are NOT complements. Granulator sits in the source family
+ * because that is where a player looks for it, but it still reads the stage's
+ * input when no sample is loaded -- which is what makes live granulation work
+ * from the source stage. Bypass belongs to both, because every stage needs a
+ * way to be empty.
+ *
+ * The counts matter as much as the membership: 21 effects and 6 sources,
+ * against 21 free palette pads. Adding a machine to the effect family without
+ * freeing a pad puts it out of reach of the surface entirely, which has now
+ * happened twice. */
+static int machine_in_src_family(int machine) {
+    return machine == WORK_FX_BYPASS || machine == WORK_FX_GRANULATOR ||
+           machine == WORK_FX_ONESHOT || machine == WORK_FX_POLYSAMPLE ||
+           machine == WORK_FX_SLICER  || machine == WORK_FX_WAVESCAN;
+}
+
+static int machine_in_fx_family(int machine) {
+    if (machine < 0 || machine >= WORK_FX_COUNT) return 0;
+    return machine == WORK_FX_BYPASS || !machine_in_src_family(machine);
+}
+
+int work_machine_fits_stage(int stage, int machine) {
+    if (machine < 0 || machine >= WORK_FX_COUNT) return 0;
+    if (stage == WORK_STAGE_SRC) return machine_in_src_family(machine);
+    if (stage > WORK_STAGE_SRC && stage < WORK_STAGES)
+        return machine_in_fx_family(machine);
+    return 0;
+}
+
+/* Machines that REPLACE the stage's input rather than processing it. Granulator
+ * is deliberately absent: it is a source you can also feed. This is the
+ * predicate the input mute and the voice filter both key off, and it is not the
+ * same question as "is it in the source family". */
 static int machine_is_source(int machine) {
     return machine == WORK_FX_ONESHOT || machine == WORK_FX_POLYSAMPLE ||
            machine == WORK_FX_SLICER || machine == WORK_FX_WAVESCAN;
@@ -2866,7 +2901,7 @@ void work_process(work_t *w, const int16_t *in, int16_t *out, int frames) {
     /* A machine change resets that slot's state so a reverb tail or delay
      * line from the previous machine cannot leak into the new one. This uses
      * the EFFECTIVE machine, so a per-step machine lock swaps cleanly too. */
-    for (int i = 0; i < WORK_SLOTS; ++i) {
+    for (int i = 0; i < WORK_STAGES; ++i) {
         if (TRK(w)->slot[i].last_machine != TRK(w)->eff_machine[i]) {
             int keep = TRK(w)->eff_machine[i];
             slot_reset(&TRK(w)->slot[i]);
@@ -2876,7 +2911,7 @@ void work_process(work_t *w, const int16_t *in, int16_t *out, int frames) {
 
     /* Multimode Filter envelope gate, from note events seen since last block */
     if (TRK(w)->note_pending) {
-        for (int i = 0; i < WORK_SLOTS; ++i) {
+        for (int i = 0; i < WORK_STAGES; ++i) {
             TRK(w)->slot[i].env_stage = 1.0f;
             for (int n = 0; n < WORK_LFOS; ++n)
                 if (TRK(w)->lfo[n].trig) TRK(w)->lfo_ph[n] = 0.0f;
@@ -2915,7 +2950,7 @@ void work_process(work_t *w, const int16_t *in, int16_t *out, int frames) {
         float dry_r = (float)in[f * 2 + 1] * (1.0f / 32768.0f) * in_gain;
         float l = dry_l, r = dry_r;
 
-        for (int i = 0; i < WORK_SLOTS; ++i) {
+        for (int i = 0; i < WORK_STAGES; ++i) {
             mctx_t m = { w, &TRK(w)->slot[i], TRK(w)->eff[i], frames };
             run_machine(&m, TRK(w)->eff_machine[i], &l, &r);
             l = sane(l);
@@ -2966,18 +3001,16 @@ static void nrpn_apply(work_t *w, int num, int value14) {
         work_set_param(w, "mix", val);
         return;
     }
-    /* Slot 3 landed after the map was published, and 27-31 is not eight wide.
-     * Rather than renumber a map someone may already have on a controller, it
-     * takes the free block at 80. */
+    /* The source stage, on the free block at 80 — mirroring the CC map above. */
     if (num >= 80 && num <= 87) {
-        snprintf(key, sizeof(key), "fx3_p%d", num - 79);
+        snprintf(key, sizeof(key), "src_p%d", num - 79);
         snprintf(val, sizeof(val), "%d", v7);
         work_set_param(w, key, val);
         return;
     }
     if (num == 88) {
         snprintf(val, sizeof(val), "%d", (value14 * (WORK_FX_COUNT - 1)) / 16383);
-        work_set_param(w, "machine3", val);
+        work_set_param(w, "src", val);
         return;
     }
     if (num >= 100 && num < 100 + WORK_PATTERNS) {   /* pattern select */
@@ -3012,17 +3045,20 @@ static void cc_apply(work_t *w, int cc, int v) {
     }
     if (cc == 26) { work_set_param(w, "mix", val); return; }
 
-    /* Slot 3, on the free block at 80 — see the NRPN note above. It also
-     * clears Move's own encoder CCs (71-78), which only matters if an
-     * external controller is echoing them. */
+    /* The SOURCE stage, on the free block at 80. It does not continue at 27
+     * because 27-31 is not eight controls wide, and because 8..26 was published
+     * meaning the inserts and the dry/wet -- which is still exactly what it
+     * means. Nothing anyone already mapped moved. It also clears Move's own
+     * encoder CCs (71-78), which only matters if an external controller is
+     * echoing them. */
     if (cc >= 80 && cc <= 87) {
-        snprintf(key, sizeof(key), "fx3_p%d", cc - 79);
+        snprintf(key, sizeof(key), "src_p%d", cc - 79);
         work_set_param(w, key, val);
         return;
     }
     if (cc == 88) {
         snprintf(val, sizeof(val), "%d", (v * (WORK_FX_COUNT - 1) + 63) / 127);
-        work_set_param(w, "machine3", val);
+        work_set_param(w, "src", val);
         return;
     }
 
@@ -3034,7 +3070,7 @@ static void cc_apply(work_t *w, int cc, int v) {
         if (fld > 6 || n >= WORK_LFOS) return;
         snprintf(key, sizeof(key), "lfo%d_%s", n + 1, F[fld]);
         if (fld == 0) snprintf(val, sizeof(val), "%d",
-                               (v * (WORK_SLOTS * WORK_PARAMS) + 63) / 127 - 1);
+                               (v * (WORK_STAGES * WORK_PARAMS) + 63) / 127 - 1);
         else if (fld == 3) snprintf(val, sizeof(val), "%d", (v * 6 + 63) / 127);
         else if (fld == 6) snprintf(val, sizeof(val), "%d", v >= 64 ? 1 : 0);
         work_set_param(w, key, val);
@@ -3045,7 +3081,7 @@ static void cc_apply(work_t *w, int cc, int v) {
         static const char *F[5] = {"dest", "atk", "hold", "dec", "depth"};
         snprintf(key, sizeof(key), "menv_%s", F[cc - 56]);
         if (cc == 56) snprintf(val, sizeof(val), "%d",
-                               (v * (WORK_SLOTS * WORK_PARAMS) + 63) / 127 - 1);
+                               (v * (WORK_STAGES * WORK_PARAMS) + 63) / 127 - 1);
         work_set_param(w, key, val);
         return;
     }
@@ -3129,7 +3165,7 @@ void work_on_midi(work_t *w, const uint8_t *msg, int len, int source) {
                 TRK(w)->note_vel = msg[2];
             } else if (len >= 3 && ((msg[0] & 0xF0) == 0x80 ||
                                     ((msg[0] & 0xF0) == 0x90 && msg[2] == 0))) {
-                for (int i = 0; i < WORK_SLOTS; ++i) TRK(w)->slot[i].env_stage = 4.0f;
+                for (int i = 0; i < WORK_STAGES; ++i) TRK(w)->slot[i].env_stage = 4.0f;
             }
             break;
     }
@@ -3196,24 +3232,51 @@ static void step_set_locks(work_step_t *st, const char *s) {
     }
 }
 
-/* "fx1_p3" -> slot 0, param 2. Returns 0 if the key is not of that shape. */
-/* "machine1".."machineN" and the "fx1".."fxN" aliases -> slot index, else -1.
- * One parser rather than a chain of strcmp, so adding a slot cannot leave one
- * spelling behind — which is exactly what left slot 3 unconfigurable. */
+/* "src" / "1" / "2" as a stage suffix -> stage index, else -1. Shared by the
+ * labels and eff getters so their spelling cannot drift from parse_machine_key's. */
+static int parse_stage_suffix(const char *sfx) {
+    /* "_src" is the readable spelling ("labels_src", not "labelssrc"); bare
+     * "src" is accepted too so the machine key and these stay one parser. */
+    if (strcmp(sfx, "_src") == 0 || strcmp(sfx, "src") == 0) return WORK_STAGE_SRC;
+    if (sfx[0] >= '1' && sfx[0] < '1' + WORK_INSERTS && sfx[1] == '\0')
+        return WORK_STAGE_FX1 + (sfx[0] - '1');
+    return -1;
+}
+
+/* Stage keys. The source stage is addressed as "src", the inserts as "fx1" and
+ * "fx2" (with "machine1"/"machine2" kept as aliases for the inserts, which is
+ * what those names already meant to every existing UI).
+ *
+ * Note the numbering: "fx1" is stage 1, not stage 0. The inserts are numbered
+ * as the player sees them -- insert one and insert two -- and the source stage
+ * is not an insert at all, so it is named rather than numbered. One parser
+ * rather than a chain of strcmp, so adding a stage cannot leave one spelling
+ * behind, which is exactly what left slot 3 unconfigurable before. */
 static int parse_machine_key(const char *key) {
-    int s = -1;
-    if (strncmp(key, "machine", 7) == 0 && key[8] == '\0') s = key[7] - '1';
-    else if (strncmp(key, "fx", 2) == 0 && key[3] == '\0') s = key[2] - '1';
-    return (s >= 0 && s < WORK_SLOTS) ? s : -1;
+    if (strcmp(key, "src") == 0) return WORK_STAGE_SRC;
+    int n = -1;
+    if (strncmp(key, "machine", 7) == 0 && key[8] == '\0') n = key[7] - '1';
+    else if (strncmp(key, "fx", 2) == 0 && key[3] == '\0') n = key[2] - '1';
+    if (n < 0 || n >= WORK_INSERTS) return -1;
+    return WORK_STAGE_FX1 + n;
 }
 
 static int parse_slot_param(const char *key, int *slot, int *idx) {
-    if (strncmp(key, "fx", 2) != 0) return 0;
-    if (key[2] < '1' || key[2] >= '1' + WORK_SLOTS) return 0;
-    if (strncmp(key + 3, "_p", 2) != 0) return 0;
-    int n = atoi(key + 5);
+    int stage = -1, off = 0;
+    if (strncmp(key, "src_p", 5) == 0) {
+        stage = WORK_STAGE_SRC;
+        off   = 5;
+    } else if (strncmp(key, "fx", 2) == 0 &&
+               key[2] >= '1' && key[2] < '1' + WORK_INSERTS &&
+               strncmp(key + 3, "_p", 2) == 0) {
+        stage = WORK_STAGE_FX1 + (key[2] - '1');
+        off   = 5;
+    } else {
+        return 0;
+    }
+    int n = atoi(key + off);
     if (n < 1 || n > WORK_PARAMS) return 0;
-    *slot = key[2] - '1';
+    *slot = stage;
     *idx  = n - 1;
     return 1;
 }
@@ -3239,7 +3302,7 @@ static void apply_state(work_t *w, const char *json) {
         TRK(w)->sample_path[i] = '\0';
     }
 
-    for (int s = 0; s < WORK_SLOTS; ++s) {
+    for (int s = 0; s < WORK_STAGES; ++s) {
         char key[16];
         snprintf(key, sizeof(key), "\"m%d\":", s + 1);
         if ((q = strstr(json, key)) != NULL) {
@@ -3282,7 +3345,7 @@ static void apply_state(work_t *w, const char *json) {
                 while (*c && *c != ',' && *c != ']') c++;
                 if (*c == ',') c++;
             }
-            TRK(w)->lfo[n].dest  = (int8_t)iclamp(v[0], -1, WORK_SLOTS * WORK_PARAMS - 1);
+            TRK(w)->lfo[n].dest  = (int8_t)iclamp(v[0], -1, WORK_STAGES * WORK_PARAMS - 1);
             TRK(w)->lfo[n].speed = (uint8_t)iclamp(v[1], 0, 127);
             TRK(w)->lfo[n].mult  = (uint8_t)iclamp(v[2], 0, 127);
             TRK(w)->lfo[n].wave  = (uint8_t)iclamp(v[3], 0, 127);
@@ -3476,6 +3539,11 @@ void work_set_param(work_t *w, const char *key, const char *val) {
         int s = parse_machine_key(key);
         if (s >= 0) {
         int mc = parse_machine(val);
+        /* A machine the stage does not accept is REFUSED, not clamped to
+         * something nearby. Silently substituting would leave a patch sounding
+         * wrong with no way to tell why -- and the source stage refusing a
+         * reverb is the whole reason the stages are typed. */
+        if (mc >= 0 && !work_machine_fits_stage(s, mc)) return;
         if (mc >= 0 && mc != TRK(w)->cfg[s].machine) {
             TRK(w)->cfg[s].machine = (uint8_t)mc;
             /* Loading a machine installs its defaults */
@@ -3643,7 +3711,7 @@ void work_set_param(work_t *w, const char *key, const char *val) {
     if (strncmp(key, "menv_", 5) == 0) {
         const char *f = key + 5;
         int v = atoi(val);
-        if      (strcmp(f, "dest")  == 0) TRK(w)->menv.dest   = (int8_t)iclamp(v, -1, WORK_SLOTS * WORK_PARAMS - 1);
+        if      (strcmp(f, "dest")  == 0) TRK(w)->menv.dest   = (int8_t)iclamp(v, -1, WORK_STAGES * WORK_PARAMS - 1);
         else if (strcmp(f, "atk")   == 0) TRK(w)->menv.attack = (uint8_t)iclamp(v, 0, 127);
         else if (strcmp(f, "hold")  == 0) TRK(w)->menv.hold   = (uint8_t)iclamp(v, 0, 127);
         else if (strcmp(f, "dec")   == 0) TRK(w)->menv.decay  = (uint8_t)iclamp(v, 0, 127);
@@ -3714,7 +3782,7 @@ void work_set_param(work_t *w, const char *key, const char *val) {
         work_lfo_cfg_t *L = &TRK(w)->lfo[key[3] - '1'];
         const char *f = key + 5;
         int v = atoi(val);
-        if      (strcmp(f, "dest")  == 0) L->dest  = (int8_t)iclamp(v, -1, WORK_SLOTS * WORK_PARAMS - 1);
+        if      (strcmp(f, "dest")  == 0) L->dest  = (int8_t)iclamp(v, -1, WORK_STAGES * WORK_PARAMS - 1);
         else if (strcmp(f, "spd")   == 0) L->speed = (uint8_t)iclamp(v, 0, 127);
         else if (strcmp(f, "mult")  == 0) L->mult  = (uint8_t)iclamp(v, 0, 127);
         else if (strcmp(f, "wave")  == 0) L->wave  = (uint8_t)iclamp(v, 0, 127);
@@ -3775,9 +3843,8 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
 
     /* The values actually reaching the DSP this block, after locks and LFOs.
      * The UI shows these live so a moving parameter reads as moving. */
-    if (strncmp(key, "eff", 3) == 0 && key[3] >= '1' &&
-        key[3] < '1' + WORK_SLOTS && key[4] == '\0') {
-        int s = key[3] - '1';
+    if (strncmp(key, "eff", 3) == 0 && parse_stage_suffix(key + 3) >= 0) {
+        int s = parse_stage_suffix(key + 3);
         int n = 0;
         for (int i = 0; i < WORK_PARAMS; ++i)
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s%d",
@@ -3788,7 +3855,7 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
      * this in one round-trip rather than one per slot. */
     if (strcmp(key, "effm") == 0) {
         int n = 0;
-        for (int s = 0; s < WORK_SLOTS; ++s)
+        for (int s = 0; s < WORK_STAGES; ++s)
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%d,",
                                     TRK(w)->eff_machine[s]), cap);
         return nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%d",
@@ -3886,6 +3953,23 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
         if (n >= 0) return work_lock_label(w, n, buf, buf_len);
     }
 
+    /* The machine CODES in each family, as the palette needs them. Codes, not
+     * names or positions: a code is what a preset stores and what "machines"
+     * indexes, so a UI that filtered by position would drift the moment a
+     * machine was appended. The UI reads these once and maps pads to codes. */
+    if (strcmp(key, "src_codes") == 0 || strcmp(key, "fx_codes") == 0) {
+        const int stage = (key[0] == 's') ? WORK_STAGE_SRC : WORK_STAGE_FX1;
+        int n = 0, written = 0;
+        for (int mc = 0; mc < WORK_FX_COUNT; ++mc) {
+            if (!work_machine_fits_stage(stage, mc)) continue;
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s%d",
+                                    written ? "," : "", mc), cap);
+            written = 1;
+        }
+        if (!written) { buf[0] = '\0'; return 0; }
+        return n;
+    }
+
     if (strcmp(key, "conds") == 0) {
         int n = 0;
         for (int i = 0; i < WORK_COND_COUNT; ++i)
@@ -3901,9 +3985,8 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
     /* The eight knob labels for whichever machine a slot currently holds.
      * The UI reads these rather than carrying its own copy of the table —
      * a second copy in JS is a copy that drifts. */
-    if (strncmp(key, "labels", 6) == 0 && key[6] >= '1' &&
-        key[6] < '1' + WORK_SLOTS && key[7] == '\0') {
-        int mc = TRK(w)->cfg[key[6] - '1'].machine;
+    if (strncmp(key, "labels", 6) == 0 && parse_stage_suffix(key + 6) >= 0) {
+        int mc = TRK(w)->cfg[parse_stage_suffix(key + 6)].machine;
         int n = 0;
         for (int i = 0; i < WORK_PARAMS; ++i)
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s%s",
@@ -4006,7 +4089,7 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
             }
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "\""), cap);
         }
-        for (int s = 0; s < WORK_SLOTS; ++s) {
+        for (int s = 0; s < WORK_STAGES; ++s) {
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
                                     ",\"m%d\":%d,\"p%d\":[", s + 1,
                                     TRK(w)->cfg[s].machine, s + 1), cap);
@@ -4027,7 +4110,7 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
           * every saved preset depends on, the same values go out again as
           * strings under an "f" prefix. apply_state ignores them, so they
           * cost nothing on the way back in. */
-        for (int sl = 0; sl < WORK_SLOTS; ++sl) {
+        for (int sl = 0; sl < WORK_STAGES; ++sl) {
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
                                     ",\"fp%d\":\"", sl + 1), cap);
             for (int i = 0; i < WORK_PARAMS; ++i)

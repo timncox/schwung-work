@@ -57,20 +57,27 @@ import {
 
 /* ------------------------------------------------------------------ pages */
 
-const N_SLOTS       = 3;
+/* Stages, mirroring work_core.h: stage 0 is SRC, then the inserts. The engine
+ * keys them "src" / "fx1" / "fx2" — note that fx1 is stage 1, not stage 0. */
+const N_INSERTS     = 2;
+const N_STAGES      = 1 + N_INSERTS;
+const STAGE_SRC     = 0;
+const STAGE_KEY     = ['src', 'fx1', 'fx2'];
+const STAGE_LABEL   = ['SRC', 'FX 1', 'FX 2'];
+
 const PAGE_MACHINES = 0;
-const PAGE_FX1      = 1;          /* slot N's page is PAGE_FX1 + N */
-/* The LFO pages follow the FX pages and need no named constant, because
+const PAGE_STAGE1   = 1;          /* stage N's page is PAGE_STAGE1 + N */
+/* The LFO pages follow the stage pages and need no named constant, because
  * nothing branches on them; PAGES and PAGE_NAME carry their layout. Both are
- * derived from N_SLOTS so a slot cannot be added without its page. */
-const PAGE_COUNT    = 1 + N_SLOTS + 2;
+ * derived from N_STAGES so a stage cannot be added without its page. */
+const PAGE_COUNT    = 1 + N_STAGES + 2;
 
-const PAGE_NAME = ['MACHINES', 'FX 1', 'FX 2', 'FX 3', 'LFO 1', 'LFO 2'];
+const PAGE_NAME = ['MACHINES', ...STAGE_LABEL, 'LFO 1', 'LFO 2'];
 
-/* Which slot a page edits, or -1 for the machine and LFO pages. */
+/* Which stage a page edits, or -1 for the machine and LFO pages. */
 function pageSlot(p) {
-    const s = p - PAGE_FX1;
-    return s >= 0 && s < N_SLOTS ? s : -1;
+    const s = p - PAGE_STAGE1;
+    return s >= 0 && s < N_STAGES ? s : -1;
 }
 
 const WAVE_NAME = ['Tri', 'Sine', 'Sqr', 'Saw', 'Ramp', 'Exp', 'Rand'];
@@ -78,8 +85,12 @@ const WAVE_NAME = ['Tri', 'Sine', 'Sqr', 'Saw', 'Ramp', 'Exp', 'Rand'];
 /* Per-page knob descriptors: DSP key, fallback label, range and step. FX page
  * labels come from the DSP at runtime, so their `label` here is only used
  * before the first fetch completes. */
+/* DEST reaches every stage parameter. It was frozen at 15 — two stages' worth —
+ * which quietly made the third unmodulatable from this build. Derive it. */
+const DEST_MAX = N_STAGES * 8 - 1;
+
 const LFO_KNOBS = (n) => ([
-    { key: `lfo${n}_dest`,  label: 'DEST',  min: -1, max: 15,  step: 1 },
+    { key: `lfo${n}_dest`,  label: 'DEST',  min: -1, max: DEST_MAX, step: 1 },
     { key: `lfo${n}_spd`,   label: 'SPD',   min: 0,  max: 127, step: 1 },
     { key: `lfo${n}_mult`,  label: 'MULT',  min: 0,  max: 127, step: 1 },
     { key: `lfo${n}_wave`,  label: 'WAVE',  min: 0,  max: 6,   step: 1 },
@@ -88,33 +99,33 @@ const LFO_KNOBS = (n) => ([
     { key: `lfo${n}_trig`,  label: 'TRIG',  min: 0,  max: 1,   step: 1 }
 ]);
 
-const FX_KNOBS = (slot) => {
+const FX_KNOBS = (stage) => {
     const out = [];
     for (let i = 0; i < 8; i++) {
-        out.push({ key: `fx${slot}_p${i + 1}`, label: `${String.fromCharCode(65 + i)}`,
+        out.push({ key: `${STAGE_KEY[stage]}_p${i + 1}`,
+                   label: `${String.fromCharCode(65 + i)}`,
                    min: 0, max: 127, step: 1 });
     }
     return out;
 };
 
-const PAGES = [
-    /* `max` for the two machine selects is a placeholder — the real bound is
-     * taken from the engine's own list in applyMachineRange(). A constant here
-     * is what left Granulator unreachable when the 21st machine landed. */
-    [ { key: 'machine1', label: 'FX 1', min: 0, max: 0,   step: 1 },
-      { key: 'machine2', label: 'FX 2', min: 0, max: 0,   step: 1 },
-      { key: 'machine3', label: 'FX 3', min: 0, max: 0,   step: 1 },
-      { key: 'mix',      label: 'MIX',  min: 0, max: 127, step: 1 } ],
-    FX_KNOBS(1),
-    FX_KNOBS(2),
-    FX_KNOBS(3),
-    LFO_KNOBS(1),
-    LFO_KNOBS(2)
-];
+/* `max` for the machine selects is a placeholder — the real bound is the length
+ * of that stage's FAMILY, taken from the engine in applyMachineRange(). A
+ * constant here is what left Granulator unreachable when the 21st machine
+ * landed. The page is built from N_STAGES so a stage cannot be left off it. */
+const MACHINE_PAGE = [];
+for (let s = 0; s < N_STAGES; s++)
+    MACHINE_PAGE.push({ key: STAGE_KEY[s], label: STAGE_LABEL[s],
+                        min: 0, max: 0, step: 1 });
+MACHINE_PAGE.push({ key: 'mix', label: 'MIX', min: 0, max: 127, step: 1 });
+
+const PAGES = [MACHINE_PAGE];
+for (let s = 0; s < N_STAGES; s++) PAGES.push(FX_KNOBS(s));
+PAGES.push(LFO_KNOBS(1), LFO_KNOBS(2));
 
 /* Is this key one of the machine selects? A chain of === comparisons is what
  * left slot 3 out of the label refresh when the slot was added. */
-function isMachineKey(key) { return /^machine[1-9]$/.test(key); }
+function isMachineKey(key) { return STAGE_KEY.indexOf(key) >= 0; }
 
 /* ------------------------------------------------------------------- state */
 
@@ -163,23 +174,59 @@ function readNum(key) {
     return true;
 }
 
-/* The machine select's range is the engine's list length, never a constant. */
+/* Each stage selects from its own FAMILY, so the knob's range is that family's
+ * length — not the full machine list. Sweeping raw machine codes would stall on
+ * every code the stage refuses, which reads as a broken encoder. */
+let familyCodes = [];           /* [stage] -> array of machine codes */
+
 function applyMachineRange() {
-    const max = machineList.length > 0 ? machineList.length - 1 : 0;
-    for (let s = 0; s < N_SLOTS; s++) PAGES[PAGE_MACHINES][s].max = max;
+    for (let s = 0; s < N_STAGES; s++) {
+        const fam = familyCodes[s];
+        PAGES[PAGE_MACHINES][s].max = fam && fam.length ? fam.length - 1 : 0;
+    }
+}
+
+/* The knob mirrors a POSITION in the family; the engine speaks machine codes.
+ * These two convert, and both fall back rather than throwing on a family that
+ * has not arrived yet. */
+function codeToPos(stage, code) {
+    const fam = familyCodes[stage];
+    if (!fam) return 0;
+    const i = fam.indexOf(code);
+    return i < 0 ? 0 : i;
+}
+function posToCode(stage, pos) {
+    const fam = familyCodes[stage];
+    if (!fam || !fam.length) return 0;
+    return fam[Math.max(0, Math.min(fam.length - 1, pos))];
 }
 
 /* Resolve both slot machine names from the mirror. Local — costs no reads. */
 function syncMachineNames() {
-    for (let s = 0; s < N_SLOTS; s++) {
-        const code = values[`machine${s + 1}`];
+    for (let s = 0; s < N_STAGES; s++) {
+        const code = values[STAGE_KEY[s]];
         if (code === undefined) machineName[s] = '--';
         else machineName[s] = machineList[code] || `#${code}`;
     }
 }
 
+/* Ask the engine which machines each stage accepts. Read once — the families
+ * are compiled in — and never guessed at locally, because a JS copy of a table
+ * the engine owns is a copy that drifts. */
+function readFamilies() {
+    const src = readRaw('src_codes');
+    if (src === null) return false;
+    const fx = readRaw('fx_codes');
+    if (fx === null) return false;
+    const s2n = (t) => t.split(',').map((x) => parseInt(x, 10)).filter(Number.isFinite);
+    familyCodes = [s2n(src)];
+    for (let i = 1; i < N_STAGES; i++) familyCodes.push(s2n(fx));
+    applyMachineRange();
+    return true;
+}
+
 function readLabels(s) {
-    const lab = readRaw(`labels${s + 1}`);
+    const lab = readRaw(`labels${s === STAGE_SRC ? '_src' : s}`);
     if (lab === null) return false;
     fxLabels[s] = lab.split(',');
     labelsDirty[s] = false;
@@ -195,14 +242,17 @@ function refreshStep() {
         const list = readRaw('machines');
         if (list) {
             machineList = list.split(',');
-            applyMachineRange();
             syncMachineNames();
             needsRedraw = true;
         }
         return;
     }
+    if (familyCodes.length === 0) {
+        if (readFamilies()) needsRedraw = true;
+        return;
+    }
 
-    for (let s = 0; s < N_SLOTS; s++) {
+    for (let s = 0; s < N_STAGES; s++) {
         if (labelsDirty[s]) {
             if (readLabels(s)) needsRedraw = true;
             return;
@@ -359,6 +409,23 @@ function adjustKnob(i, delta) {
     const cur = values[k.key];
     if (cur === undefined) { burst = BURST_READS; return; }
 
+    /* Machine selects move through the stage's FAMILY by position, then convert
+     * back to a code on the way out. Stepping the raw code instead would walk
+     * into machines the stage refuses, and the engine refuses rather than
+     * substituting — so the encoder would appear to jam. */
+    const machineStage = isMachineKey(k.key) ? STAGE_KEY.indexOf(k.key) : -1;
+    if (machineStage >= 0) {
+        const pos = codeToPos(machineStage, cur) + scaledMove(k, delta);
+        const code = posToCode(machineStage, pos);
+        if (code === cur) return;
+        values[k.key] = code;
+        host_module_set_param(k.key, `${code}`);
+        labelsDirty[machineStage] = true;
+        syncMachineNames();
+        needsRedraw = true;
+        return;
+    }
+
     let v = cur + scaledMove(k, delta);
     if (v < k.min) v = k.min;
     if (v > k.max) v = k.max;
@@ -464,6 +531,7 @@ globalThis.init = function () {
     shiftHeld = false;
     values = {};
     machineList = [];
+    familyCodes = [];
     machineName = ['--', '--', '--'];
     fxLabels = [[], [], []];
     labelsDirty = [true, true, true];

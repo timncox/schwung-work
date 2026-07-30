@@ -54,6 +54,7 @@ int main(void) {
 
     /* A representative engine state: two machines loaded, a pattern with
      * trigs, locks, a condition and micro timing. */
+    work_set_param(w, "src", "22");           /* Polysample */
     work_set_param(w, "machine1", "1");       /* Clock Pitch */
     work_set_param(w, "machine2", "18");      /* Voidspace Reverb */
     work_set_param(w, "seq_on", "1");
@@ -84,16 +85,23 @@ int main(void) {
     for (size_t i = 0; i < sizeof(simple) / sizeof(simple[0]); ++i) emit(w, simple[i]);
 
     char key[32];
-    /* Driven by WORK_SLOTS rather than a literal 2, so a new slot's keys land
-     * in the fixture automatically. The hardcoded list is what made every UI
-     * read of slot 3 look like a key the engine does not serve. */
-    for (int s = 1; s <= WORK_SLOTS; ++s) {
-        snprintf(key, sizeof(key), "machine%d", s); emit(w, key);
-        snprintf(key, sizeof(key), "fx%d", s);      emit(w, key);
-        snprintf(key, sizeof(key), "labels%d", s);  emit(w, key);
-        snprintf(key, sizeof(key), "eff%d", s);     emit(w, key);
+    /* Driven by the stage constants rather than literals, so a stage's keys land
+     * in the fixture automatically. A hardcoded list is what made every UI read
+     * of slot 3 look like a key the engine does not serve.
+     *
+     * Stage naming, mirroring work_core.h: the source stage is "src", the
+     * inserts are "fx1".."fxN" with "machineN" as an alias. Note "fx1" is stage
+     * 1, not stage 0. */
+    emit(w, "src_codes");
+    emit(w, "fx_codes");
+    static const char *STAGE[WORK_STAGES] = { "src", "fx1", "fx2" };
+    for (int s = 0; s < WORK_STAGES; ++s) {
+        snprintf(key, sizeof(key), "%s", STAGE[s]);        emit(w, key);
+        snprintf(key, sizeof(key), "labels%s", s ? STAGE[s] + 2 : "_src"); emit(w, key);
+        snprintf(key, sizeof(key), "eff%s",    s ? STAGE[s] + 2 : "_src"); emit(w, key);
+        if (s) { snprintf(key, sizeof(key), "machine%d", s); emit(w, key); }
         for (int p = 1; p <= 8; ++p) {
-            snprintf(key, sizeof(key), "fx%d_p%d", s, p);
+            snprintf(key, sizeof(key), "%s_p%d", STAGE[s], p);
             emit(w, key);
         }
     }
@@ -129,10 +137,11 @@ int main(void) {
 
     /* Probe the writable keys with values that must change the read-back. */
     struct { const char *key; const char *probe; } probes[] = {
-        {"machine1", "5"}, {"machine2", "3"}, {"machine3", "4"},
+        {"src", "22"}, {"machine1", "5"}, {"machine2", "3"},
+        {"fx1", "5"}, {"fx2", "3"},
         {"fx1", "7"}, {"fx2", "9"}, {"fx3", "11"}, {"mix", "77"},
         {"seq_on", "0"}, {"seq_len", "9"}, {"fill", "1"}, {"seq_clear", "1"},
-        {"fx1_p1", "42"}, {"fx2_p8", "13"}, {"fx3_p4", "55"},
+        {"src_p1", "40"}, {"fx1_p1", "42"}, {"fx2_p8", "13"}, {"fx3_p4", "55"},
         /* Every LFO field, on every LFO. A partial probe list here is worse
          * than none: the UI harnesses use `settable` to flag writes the engine
          * would ignore, and a key missing from this list reads as a bug in the
