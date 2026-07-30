@@ -849,6 +849,88 @@ static void test_micro_timing(void) {
           seen[1]);
 }
 
+/* Micro-timing belongs to the STEP, so it belongs to one lane. Two ways that
+ * can go wrong once there is more than one lane, and both did:
+ *
+ *   - a nudge on a track nobody is looking at does nothing, because the
+ *     sequencer read the SELECTED lane's micro for every track;
+ *   - a nudge on the selected track moves all eight.
+ *
+ * Which together mean the audio depended on where the UI was pointed. The old
+ * single shared edge detector had the same shape: once two lanes are genuinely
+ * on different steps, whichever advanced first swallowed the other's trig.
+ *
+ * Measured by ear rather than by reading the playhead — the question is when a
+ * voice STARTS, and a test that read seq_pos would pass just as happily if the
+ * nudge never reached one. */
+/* Declared rather than moved: the sample fixtures live down with the transfer
+ * tests, and hauling them up here to satisfy one caller would put a hundred
+ * lines of unrelated diff in the way of reading this change. */
+static void make_ramp(int16_t *pcm, int frames);
+static void send_sample(work_t *w, const int16_t *pcm, int frames, int chunk_frames);
+
+static int first_sounding_block(int nudge, int on_selected_track)
+{
+    work_t *w = work_create(&host);
+    assert(w);
+
+    /* The voice lives on the LAST track; the UI stays pointed at track 1. So
+     * "the selected track" and "the track making the sound" are different
+     * tracks, which is what the bug needed to hide. */
+    const int voice = WORK_TRACKS - 1;
+    char tk[8];
+    snprintf(tk, sizeof tk, "%d", voice);
+
+    static int16_t pcm[4000 * 2];
+    make_ramp(pcm, 4000);
+    work_set_param(w, "track", tk);
+    send_sample(w, pcm, 4000, 1000);
+    set_stage(w, WORK_STAGE_SRC, WORK_FX_ONESHOT);
+    work_set_param(w, "seq_len", "4");
+
+    char step[32];
+    snprintf(step, sizeof step, "1:0:%d:0", on_selected_track ? 0 : nudge);
+    work_set_param(w, "step0", step);
+
+    /* The selected track gets a nudge but no voice, so if its micro is what
+     * the sequencer reads, the sounding track moves with it. */
+    work_set_param(w, "track", "0");
+    snprintf(step, sizeof step, "0:0:%d:0", on_selected_track ? nudge : 0);
+    work_set_param(w, "step0", step);
+
+    work_set_param(w, "seq_on", "1");
+    uint8_t start[1] = { 0xFA };
+    work_on_midi(w, start, 1, MOVE_MIDI_SOURCE_EXTERNAL);
+
+    int16_t in[BLOCK * 2] = {0}, out[BLOCK * 2];
+    int at = -1;
+    for (int b = 0; b < 400 && at < 0; ++b) {
+        work_process(w, in, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i)
+            if (out[i] != 0) { at = b; break; }
+    }
+    work_destroy(w);
+    return at;
+}
+
+static void test_micro_timing_is_per_lane(void) {
+    printf("micro timing moves its own lane, and only its own\n");
+
+    const int plain  = first_sounding_block(0,  0);
+    const int nudged = first_sounding_block(20, 0);
+    const int other  = first_sounding_block(20, 1);
+
+    CHECK(plain >= 0, "the un-nudged voice never sounded at all");
+    CHECK(nudged > plain,
+          "a nudge on the sounding track did nothing: it started at block %d "
+          "either way — the sequencer is reading some other lane's micro",
+          plain);
+    CHECK(other == plain,
+          "a nudge on a SILENT track moved the sounding one: block %d against "
+          "%d — one lane's micro is being applied to all of them",
+          other, plain);
+}
+
 static void test_seq_state_roundtrip(void) {
     printf("a full 64-step pattern round-trips through the state blob\n");
     work_t *a = work_create(&host);
@@ -1352,6 +1434,71 @@ static void test_third_lfo(void) {
           "LFO 3 changed output by under 5%% (%lld vs %lld)",
           (long long)mod, (long long)stat);
     work_destroy(b);
+}
+
+/* Channel N drives track N, and a channel with no track behind it drives
+ * nothing. The second half is the one worth writing down: the tempting
+ * behaviour is to fall back to the selected track, which would make the same
+ * message do different things depending on where the UI was pointed. */
+static void test_midi_channel_selects_the_track(void) {
+    printf("a MIDI channel addresses its own track, and only its own\n");
+    work_t *w = work_create(&host);
+    assert(w);
+
+    /* Give every track the same machine, so the only thing distinguishing
+     * them is which one the message reached. */
+    for (int t = 0; t < WORK_TRACKS; ++t) {
+        char tk[8];
+        snprintf(tk, sizeof tk, "%d", t);
+        work_set_param(w, "track", tk);
+        set_stage(w, WORK_STAGE_FX1, WORK_FX_LPF);
+        work_set_param(w, "fx1_p3", "0");
+    }
+
+    for (int t = 0; t < WORK_TRACKS; ++t) {
+        uint8_t cc[3] = { (uint8_t)(0xB0 | t), 10, (uint8_t)(20 + t) };
+        work_on_midi(w, cc, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+    }
+
+    for (int t = 0; t < WORK_TRACKS; ++t) {
+        char tk[8], s[16];
+        snprintf(tk, sizeof tk, "%d", t);
+        work_set_param(w, "track", tk);
+        work_get_param(w, "fx1_p3", s, sizeof s);
+        CHECK(atoi(s) == 20 + t,
+              "channel %d should have set track %d's parameter to %d, not %s",
+              t + 1, t + 1, 20 + t, s);
+    }
+
+    /* A channel above the track count reaches nothing at all — not track 0,
+     * not the selected track. */
+    work_set_param(w, "track", "0");
+    if (WORK_TRACKS < 16) {
+        uint8_t spare[3] = { (uint8_t)(0xB0 | WORK_TRACKS), 10, 111 };
+        work_on_midi(w, spare, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+        for (int t = 0; t < WORK_TRACKS; ++t) {
+            char tk[8], s[16];
+            snprintf(tk, sizeof tk, "%d", t);
+            work_set_param(w, "track", tk);
+            work_get_param(w, "fx1_p3", s, sizeof s);
+            CHECK(atoi(s) != 111,
+                  "a CC on channel %d, which has no track, landed on track %d",
+                  WORK_TRACKS + 1, t + 1);
+        }
+    }
+
+    /* Selection must survive the round trip: a CC borrows it and has to give
+     * it back, or an incoming controller silently repoints the UI. */
+    work_set_param(w, "track", "0");
+    if (WORK_TRACKS > 1) {
+        uint8_t cc[3] = { 0xB1, 10, 77 };
+        work_on_midi(w, cc, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+        char s[16];
+        work_get_param(w, "track", s, sizeof s);
+        CHECK(atoi(s) == 0, "a CC on channel 2 left track %s selected", s);
+    }
+
+    work_destroy(w);
 }
 
 static void test_midi_cc(void) {
@@ -2201,6 +2348,59 @@ static void send_sample(work_t *w, const int16_t *pcm, int frames, int chunk_fra
         work_set_param(w, "sample_chunk", b64);
     }
     work_set_param(w, "sample_end", "1");
+}
+
+/* Notes route by channel too, so eight tracks can be played from one external
+ * sequencer without eight instances of anything.
+ *
+ * Observed by EAR rather than by reading note_pending back: which track is
+ * armed is engine bookkeeping, and a test that reads it would pass just as
+ * happily if the note never reached a voice. So exactly one track gets a
+ * source machine and a sample, and the check is whether the output moves. */
+static void test_midi_notes_route_by_channel(void) {
+    printf("a note plays the track its channel names\n");
+    work_t *w = work_create(&host);
+    assert(w);
+
+    const int last = WORK_TRACKS - 1;
+    char tk[8];
+    snprintf(tk, sizeof tk, "%d", last);
+
+    static int16_t pcm[2000 * 2];
+    make_ramp(pcm, 2000);
+    work_set_param(w, "track", tk);
+    send_sample(w, pcm, 2000, 500);
+    set_stage(w, WORK_STAGE_SRC, WORK_FX_ONESHOT);
+    work_set_param(w, "track", "0");
+
+    int16_t in[BLOCK * 2] = {0}, out[BLOCK * 2];
+
+    /* A note on a channel with no track behind it must not play anything. */
+    if (WORK_TRACKS < 16) {
+        uint8_t spare[3] = { (uint8_t)(0x90 | WORK_TRACKS), 60, 100 };
+        work_on_midi(w, spare, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+        int64_t e = 0;
+        for (int b = 0; b < 8; ++b) {
+            work_process(w, in, out, BLOCK);
+            for (int i = 0; i < BLOCK * 2; ++i) e += llabs(out[i]);
+        }
+        CHECK(e == 0,
+              "a note on channel %d, which has no track, played something (%lld)",
+              WORK_TRACKS + 1, (long long)e);
+    }
+
+    /* The channel that does name the loaded track plays it. */
+    uint8_t on[3] = { (uint8_t)(0x90 | last), 60, 100 };
+    work_on_midi(w, on, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+    int64_t e = 0;
+    for (int b = 0; b < 8; ++b) {
+        work_process(w, in, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) e += llabs(out[i]);
+    }
+    CHECK(e > 0, "a note on channel %d did not play track %d",
+          last + 1, last + 1);
+
+    work_destroy(w);
 }
 
 /* A preset that restores every parameter, LFO, pattern and lock of a source
@@ -3218,6 +3418,7 @@ int main(void) {
     test_trig_conditions();
     test_machine_lock();
     test_micro_timing();
+    test_micro_timing_is_per_lane();
     test_seq_state_roundtrip();
     test_seq_blob_tiny_buffers();
     test_seq_clear();
@@ -3231,6 +3432,7 @@ int main(void) {
     test_mod_envelope();
     test_third_lfo();
     test_midi_cc();
+    test_midi_channel_selects_the_track();
 
     printf("\n-- Tier A: bank, song, history, transform --\n");
     test_pattern_bank();
@@ -3243,6 +3445,7 @@ int main(void) {
     test_feedback_monitor();
     test_hw_input_flag();
 
+    test_midi_notes_route_by_channel();
     test_state_carries_the_sample_path();
     test_remote_ui_poll_digest();
     test_remote_ui_bridge();

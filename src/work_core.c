@@ -330,6 +330,11 @@ typedef struct {
     float                lgain, rgain; /* resolved once per block from those   */
 
     uint8_t              src_trig_pending;  /* this track's trig wants a voice */
+    /* Edge detection, PER LANE. Micro-timing shifts a step's start time, and
+     * it is a property of the step in the lane — so two lanes are genuinely
+     * not on the same step at the same moment, and one shared edge detector
+     * would let whichever lane advanced first swallow the others' trigs. */
+    int                  last_step;
 
     /* Effective values, recomputed per block as
      *   base (cfg) -> parameter locks from the current step -> FX LFOs
@@ -448,8 +453,7 @@ struct work {
     uint8_t              song_rep;
     uint8_t              fill;
     double               seq_frame;     /* frames since the pattern restarted */
-    int                  seq_pos;       /* step whose locks are currently held */
-    int                  last_step;     /* for edge detection                  */
+    int                  seq_pos;       /* the SELECTED lane's step, for display */
     int                  pass;          /* pattern repetitions, for A:B and 1ST*/
     int                  pre_result;    /* last conditional outcome, for PRE   */
     uint32_t             cond_rng;      /* probability conditions              */
@@ -2550,19 +2554,31 @@ static int cond_fires(work_t *w, int cond) {
     }
 }
 
-/* The step whose start time we have most recently passed. Micro-timing shifts
- * a step's start by micro/24 of a step, so the active step is not simply
- * floor(position / step). Recomputed per block, which puts micro-timing
- * resolution at one block (~2.9 ms) — finer than a 1/24 step at any sane
- * tempo, but not sample-accurate. */
-static int active_step(const work_t *w, double sf) {
-    int len = CURPAT(w)->len ? CURPAT(w)->len : 1;
+/* Re-arm every lane's edge detector, so the next block fires whatever step it
+ * lands on instead of treating it as already played. Every lane, because they
+ * each keep their own — see work_track_t.last_step. */
+static void seq_rearm(work_t *w) {
+    for (int t = 0; t < WORK_TRACKS; ++t) w->trk[t].last_step = -1;
+}
+
+/* The step in THIS LANE whose start time we have most recently passed.
+ * Micro-timing shifts a step's start by micro/24 of a step, so the active step
+ * is not simply floor(position / step). Recomputed per block, which puts
+ * micro-timing resolution at one block (~2.9 ms) — finer than a 1/24 step at
+ * any sane tempo, but not sample-accurate.
+ *
+ * Per lane, and that is the point: micro is stored on the step, so it belongs
+ * to one track's pattern. Reading it from the selected lane — which is what
+ * this did while there was only one — would have made a nudge on track 1 move
+ * all eight, made a nudge on track 5 do nothing at all, and made the audio
+ * depend on where the UI happened to be pointed. */
+static int active_step(const work_lane_t *ln, int len, double seq_frame, double sf) {
     int best = -1;
     double best_start = -1e18;
 
     for (int i = 0; i < len; ++i) {
-        double start = (double)i * sf + ((double)CURLANE(w)->step[i].micro / 24.0) * sf;
-        if (start <= w->seq_frame && start > best_start) {
+        double start = (double)i * sf + ((double)ln->step[i].micro / 24.0) * sf;
+        if (start <= seq_frame && start > best_start) {
             best_start = start;
             best = i;
         }
@@ -2597,7 +2613,7 @@ static void song_advance(work_t *w) {
         w->song_row = (uint8_t)((w->song_row + 1) % w->song_len);
     }
     w->cur_pattern = (uint8_t)iclamp(w->song[w->song_row].pattern, 0, WORK_PATTERNS - 1);
-    w->last_step = -1;
+    seq_rearm(w);
 }
 
 /* Start every SRC voice from the top of its window. Called by a full trig and
@@ -2733,14 +2749,17 @@ static void seq_run(work_t *w, int frames) {
         song_advance(w);            /* a completed pass may change pattern */
     }
 
-    int cur = active_step(w, sf);
-    w->seq_pos = cur;
-    if (cur == w->last_step) return;
-    w->last_step = cur;
-
-    /* One playhead, every lane. */
-    for (int t = 0; t < WORK_TRACKS; ++t)
-        lane_fire(w, &w->trk[t], &LANE(w, t)->step[cur], cur);
+    /* One transport, but each lane finds its own step in it: micro-timing is
+     * per step and therefore per lane, so at any moment two lanes can be on
+     * different steps. Each keeps its own edge detector to match. */
+    for (int t = 0; t < WORK_TRACKS; ++t) {
+        work_track_t *tr = &w->trk[t];
+        int cur = active_step(LANE(w, t), len, w->seq_frame, sf);
+        if (t == w->sel_track) w->seq_pos = cur;   /* the playhead the UI draws */
+        if (cur == tr->last_step) continue;
+        tr->last_step = cur;
+        lane_fire(w, tr, &LANE(w, t)->step[cur], cur);
+    }
 }
 
 /* The voice filter's fields in edit-page order, which is also lock-index order.
@@ -2942,7 +2961,7 @@ work_t *work_create(const host_api_v1_t *host) {
     /* Sequencer starts off, so the audio_fx build behaves as a plain static
      * FX chain until something turns it on. */
     w->seq_on    = 0;
-    w->last_step = -1;
+    seq_rearm(w);
     w->cond_rng  = 0x6C078965u;
 
     /* Every pattern in the bank gets its defaults: PROB 100 (always) on each
@@ -3384,6 +3403,25 @@ static int note_may_trigger(int note, int source) {
     return note >= 68 && note <= 99;
 }
 
+/* Which track a channel-voice message addresses.
+ *
+ * Track N listens on MIDI channel N: channel 1 drives track 1, channel 8
+ * drives track 8, and channels above the track count are ignored rather than
+ * folded onto anything. Decided 2026-07-29 over the alternative of addressing
+ * tracks through NRPN — a channel per track is what every hardware sequencer
+ * already speaks, so the whole CC 8..28 map works per track unchanged instead
+ * of needing a second, parallel addressing scheme.
+ *
+ * Ignoring the spare channels rather than routing them to the selected track
+ * is the deliberate half. A fallback would make the same message mean
+ * different things depending on where the UI happened to be pointed, which is
+ * exactly the sort of surprise that makes a rig unreproducible. Nothing is
+ * released yet, so there is no map in the wild to keep working. */
+static int midi_track(uint8_t status) {
+    const int ch = status & 0x0F;
+    return ch < WORK_TRACKS ? ch : -1;
+}
+
 void work_on_midi(work_t *w, const uint8_t *msg, int len, int source) {
     if (!w || !msg || len < 1) return;
 
@@ -3401,7 +3439,7 @@ void work_on_midi(work_t *w, const uint8_t *msg, int len, int source) {
              * an FX pattern has no note state worth resuming mid-bar, and
              * landing on step 0 is what a performer expects. */
             w->seq_frame  = 0.0;
-            w->last_step  = -1;
+            seq_rearm(w);
             w->pass       = 0;
             w->pre_result = 0;
             break;
@@ -3416,6 +3454,10 @@ void work_on_midi(work_t *w, const uint8_t *msg, int len, int source) {
             if (len >= 3 && (msg[0] & 0xF0) == 0xB0 &&
                 (source == MOVE_MIDI_SOURCE_EXTERNAL ||
                  source == MOVE_MIDI_SOURCE_FX_BROADCAST)) {
+                const int t = midi_track(msg[0]);
+                if (t < 0) break;
+                /* The duplicate guard keeps the whole status byte, so the same
+                 * CC on two channels is two messages and not one repeated. */
                 int dup = (msg[0] == w->cc_last[0] && msg[1] == w->cc_last[1] &&
                            msg[2] == w->cc_last[2] &&
                            w->cc_frames - w->cc_last_frames <= 256);
@@ -3424,7 +3466,22 @@ void work_on_midi(work_t *w, const uint8_t *msg, int len, int source) {
                     w->cc_last[1] = msg[1];
                     w->cc_last[2] = msg[2];
                     w->cc_last_frames = w->cc_frames;
+
+                    /* cc_apply reaches the track through work_set_param, which
+                     * addresses the SELECTED one — so the channel's track is
+                     * selected for the duration of the write and put back.
+                     *
+                     * Deliberately reusing the parameter path rather than
+                     * giving MIDI its own: the CC map, the NRPN assembly and
+                     * the machine-family gate are all in there, and a second
+                     * copy addressed at a track pointer is a second copy that
+                     * drifts. Selection is UI state that nothing in
+                     * work_set_param reads back, and the render path never
+                     * looks at it at all. */
+                    const uint8_t prev = w->sel_track;
+                    w->sel_track = (uint8_t)t;
                     cc_apply(w, msg[1], msg[2]);
+                    w->sel_track = prev;
                 }
                 break;
             }
@@ -3432,12 +3489,17 @@ void work_on_midi(work_t *w, const uint8_t *msg, int len, int source) {
                 note_may_trigger(msg[1], source)) {
                 /* Remember the note so a polyphonic SRC machine can pitch its
                  * voice by it. 60 is unity, matching the sampler convention. */
-                TRK(w)->note_pending = 1;
-                TRK(w)->note_num = msg[1];
-                TRK(w)->note_vel = msg[2];
+                const int t = midi_track(msg[0]);
+                if (t < 0) break;
+                w->trk[t].note_pending = 1;
+                w->trk[t].note_num = msg[1];
+                w->trk[t].note_vel = msg[2];
             } else if (len >= 3 && ((msg[0] & 0xF0) == 0x80 ||
                                     ((msg[0] & 0xF0) == 0x90 && msg[2] == 0))) {
-                for (int i = 0; i < WORK_STAGES; ++i) TRK(w)->slot[i].env_stage = 4.0f;
+                const int t = midi_track(msg[0]);
+                if (t < 0) break;
+                for (int i = 0; i < WORK_STAGES; ++i)
+                    w->trk[t].slot[i].env_stage = 4.0f;
             }
             break;
     }
@@ -3876,7 +3938,7 @@ static void apply_state(work_t *w, const char *json) {
             lane_unpack(LANE(w, t), w->lane_buf, plen);
             w->trk[t].held_mask = 0;
         }
-        w->last_step = -1;
+        seq_rearm(w);
     } else {
         apply_track_state(TRK(w), json, "");
     }
@@ -3900,7 +3962,7 @@ static void apply_state(work_t *w, const char *json) {
         memset(CURLANE(w)->step, 0, sizeof(CURLANE(w)->step));
         for (int i = 0; i < WORK_STEPS; ++i) CURLANE(w)->step[i].prob = 100;
         for (int t = 0; t < WORK_TRACKS; ++t) w->trk[t].held_mask = 0;
-        w->last_step = -1;
+        seq_rearm(w);
 
         const char *c = q + 7;
         while (*c && *c != '"') {
@@ -4141,14 +4203,16 @@ void work_set_param(work_t *w, const char *key, const char *val) {
     if (strcmp(key, "seq_on") == 0) {
         int on = atoi(val) ? 1 : 0;
         if (on && !w->seq_on) {          /* restart cleanly when switched on */
-            w->seq_frame = 0.0; w->last_step = -1; w->pass = 0; w->pre_result = 0;
+            w->seq_frame = 0.0; seq_rearm(w); w->pass = 0; w->pre_result = 0;
         }
         w->seq_on = (uint8_t)on;
         return;
     }
     if (strcmp(key, "seq_len") == 0) {
         CURPAT(w)->len = (uint8_t)iclamp(atoi(val), 1, WORK_STEPS);
-        if (w->last_step >= CURPAT(w)->len) w->last_step = -1;
+        /* A lane parked past the new end would never see an edge again. */
+        for (int t = 0; t < WORK_TRACKS; ++t)
+            if (w->trk[t].last_step >= CURPAT(w)->len) w->trk[t].last_step = -1;
         return;
     }
     if (strcmp(key, "fill") == 0) { w->fill = (uint8_t)(atoi(val) ? 1 : 0); return; }
@@ -4159,7 +4223,7 @@ void work_set_param(work_t *w, const char *key, const char *val) {
     /* ------------------------------------------------- bank, song, history */
     if (strcmp(key, "pattern") == 0) {
         int p = iclamp(atoi(val), 0, WORK_PATTERNS - 1);
-        if (p != w->cur_pattern) { w->cur_pattern = (uint8_t)p; w->last_step = -1; }
+        if (p != w->cur_pattern) { w->cur_pattern = (uint8_t)p; seq_rearm(w); }
         return;
     }
     if (strcmp(key, "page_mask") == 0) {
@@ -4204,14 +4268,14 @@ void work_set_param(work_t *w, const char *key, const char *val) {
         if (!w->undo_valid) return;
         w->redo_buf = *CURPAT(w); w->redo_valid = 1;
         *CURPAT(w) = w->undo_buf; w->undo_valid = 0;
-        w->last_step = -1;
+        seq_rearm(w);
         return;
     }
     if (strcmp(key, "redo") == 0) {
         if (!w->redo_valid) return;
         w->undo_buf = *CURPAT(w); w->undo_valid = 1;
         *CURPAT(w) = w->redo_buf; w->redo_valid = 0;
-        w->last_step = -1;
+        seq_rearm(w);
         return;
     }
     if (strcmp(key, "memorize") == 0) { w->memo_buf = *CURPAT(w); w->memo_valid = 1; return; }
@@ -4219,7 +4283,7 @@ void work_set_param(work_t *w, const char *key, const char *val) {
         if (!w->memo_valid) return;
         push_undo(w);
         *CURPAT(w) = w->memo_buf;
-        w->last_step = -1;
+        seq_rearm(w);
         return;
     }
 
@@ -4248,7 +4312,7 @@ void work_set_param(work_t *w, const char *key, const char *val) {
             for (int i = 0; i < len; ++i)
                 P->step[i].active = rnd_01(&w->cond_rng) < 0.5f ? 1 : 0;
         }
-        w->last_step = -1;
+        seq_rearm(w);
         return;
     }
     if (strcmp(key, "quantize") == 0) {
@@ -4285,7 +4349,7 @@ void work_set_param(work_t *w, const char *key, const char *val) {
         memset(CURLANE(w)->step, 0, sizeof(CURLANE(w)->step));
         for (int i = 0; i < WORK_STEPS; ++i) CURLANE(w)->step[i].prob = 100;
         for (int t = 0; t < WORK_TRACKS; ++t) w->trk[t].held_mask = 0;
-        w->last_step = -1;
+        seq_rearm(w);
         return;
     }
 
@@ -4323,7 +4387,7 @@ void work_set_param(work_t *w, const char *key, const char *val) {
                     }
                 }
             }
-            w->last_step = -1;   /* re-evaluate: the edited step may be current */
+            seq_rearm(w);   /* re-evaluate: the edited step may be current */
             return;
         }
     }
