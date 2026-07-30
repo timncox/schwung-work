@@ -456,6 +456,8 @@ void    work_process(work_t *w, const int16_t *in, int16_t *out, int frames);
  * MIDI CC, external only (Move's own encoders arrive as internal CCs):
  *   CC 8..15   insert FX 1 params A..H  CC 16..23  insert FX 2 params A..H
  *   CC 24/25   insert 1 / 2 machine     CC 26      global dry/wet
+ *   CC 27      track level              CC 28      track pan
+ *   CC 27      track level              CC 28      track pan
  *   CC 32..38  FX LFO 1                 CC 40..46  FX LFO 2
  *   CC 48..54  FX LFO 3                 CC 56..60  modulation envelope
  *   CC 64      sequencer on/off         CC 65      fill

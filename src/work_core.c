@@ -3161,9 +3161,10 @@ static void nrpn_apply(work_t *w, int num, int value14) {
         work_set_param(w, key, val);
         return;
     }
-    if (num == 26) {
+    if (num >= 26 && num <= 28) {
+        static const char *const K[3] = { "mix", "level", "pan" };
         snprintf(val, sizeof(val), "%d", v7);
-        work_set_param(w, "mix", val);
+        work_set_param(w, K[num - 26], val);
         return;
     }
     /* The source stage, on the free block at 80 — mirroring the CC map above. */
@@ -3210,6 +3211,11 @@ static void cc_apply(work_t *w, int cc, int v) {
         return;
     }
     if (cc == 26) { work_set_param(w, "mix", val); return; }
+    /* Track level and pan, next to the dry/wet they sit beside on the GLOBAL
+     * page. 27 and 28 were free: the source stage went to 80 precisely because
+     * 27..31 is not eight controls wide, which leaves room for exactly two. */
+    if (cc == 27) { work_set_param(w, "level", val); return; }
+    if (cc == 28) { work_set_param(w, "pan",   val); return; }
 
     /* The SOURCE stage, on the free block at 80. It does not continue at 27
      * because 27-31 is not eight controls wide, and because 8..26 was published

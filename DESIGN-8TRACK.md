@@ -1,9 +1,13 @@
 # Work — the eight-track restructure
 
-Status: **steps 1 and 2 done (2026-07-29); 3 onwards not started.** Read this
+Status: **steps 1-3 done (2026-07-29); 4 onwards not started.** Read this
 before touching `work_core.h`. It exists because the refactor spans more work
 than one session holds, and because two of its decisions are expensive to
 reverse.
+
+**Step 4 is blocked on the MIDI decision below** — channel-per-track vs a track
+field in the NRPN number. Eight lanes need to know which one before the CC map
+grows a track axis.
 
 ## Why
 
@@ -123,14 +127,22 @@ Saved presets carry the v1 global map (0..27, or 0..36 if anything from the
 `four-insert-slots` branch ever shipped — it must not). The state blob gains
 `"v":2`. A v1 blob loads into **track 1** with an index translation:
 
-| v1 index | meaning | v2 index |
+Written before step 2 landed, this table described migrating from the
+PRE-promotion map. What shipped covers both, because step 2 changed what v1's
+indices mean without changing the version:
+
+| v1 index (post-promotion) | meaning | v2 index |
 |---|---|---|
-| 0..7 | slot 1 params | 8..15 (becomes insert FX 1) |
-| 8..15 | slot 2 params | 16..23 (becomes insert FX 2) |
-| 16 | slot 1 machine | 25 |
-| 17 | slot 2 machine | 26 |
-| 18 | global dry/wet | stays global, not a track lock |
-| 19..27 | slot 3 | dropped, with a message |
+| 0..7 | SRC params | 0..7 |
+| 8..15 | FX 1 params | 8..15 |
+| 16 | SRC machine | 24 |
+| 17 | FX 1 machine | 25 |
+| 18 | global dry/wet | dropped, and reported |
+| 19..26 | FX 2 params | 16..23 |
+| 27 | FX 2 machine | 26 |
+
+A blob written BEFORE the promotion has every index shifted one stage earlier.
+`state_stage_shift()` tells them apart by the flat-mirror key names.
 
 A v1 patch whose slot 1 held a source machine is the common case, and the
 translation above puts that source in insert FX 1 rather than the SRC stage.
@@ -216,8 +228,19 @@ Each step lands with tests green; nothing here needs a big-bang merge.
    Several passed for the wrong reason the moment families were enforced — the
    machine sweep loaded every machine into an insert, where every source was
    refused, and swept an empty chain.
-3. Lock map rebuilt per-track, `lock_mask` widened, v1 -> v2 preset migration
-   with its own tests.
+3. ~~Lock map rebuilt per-track, `lock_mask` widened, v1 -> v2 preset
+   migration with its own tests.~~ **done.** The map came out at 36 with the
+   stage parameters CONTIGUOUS, level and pan made real rather than reserved,
+   and the global dry/wet dropped as a lockable. What it turned up:
+   - a trig in the same block as a machine change was swallowed — the
+     machine-change reset cleared the voice seq_run had just started
+   - `work_src_trigger` switched on the BASE machine, so a machine lock's
+     machine was never started at all
+   - the chain editor's MIX row had been drawing at `y=undefined` since the
+     third stage landed, invisible because `undefined < 0` is false
+   The migration needed one thing the plan did not anticipate: "v":1 covers TWO
+   maps, and only the flat-mirror key names date a blob to before or after the
+   SRC promotion.
 4. `WORK_TRACKS` = 8; sequencer grows to eight lanes.
 5. LFOs split into voice and FX families, two of each per track.
 6. Surface: TRACK modifier, per-stage palette, screen track strip.

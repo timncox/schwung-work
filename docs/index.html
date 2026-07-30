@@ -544,11 +544,12 @@ footer a{color:var(--rust)}
           <tr><td>Condition</td><td>19 options, above</td></tr>
           <tr><td>Micro-timing</td><td>&plusmn;23 twenty-fourths of a step</td></tr>
           <tr><td>Retrig</td><td>off, 1/4, 1/8, 1/16, 1/32</td></tr>
-          <tr><td>Parameter locks</td><td>28 lockable parameters</td></tr>
+          <tr><td>Parameter locks</td><td>36 lockable parameters</td></tr>
         </tbody>
       </table>
       <h3>Lockable parameters</h3>
-      <p>Twenty-four stage parameters &mdash; eight each for SRC, FX&nbsp;1 and FX&nbsp;2 &mdash; plus all three machine selects and the global dry/wet. Locking a machine select swaps that stage&rsquo;s machine for that step, within its own family: a lock cannot put a reverb in the source stage any more than a pad can.</p>
+      <p>Twenty-four stage parameters &mdash; eight each for SRC, FX&nbsp;1 and FX&nbsp;2 &mdash; plus all three machine selects, the track&rsquo;s level and pan, and the seven voice-filter controls. Locking a machine select swaps that stage&rsquo;s machine for that step, within its own family: a lock cannot put a reverb in the source stage any more than a pad can, and the step still fires &mdash; you hear the machine you locked.</p>
+      <p>The global dry/wet is deliberately <em>not</em> lockable. It belongs to the whole chain rather than to this track, and <strong>LEVEL</strong> is the per-step control that replaces it.</p>
       <div class="callout">
         <strong>Retrig, precisely</strong>
         Retrig restarts the FX LFOs and the filter envelope. It does <em>not</em> stutter the audio &mdash; the Decimator&rsquo;s <code>FREZ</code> parameter is the machine for that.

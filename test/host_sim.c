@@ -1439,6 +1439,16 @@ static void test_midi_cc(void) {
               ctrl, reached, stage, family);
     }
 
+    /* Track level and pan, on the two free numbers beside the dry/wet. */
+    uint8_t cclvl[3] = {0xB0, 27, 40};
+    work_on_midi(w, cclvl, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+    work_get_param(w, "level", s, sizeof(s));
+    CHECK(atoi(s) == 40, "CC 27 did not set the track level (%s)", s);
+    uint8_t ccpan[3] = {0xB0, 28, 20};
+    work_on_midi(w, ccpan, 3, MOVE_MIDI_SOURCE_EXTERNAL);
+    work_get_param(w, "pan", s, sizeof(s));
+    CHECK(atoi(s) == 20, "CC 28 did not set the track pan (%s)", s);
+
     uint8_t ccr[3] = {0xB0, 66, 127};            /* live record on */
     work_on_midi(w, ccr, 3, MOVE_MIDI_SOURCE_EXTERNAL);
     work_get_param(w, "live_rec", s, sizeof(s));

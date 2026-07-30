@@ -94,10 +94,23 @@ build behaves as a plain static chain until something turns it on; the overtake
 wrapper turns it on at create.
 
 - 64 steps (four 16-step pages), per-step trig / condition / micro-timing / retrig.
-- **28 lockable parameters**: 24 stage parameters, all three machine selects,
-  global mix. The lock index is part of the pattern format — **append only**.
-  A machine lock goes through the same family gate as any other machine write,
-  so a lock cannot put a reverb in the source stage.
+- **36 lockable parameters, per track**: 24 stage parameters (contiguous, so an
+  index is `stage * 8 + knob`), the three machine selects, track level and pan,
+  and the seven voice-filter fields. The index is part of the pattern format —
+  **append only**, and it was rebuilt exactly once, in v0.9.0, because the
+  eight-lane format broke anyway. Add new lockables at 36.
+- The **global dry/wet is not lockable**. It is not per-track, and "track 5
+  step 3 changes the global mix" is the cross-track surprise that makes a
+  pattern unpredictable; track LEVEL replaces it. A v1 mix lock is dropped on
+  load and `get_param("load_note")` says so.
+- A machine lock goes through the same family gate as any other machine write,
+  so a lock cannot put a reverb in the source stage. It also fires the locked
+  machine's voice — the trigger reads the EFFECTIVE machine and parameters, so
+  a firing trig is a complete snapshot of the voice as well as the knobs.
+- **Preset versions:** the blob is `"v":2`. v1 covers two different maps (before
+  and after the SRC promotion) and nothing in the lock data separates them — the
+  flat-mirror key names do, because they were renumbered in the same change.
+  `fp3` dates a blob to before it, `fp_src` to after.
 - Resolution order per block is **base → locks → FX LFOs**, which is Elektron's:
   a lock sets the value, the LFO moves around whatever the lock set.
 - **Lock semantics:** each firing trig is a complete snapshot — parameters it
