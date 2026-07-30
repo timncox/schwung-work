@@ -287,6 +287,7 @@ footer a{color:var(--rust)}
 
   <p class="lede"><strong>Work</strong> is the <code>audio_fx</code> build. It drops into a Signal Chain slot or a Master FX slot and processes whatever is upstream.</p>
   <p class="lede"><strong>Overwork</strong> is the <code>overtake</code> build. It takes over Move&rsquo;s whole surface and runs the same twenty-six machines on the live input &mdash; mic, line, or USB-C &mdash; with a step sequencer driving parameter locks.</p>
+  <p class="lede">Both are <strong>eight tracks</strong>. A track is a source machine, two insert effects, a voice filter, three LFOs, a modulation envelope, level and pan &mdash; and its own lane in the sequencer, with its own trigs, its own parameter locks and its own micro-timing. The chain build hands its input to track 1; the other seven play from their own sources.</p>
 
   <h3>Why the surface maps so cleanly</h3>
   <p>The gesture that defines hardware step sequencing &mdash; hold a step, turn an encoder, and that step remembers the value &mdash; needs eight encoders and a row of trig keys under your fingers at once. Move has eight knobs and sixteen dedicated step buttons, so it is a 1:1 map rather than an approximation.</p>
@@ -432,6 +433,19 @@ footer a{color:var(--rust)}
     <button type="button" id="shiftToggle" class="shifttoggle" aria-pressed="false">Hold SHIFT</button>
     <div class="padgrid" id="mapPads"></div>
     <p class="padinfo" id="padInfo" role="status" aria-live="polite">Select a pad to read what it does.</p>
+
+    <h3>Changing track</h3>
+    <p>Everything above &mdash; the palette, the knobs, the pattern on the step buttons &mdash; belongs to the selected track. Two ways to move:</p>
+    <table>
+      <caption>Track selection</caption>
+      <thead><tr><th scope="col">Gesture</th><th scope="col">Does</th></tr></thead>
+      <tbody>
+        <tr><td><strong>UP</strong> / <strong>DOWN</strong></td><td>next / previous track. Stops at the ends rather than wrapping.</td></tr>
+        <tr><td><strong>MENU</strong> + step 1&ndash;8</td><td>jump straight to that track. While MENU is held the step buttons show the tracks, not the pattern: bright is the selected one, lit means a source machine is loaded.</td></tr>
+      </tbody>
+    </table>
+    <p>The bar under the screen title is all eight tracks at once &mdash; the selected one solid, any track with trigs underlined &mdash; so you can see where your material is without leaving the page you are on.</p>
+
     <h3>Step LED colours</h3>
     <table>
       <caption>What the step buttons are telling you</caption>
@@ -453,13 +467,15 @@ footer a{color:var(--rust)}
       <caption>Work, in a chain slot</caption>
       <thead><tr><th scope="col">Control</th><th scope="col">Function</th></tr></thead>
       <tbody>
-        <tr><td>Jog turn</td><td>move between pages: Machines, FX 1, FX 2, LFO 1, LFO 2</td></tr>
+        <tr><td>Jog turn</td><td>move between pages: Machines, SRC, FX 1, FX 2, LFO 1, LFO 2</td></tr>
+        <tr><td><strong>Shift + jog turn</strong></td><td><strong>move between tracks.</strong> Stops at the ends rather than wrapping, and the page title says which track you are on.</td></tr>
         <tr><td>Jog click</td><td>jump back to the Machines page</td></tr>
         <tr><td>Shift + jog click</td><td>swap the module in this slot</td></tr>
         <tr><td>Knobs 1&ndash;8</td><td>the current page&rsquo;s eight parameters</td></tr>
       </tbody>
     </table>
-    <p>The Machines page picks both machines and the global dry/wet. Knob labels follow whichever machine is loaded &mdash; they are read from the DSP, so they always match.</p>
+    <p>The Machines page picks all three machines, the global dry/wet, and this track&rsquo;s level and pan. Knob labels follow whichever machine is loaded &mdash; they are read from the DSP, so they always match.</p>
+    <p>Track selection is on the jog rather than a knob because it is navigation, not a parameter: changing track replaces every value on the page, exactly as changing page does. Only track 1 receives the chain&rsquo;s input; the others play from their own source machines and their own sequencer lanes, which is what makes a Signal Chain slot able to hold something closer to an instrument than an effect.</p>
   </div>
 </section>
 
@@ -579,19 +595,23 @@ footer a{color:var(--rust)}
   <h3>Modulation</h3>
   <p>Three FX LFOs and an AHD modulation envelope that restarts on every firing trig. Resolution order is base &rarr; parameter lock &rarr; envelope &rarr; LFOs, so each stage rides the one before it.</p>
 
-  <h3>MIDI CC</h3>
+  <h3>MIDI</h3>
+  <p><strong>Track N listens on channel N.</strong> Channel 1 drives track 1, channel 8 drives track 8, and the map below is the same on every one of them &mdash; so eight tracks come off one external sequencer without anything new to learn. A channel above the eighth reaches nothing at all, rather than falling through to whichever track you happen to be looking at.</p>
   <p>External CC only &mdash; Move&rsquo;s own encoders arrive as internal CCs and are ignored, and a duplicate inside two blocks is dropped.</p>
   <table>
-    <caption>CC map</caption>
+    <caption>CC map, per channel</caption>
     <thead><tr><th scope="col">CC</th><th scope="col">Reaches</th></tr></thead>
     <tbody>
       <tr><td><code>8&ndash;15</code> / <code>16&ndash;23</code></td><td>FX 1 / FX 2 parameters A&ndash;H</td></tr>
       <tr><td><code>24</code> / <code>25</code> / <code>26</code></td><td>FX 1 machine, FX 2 machine, dry/wet</td></tr>
+      <tr><td><code>27</code> / <code>28</code></td><td>track level, track pan</td></tr>
       <tr><td><code>32</code> / <code>40</code> / <code>48</code></td><td>FX LFO 1 / 2 / 3, seven fields each</td></tr>
       <tr><td><code>56&ndash;60</code></td><td>modulation envelope</td></tr>
       <tr><td><code>64</code> / <code>65</code> / <code>66</code></td><td>sequencer, fill, live record</td></tr>
+      <tr><td><code>80&ndash;87</code> / <code>88</code></td><td>source parameters A&ndash;H, source machine</td></tr>
     </tbody>
   </table>
+  <p>The source stage sits at 80 rather than continuing after 26, because 27&ndash;31 is not eight controls wide &mdash; and because 8&ndash;26 was published meaning the inserts and the dry/wet, which is still exactly what it means.</p>
 
   <h3>Presets</h3>
   <p><strong>Shift + jog click</strong> opens the preset browser. The jog scrolls, a click loads, and the top entry saves a new one; the clear pad deletes the selected preset. Presets are stored outside the module directory, so reinstalling Overwork does not remove them.</p>

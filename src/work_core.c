@@ -4635,6 +4635,30 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
         return nclamp(snprintf(buf, buf_len, "%d", w->sel_track), cap);
     if (strcmp(key, "tracks") == 0)
         return nclamp(snprintf(buf, buf_len, "%d", WORK_TRACKS), cap);
+
+    /* Everything the track strip draws, in ONE read: per track, the number of
+     * active steps in the current pattern and the machine loaded in its source
+     * stage, as "<trigs>:<machine>" separated by commas.
+     *
+     * One key rather than eight because a parameter read is a blocking SPI
+     * round-trip of about 23 ms — eight of them is 184 ms of the audio thread's
+     * param budget to redraw a strip, every time the selection moves. The same
+     * reasoning already put the playhead and the effective values in a single
+     * bulk read; this is that rule applied to the one view that is inherently
+     * about all eight tracks at once. */
+    if (strcmp(key, "track_map") == 0) {
+        int n = 0;
+        for (int t = 0; t < WORK_TRACKS; ++t) {
+            const work_lane_t *ln = &w->pat[w->cur_pattern].lane[t];
+            int trigs = 0;
+            for (int i = 0; i < CURPAT(w)->len; ++i)
+                if (ln->step[i].active) trigs++;
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s%d:%d",
+                                    t ? "," : "", trigs,
+                                    w->trk[t].cfg[WORK_STAGE_SRC].machine), cap);
+        }
+        return n;
+    }
     if (strcmp(key, "level") == 0)
         return nclamp(snprintf(buf, buf_len, "%d", TRK(w)->level), cap);
     if (strcmp(key, "pan") == 0)

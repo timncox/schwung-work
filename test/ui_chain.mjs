@@ -73,6 +73,22 @@ const SCREEN_H = 64;
  * to be wide enough that a layout which overflows here would overflow there. */
 const CHAR_W = 6;
 
+/* Keys that mean the same thing whatever track is selected. Everything else
+ * the engine reaches through TRK(w) — the selected track — so the mock has to
+ * as well.
+ *
+ * A flat store would make a UI that never re-read anything on a track change
+ * look correct, because every track would answer with the same values. That is
+ * not a hypothetical: the first version of the track tests below passed
+ * against a flat store while the UI invalidated only one stage of its mirror.
+ */
+const GLOBAL_KEYS = new Set([
+    'machines', 'conds', 'src_codes', 'fx_codes', 'tracks', 'track',
+    'mix', 'seq_on', 'seq_len', 'seq_pos', 'fill', 'pattern', 'page_mask',
+    'song_on', 'song_len', 'song_pos', 'live_rec', 'monitor', 'hw_input',
+    'undo_state', 'rui_poll', 'state', 'state_len', 'load_note', 'track_map'
+]);
+
 function makeHost() {
     const store = Object.assign({}, contract.get);
     const writes = [];
@@ -83,6 +99,18 @@ function makeHost() {
     const screen = [];
     let failNextReads = 0;
 
+    /* Per-track overlays, created on demand. Track 0 IS `store`, so every test
+     * that never touches the track knob behaves exactly as before. */
+    const overlay = new Map();
+    const curTrack = () => parseInt(store.track, 10) || 0;
+    const slotFor = (t) => {
+        if (t === 0) return store;
+        if (!overlay.has(t)) overlay.set(t, {});
+        return overlay.get(t);
+    };
+    const isGlobal = (key) =>
+        GLOBAL_KEYS.has(key) || key.startsWith('labels') || key.startsWith('locklabel');
+
     const host = {
         host_module_get_param(key) {
             roundTrips.push(key);
@@ -91,6 +119,13 @@ function makeHost() {
              * must not treat it as one — that is what used to snap the slot
              * back to Bypass under load. */
             if (failNextReads > 0) { failNextReads--; return null; }
+            if (!isGlobal(key)) {
+                const slot = slotFor(curTrack());
+                /* An untouched track answers with the engine's DEFAULTS, not
+                 * with track 0's values — which is the difference the UI has to
+                 * notice when the selection moves. */
+                if (slot !== store) return key in slot ? slot[key] : '0';
+            }
             if (key in store) return store[key];
             unknownReads.add(key);
             return null;
@@ -101,6 +136,7 @@ function makeHost() {
             const known = settable.has(key)
                 || [...settable].some((s) => s.replace(/\d+/g, '#') === fam);
             if (!known) unknownWrites.add(key);
+            if (!isGlobal(key)) { slotFor(curTrack())[key] = `${val}`; return; }
             store[key] = `${val}`;
         },
         clear_screen() { screen.length = 0; },
@@ -456,6 +492,110 @@ async function testMachineChangeRefreshesLabels() {
           'the knob labels for the changed stage were never refreshed');
 }
 
+/* Turn the jog with SHIFT held — the chain editor's track control. */
+const SHIFT = 49;
+function jogTrack(ctx, dir) {
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 127));
+    ctx.host.onMidiMessageInternal(cc(JOG, dir > 0 ? 1 : 127));
+    ctx.host.onMidiMessageInternal(cc(SHIFT, 0));
+}
+
+/* The chain editor's only way to reach the other seven tracks.
+ *
+ * The range has to come from the engine — a hardcoded 8 here would offer
+ * tracks a one-track build refuses, and the engine refusing a write is exactly
+ * what makes an encoder feel jammed. Same rule, same reason, as the machine
+ * selects' range.
+ */
+async function testTrackJogFollowsTheEngine() {
+    console.log('shift + jog reaches every track the engine has, and no more');
+    const ctx = await loadUI();
+    ctx.host.init();
+    settle(ctx, 80);
+
+    const nTracks = parseInt(contract.get.tracks, 10);
+    check(nTracks > 1, `the contract says ${nTracks} track(s); this test needs more`);
+
+    /* Far past the end: it must stop at the last track rather than writing an
+     * index the engine will refuse, and must not wrap the way pages do. */
+    ctx.writes.length = 0;
+    for (let i = 0; i < nTracks * 3; i++) { jogTrack(ctx, +1); settle(ctx, 4); }
+    const up = ctx.writes.filter((w) => w.key === 'track').map((w) => parseInt(w.val, 10));
+    check(up.length > 0, 'shift + jog wrote no track at all');
+    check(Math.max(...up) === nTracks - 1,
+          `shift + jog reached track ${Math.max(...up)}, the last is ${nTracks - 1}`);
+
+    ctx.writes.length = 0;
+    for (let i = 0; i < nTracks * 3; i++) { jogTrack(ctx, -1); settle(ctx, 4); }
+    const down = ctx.writes.filter((w) => w.key === 'track').map((w) => parseInt(w.val, 10));
+    check(Math.min(...down) === 0, `shift + jog went to track ${Math.min(...down)}`);
+
+    /* And an unshifted jog must still change PAGE, not track — the two share
+     * one control, so the modifier has to actually separate them. */
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(JOG, 1));
+    check(!ctx.writes.some((w) => w.key === 'track'),
+          'a plain jog changed the track instead of the page');
+}
+
+/* Everything on screen belongs to the selected track, so moving the selection
+ * has to drop the lot. Showing track 1's parameter values under track 2's
+ * machine names is worse than showing nothing: it reads as the knobs having
+ * quietly stopped working.
+ *
+ * Checked against the SCREEN, not against which keys were re-read. The first
+ * version of this test asserted that `level` and `pan` appeared in ctx.reads
+ * after the change — and passed while the UI invalidated a single stage,
+ * because the background refresh cycles through the page's knobs anyway and
+ * would have re-read them regardless. It was measuring the refresh loop, not
+ * the invalidation.
+ */
+async function testTrackChangeInvalidatesTheWholeMirror() {
+    console.log('changing track puts the NEW track\'s values on screen');
+    const ctx = await loadUI();
+    ctx.host.init();
+    settle(ctx, 120);
+
+    /* Make track 1 distinctive: a machine nothing else is using, and a level
+     * no default would produce. */
+    const distinct = longestIn(FX_FAMILY);
+    ctx.store[STAGE_KEY[1]] = `${distinct}`;
+    ctx.store.level = '117';
+    settle(ctx, 120);
+
+    const shown = () => ctx.screen.map((s) => s.text).join(' ');
+    check(shown().includes(MACHINES[distinct]),
+          `track 1's machine is not on screen to begin with: ${shown()}`);
+    check(shown().includes('117'), `track 1's level is not on screen: ${shown()}`);
+
+    ctx.reads.length = 0;
+    jogTrack(ctx, +1);
+    check(ctx.reads.length === 0, 'the jog handler read the DSP on the input path');
+
+    /* ONE tick, not a full settle.
+     *
+     * The background refresh walks the current page's knobs and would repair
+     * the mirror within a few ticks whether or not the track change dropped
+     * anything — so a test that settles first cannot tell invalidation from
+     * the absence of it, and the first version of this check settled 300 ticks
+     * and passed against a UI that cleared a single stage.
+     *
+     * What invalidation actually buys is that the previous track's values are
+     * never on screen, not even for the handful of frames before the refresh
+     * arrives. Which is the whole point: a stale number that corrects itself a
+     * moment later is worse than a dash, because it is briefly believable. */
+    ctx.host.tick();
+    check(!shown().includes(MACHINES[distinct]),
+          `straight after the track change the screen still shows track 1's machine: ${shown()}`);
+    check(!shown().includes('117'),
+          `straight after the track change the screen still shows track 1's level: ${shown()}`);
+
+    settle(ctx, 300);
+    check(shown().includes('T2'), `the screen does not say which track: ${shown()}`);
+    check(!shown().includes('117'),
+          `track 2 ended up showing track 1's level: ${shown()}`);
+}
+
 async function testEveryWrittenKeyIsAccepted() {
     console.log('every key the UI writes is one the engine accepts');
     const ctx = await loadUI();
@@ -526,6 +666,8 @@ const TESTS = [
     testLayoutNeverCollides,
     testMachineNamesAreNotTruncatedToSixChars,
     testMachineChangeRefreshesLabels,
+    testTrackJogFollowsTheEngine,
+    testTrackChangeInvalidatesTheWholeMirror,
     testEveryWrittenKeyIsAccepted
 ];
 

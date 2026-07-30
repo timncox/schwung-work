@@ -89,6 +89,7 @@ int main(void) {
     printf("{\n  \"get\": {");
     const char *simple[] = {
         "machines", "conds", "effm", "mix", "level", "pan", "load_note",
+        "track", "tracks", "track_map",
         "seq_on", "seq_len", "fill",
         "seq_pos", "meter", "state", "live_rec",
         /* The windowed preset read. "state@0" is here so the harness's
@@ -161,6 +162,15 @@ int main(void) {
         {"src", "21"}, {"fx1", "5"}, {"fx2", "9"},
         {"machine1", "5"}, {"machine2", "3"},   /* the insert aliases */
         {"mix", "77"}, {"level", "90"}, {"pan", "30"},
+        /* Probed with 1, which the engine accepts only because WORK_TRACKS is
+         * more than 1. Were it ever taken back to a single track, the engine
+         * would refuse this AND the settable() fallback probe of 0 matches the
+         * value already there — so "track" would be reported read-only and the
+         * UI harness would fail the UI for writing a key "the engine does not
+         * accept". That is the same false negative that once dropped "src";
+         * it is noted rather than defended against, because a one-track build
+         * has no track picker to test. */
+        {"track", "1"},
         {"seq_on", "0"}, {"seq_len", "9"}, {"fill", "1"}, {"seq_clear", "1"},
         {"src_p1", "40"}, {"fx1_p1", "42"}, {"fx2_p8", "13"},
         /* Every LFO field, on every LFO. A partial probe list here is worse

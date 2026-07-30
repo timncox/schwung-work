@@ -46,6 +46,7 @@
 
 import {
     MoveKnob1, MoveShift, MoveMainButton, MoveMainKnob,
+    MoveMenu, MoveUp, MoveDown,
     Black, White, LightGrey, DarkGrey, Red, BrightRed, Blue, Green, BrightGreen,
     Cyan, Purple, SkyBlue, Lime, OrangeRed, BurntOrange, YellowGreen, TealGreen, Rose
 } from '/data/UserData/schwung/shared/constants.mjs';
@@ -276,6 +277,21 @@ let liveRec     = 0;
 let songOn      = 0;
 let curPattern  = 0;
 let memoAt      = 0;
+
+/* Which track the surface addresses, and what the strip draws.
+ *
+ * nTracks comes from the ENGINE, never a constant here — the same rule the
+ * machine count follows, and for the same reason: a hardcoded 21 made One Shot
+ * unreachable the day a 22nd machine landed. The fallback of 1 only covers the
+ * window before the first fetchAll answers, and 1 is the safe guess because a
+ * UI that briefly believes in one track can only under-offer.
+ *
+ * trackTrigs / trackSrc are the whole strip in one read — see 'track_map'. */
+let selTrack   = 0;
+let nTracks    = 1;
+let trackTrigs = [0];
+let trackSrc   = [0];
+let menuHeld   = false;      /* the direct-jump modifier; see MoveMenu */
 
 /* Feedback protection. schwung's own guard walks chain SLOTS only, so it never
  * sees an overtake module at all — Smack had to grow its own for exactly this
@@ -522,7 +538,7 @@ function pageKnobs() {
  * cannot drift apart. */
 const SCALAR_KEYS = [
     'mix', 'level', 'pan', 'seq_len', 'seq_on', 'fill', 'live_rec', 'song_on',
-    'pattern', 'monitor', 'hw_input'
+    'pattern', 'monitor', 'hw_input', 'track'
 ];
 
 /* Everything the screen and LEDs show, pulled in one pass — two bulk
@@ -536,6 +552,8 @@ function fetchAll() {
     if (machineList.length === 0) keys.push('machines');
     if (condList.length === 0) keys.push('conds');
     if (familyFor(STAGE_SRC).length === 0) keys.push('src_codes', 'fx_codes');
+    if (nTracks <= 1) keys.push('tracks');
+    keys.push('track_map');
 
     for (let s = 0; s < N_STAGES; s++) {
         keys.push(STAGE_KEY[s], labelsKey(s), effKey(s));
@@ -585,6 +603,20 @@ function fetchAll() {
     curPattern = num('pattern');
     monitor = num('monitor');
     hwInput = num('hw_input');
+    selTrack = num('track');
+    if (v.tracks) nTracks = Math.max(1, num('tracks'));
+
+    /* "<trigs>:<source machine>" per track, comma separated. Parsed
+     * defensively: a short or absent answer leaves the strip showing what it
+     * had rather than collapsing to one track, because the strip is how the
+     * user knows where their material is. */
+    if (v.track_map) {
+        const cells = `${v.track_map}`.split(',');
+        if (cells.length >= nTracks) {
+            trackTrigs = cells.map((c) => parseInt(c.split(':')[0], 10) || 0);
+            trackSrc   = cells.map((c) => parseInt(c.split(':')[1], 10) || 0);
+        }
+    }
 
     unpackSteps(v, stepKeys);
     needsRedraw = true;
@@ -1422,6 +1454,31 @@ function knobText(i) {
     return `${v}`;
 }
 
+/* The eight tracks, drawn INTO the header rule.
+ *
+ * The screen is 128x64 and every row of it was already spoken for, so the
+ * strip reuses the 1px divider under the title instead of asking for space of
+ * its own: the rule still reads as a rule, and the two rows below it (10-12,
+ * which were blank padding above the knob grid) carry the marks.
+ *
+ *   selected track   a solid block
+ *   has trigs        an underline
+ *   empty            nothing
+ *
+ * Which means the common question — "where is my material?" — is answerable
+ * without leaving whatever page you are on. */
+function drawTrackStrip() {
+    fill_rect(0, 9, 128, 1, 1);
+    const cell = Math.floor(128 / nTracks);
+    if (cell < 3) return;                 /* too many tracks to draw legibly */
+    for (let t = 0; t < nTracks; t++) {
+        const x = t * cell;
+        const w = cell - 2;
+        if (t === selTrack) fill_rect(x, 10, w, 3, 1);
+        else if (trackTrigs[t] > 0) fill_rect(x, 12, w, 1, 1);
+    }
+}
+
 function drawUI() {
     clear_screen();
 
@@ -1431,9 +1488,9 @@ function drawUI() {
     if (title.length > 20) title = title.slice(0, 20);
     print(0, 1, title, 1);
 
-    const right = `P${curPattern + 1}${songOn ? 'S' : ''} ${seqOn ? '>' : '||'}${seqPos + 1}/${seqLen}`;
+    const right = `T${selTrack + 1} P${curPattern + 1}${songOn ? 'S' : ''} ${seqOn ? '>' : '||'}${seqPos + 1}/${seqLen}`;
     print(128 - text_width(right), 1, right, 1);
-    fill_rect(0, 9, 128, 1, 1);
+    drawTrackStrip();
 
     /* Four columns, two rows of knobs. A held step turns the row into the
      * lock editor, so the values shown are that step's locks. */
@@ -1484,6 +1541,32 @@ function drawUI() {
 /* ------------------------------------------------------------------ LEDs */
 
 function paintSteps(force) {
+    /* MENU held turns the step buttons into the track picker, so the LEDs have
+     * to say so — otherwise the gesture is a hidden one, and holding a
+     * modifier over a grid that still shows the pattern reads as "this will
+     * edit steps".
+     *
+     *   selected     bright green
+     *   has a source machine loaded   white
+     *   exists but empty              dim
+     *   no such track                 dark
+     *
+     * Source machine rather than trig count, because it answers the question
+     * the picker is for: which of these is the drum track. Trigs are already
+     * on the screen strip. */
+    if (menuHeld) {
+        for (let i = 0; i < STEP_COUNT; i++) {
+            let color = Black;
+            if (i < nTracks) {
+                if (i === selTrack) color = BrightGreen;
+                else if (trackSrc[i] > 0) color = White;
+                else color = 0x08;
+            }
+            setLED(STEP_FIRST + i, color, force);
+        }
+        return;
+    }
+
     const base = patPage * PAGE_STEPS;
     for (let i = 0; i < STEP_COUNT; i++) {
         const idx = base + i;
@@ -1744,7 +1827,39 @@ function handlePadRelease(note) {
 /* Step buttons. Press latches the hold; release either commits the hold's
  * edits or, if nothing happened, toggles the trig. Notes, not CCs — see
  * STEP_FIRST. */
+/* Point the whole surface at another track.
+ *
+ * Everything the UI mirrors — machines, knob values, labels, the step page,
+ * level and pan — is per track, so this is a full refetch and not a local
+ * variable. Cheap enough: fetchAll is two bulk round-trips, the same cost the
+ * machine-select handler already pays per detent. */
+function selectTrack(t) {
+    if (t < 0 || t >= nTracks || t === selTrack) return;
+    selTrack = t;
+    host_module_set_param('track', `${t}`);
+    fetchAll();
+    /* Named rather than numbered alone: with eight tracks "Track 5" on its own
+     * says nothing about what is on it, and the source machine is the fastest
+     * way to recognise the one you meant. */
+    announceView(`Track ${t + 1} ${machineName[STAGE_SRC] || ''}`.trim());
+    paintAll(false);
+    needsRedraw = true;
+}
+
 function handleStepNote(note, velocity) {
+    /* MENU held + a step jumps straight to that track.
+     *
+     * Checked before SHIFT because the pattern gesture below already owns all
+     * sixteen steps, so the two cannot share a modifier. Only the first
+     * nTracks steps do anything; the rest are inert rather than wrapping,
+     * because wrapping would make step 9 silently mean track 1. */
+    if (menuHeld && velocity > 0) {
+        const t = note - STEP_FIRST;
+        if (t < nTracks) selectTrack(t);
+        else announce(`No track ${t + 1}`);
+        return;
+    }
+
     /* SHIFT + a step selects that pattern from the bank. */
     if (shiftDown() && velocity > 0) {
         const p = note - STEP_FIRST;
@@ -1799,6 +1914,28 @@ function onMidiMessageInternal(data) {
             paintTransport(false);      /* row 4 swaps to the mode layer */
             return;
         }
+
+        /* Track selection.
+         *
+         * UP and DOWN step through the eight; MENU held turns the step buttons
+         * into direct jumps. Two gestures because neither alone is right: the
+         * arrows are modifier-free and obvious but need up to seven presses to
+         * cross the set, and the direct jump is instant but needs a hand on a
+         * modifier.
+         *
+         * These particular buttons are a choice, not a constraint — but the
+         * alternatives were checked rather than assumed. The four row buttons
+         * beside the pad grid would have been the natural home and are
+         * LED-ONLY (they are absent from schwung's MoveCCButtons, so they send
+         * nothing). SHIFT + step already selects the pattern, and it uses all
+         * sixteen. Row 4 of the pads is full, and its SHIFT layer is full too. */
+        if (d1 === MoveMenu) {
+            menuHeld = d2 >= 64;
+            paintSteps(false);          /* the steps become a track picker */
+            return;
+        }
+        if (d1 === MoveUp && d2 > 0)   { selectTrack(selTrack + 1); return; }
+        if (d1 === MoveDown && d2 > 0) { selectTrack(selTrack - 1); return; }
 
         if (d1 === MoveMainKnob) {
             const delta = decodeDelta(d2);

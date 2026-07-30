@@ -1,109 +1,130 @@
 {
-  "title": "Work",
-  "children": [
-    {
-      "title": "What it is",
-      "lines": [
-        "A source stage and",
-        "two insert FX in",
-        "series. 6 sources",
-        "load in SRC, 21",
-        "effects in FX 1 or",
-        "FX 2. Three LFOs",
-        "modulate any of",
-        "their parameters."
-      ]
-    },
-    {
-      "title": "Controls",
-      "lines": [
-        "Jog turn: page",
-        "Jog click: home",
-        "Shift+click: swap",
-        "Knobs 1-8: the",
-        "current page's",
-        "parameters.",
-        "Pads stay with Move",
-        "in a slot editor."
-      ]
-    },
-    {
-      "title": "Pages",
-      "lines": [
-        "MACHINES picks all",
-        "three machines and",
-        "the global dry/wet.",
-        "SRC, FX 1 and FX 2",
-        "edit 8 params each.",
-        "LFO 1 and LFO 2",
-        "modulate them."
-      ]
-    },
-    {
-      "title": "Machines 1",
-      "lines": [
-        "Bypass",
-        "Clock Pitch",
-        "Comb Filter",
-        "Compressor",
-        "Chain Delay",
-        "Decimator",
-        "Gritshaper",
-        "Fold Filter",
-        "Filterbank",
-        "Spectrum Bender"
-      ]
-    },
-    {
-      "title": "Machines 2",
-      "lines": [
-        "Endless Flanger",
-        "Low-Pass Filter",
-        "Multimode Filter",
-        "Wide Chorus",
-        "Phase Array",
-        "Roomtone Reverb",
-        "Drive Delay",
-        "Iron Room Reverb",
-        "Voidspace Reverb",
-        "Flutter",
-        "Granulator"
-      ]
-    },
-    {
-      "title": "FX LFOs",
-      "lines": [
-        "DEST picks a slot",
-        "parameter, Off to",
-        "disable. DEP is",
-        "bipolar at 64.",
-        "SPD and MULT are",
-        "on the tempo grid.",
-        "TRIG Retrig resets",
-        "on each note."
-      ]
-    },
-    {
-      "title": "Notes",
-      "lines": [
-        "Loading a machine",
-        "installs its own",
-        "defaults.",
-        "Changing machine",
-        "clears that slot,",
-        "so no reverb tail",
-        "leaks across."
-      ]
-    },
-    {
-      "title": "Granulator",
-      "lines": [
-        "Granulates the last",
-        "2 s of input audio.",
-        "TUNE, DENS, SIZE,",
-        "POS, SCAN, SPRD,",
-        "AMNT, MIX."
-      ]
-    }
-  ]
+ "title": "Work",
+ "children": [
+  {
+   "title": "What it is",
+   "lines": [
+    "A source stage and",
+    "two insert FX in",
+    "series. 6 sources",
+    "load in SRC, 21",
+    "effects in FX 1 or",
+    "FX 2. Three LFOs",
+    "modulate any of",
+    "their parameters."
+   ]
+  },
+  {
+   "title": "Eight tracks",
+   "lines": [
+    "The engine has eight",
+    "tracks. This editor",
+    "shows one at a time",
+    "- SHIFT + jog moves",
+    "between them, and",
+    "the title says which.",
+    "",
+    "Only track 1 hears",
+    "the chain's input.",
+    "The rest play from",
+    "their own sources,",
+    "on their own lanes.",
+    "",
+    "MIDI channel N plays",
+    "track N."
+   ]
+  },
+  {
+   "title": "Controls",
+   "lines": [
+    "Jog turn: page",
+    "Shift+jog: track",
+    "Jog click: home",
+    "Shift+click: swap",
+    "Knobs 1-8: the",
+    "current page's",
+    "parameters.",
+    "Pads stay with Move",
+    "in a slot editor."
+   ]
+  },
+  {
+   "title": "Pages",
+   "lines": [
+    "MACHINES picks all",
+    "three machines and",
+    "the global dry/wet.",
+    "SRC, FX 1 and FX 2",
+    "edit 8 params each.",
+    "LFO 1 and LFO 2",
+    "modulate them."
+   ]
+  },
+  {
+   "title": "Machines 1",
+   "lines": [
+    "Bypass",
+    "Clock Pitch",
+    "Comb Filter",
+    "Compressor",
+    "Chain Delay",
+    "Decimator",
+    "Gritshaper",
+    "Fold Filter",
+    "Filterbank",
+    "Spectrum Bender"
+   ]
+  },
+  {
+   "title": "Machines 2",
+   "lines": [
+    "Endless Flanger",
+    "Low-Pass Filter",
+    "Multimode Filter",
+    "Wide Chorus",
+    "Phase Array",
+    "Roomtone Reverb",
+    "Drive Delay",
+    "Iron Room Reverb",
+    "Voidspace Reverb",
+    "Flutter",
+    "Granulator"
+   ]
+  },
+  {
+   "title": "FX LFOs",
+   "lines": [
+    "DEST picks a slot",
+    "parameter, Off to",
+    "disable. DEP is",
+    "bipolar at 64.",
+    "SPD and MULT are",
+    "on the tempo grid.",
+    "TRIG Retrig resets",
+    "on each note."
+   ]
+  },
+  {
+   "title": "Notes",
+   "lines": [
+    "Loading a machine",
+    "installs its own",
+    "defaults.",
+    "Changing machine",
+    "clears that slot,",
+    "so no reverb tail",
+    "leaks across."
+   ]
+  },
+  {
+   "title": "Granulator",
+   "lines": [
+    "Granulates the last",
+    "2 s of input audio.",
+    "TUNE, DENS, SIZE,",
+    "POS, SCAN, SPRD,",
+    "AMNT, MIX."
+   ]
+  }
+ ]
 }

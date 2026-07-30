@@ -122,6 +122,15 @@ MACHINE_PAGE.push({ key: 'mix',   label: 'MIX', min: 0, max: 127, step: 1 });
  * is the chain's dry/wet; LVL and PAN place the whole track. */
 MACHINE_PAGE.push({ key: 'level', label: 'LVL', min: 0, max: 127, step: 1 });
 MACHINE_PAGE.push({ key: 'pan',   label: 'PAN', min: 0, max: 127, step: 1 });
+/* Track selection is NOT a knob here, and the attempt is worth recording: a
+ * TRK knob on this page makes the scalar row four cells wide, and at 32 px a
+ * cell "LVL 117" does not fit — the harness caught it printing as "LVL 1".
+ * There is no room for a second scalar row either; the first already runs to
+ * y=56 against a footer rule at 55.
+ *
+ * It lives on SHIFT + jog instead, which is the better home anyway. Changing
+ * track invalidates every value on screen, exactly as changing page does, so
+ * it belongs with the navigation control rather than among the parameters. */
 
 const PAGES = [MACHINE_PAGE];
 for (let s = 0; s < N_STAGES; s++) PAGES.push(FX_KNOBS(s));
@@ -182,6 +191,8 @@ function readNum(key) {
  * length — not the full machine list. Sweeping raw machine codes would stall on
  * every code the stage refuses, which reads as a broken encoder. */
 let familyCodes = [];           /* [stage] -> array of machine codes */
+let nTracks     = 1;            /* from the engine; 1 until the read lands */
+let selTrack    = 0;
 
 function applyMachineRange() {
     for (let s = 0; s < N_STAGES; s++) {
@@ -225,6 +236,15 @@ function readFamilies() {
     const s2n = (t) => t.split(',').map((x) => parseInt(x, 10)).filter(Number.isFinite);
     familyCodes = [s2n(src)];
     for (let i = 1; i < N_STAGES; i++) familyCodes.push(s2n(fx));
+
+    /* Read alongside the families, and for the same reason: it is a compiled-in
+     * count the engine owns, so it is asked for once and never guessed. */
+    const trk = readRaw('tracks');
+    if (trk !== null) {
+        const n = parseInt(trk, 10);
+        if (Number.isFinite(n) && n > 0) nTracks = n;
+    }
+
     applyMachineRange();
     return true;
 }
@@ -359,13 +379,27 @@ function drawMachinePage() {
         print(0, y, fit(knobs[i].label, ROW_LABEL_W), 1);
         print(ROW_VALUE_X, y, fit(knobValue(i), SCREEN_W - ROW_VALUE_X), 1);
     }
-    /* the scalars, side by side */
+    /* The scalars, side by side.
+     *
+     * Label and value are printed SEPARATELY rather than as one joined string.
+     * Joined, fit() truncates the pair as a unit — and three cells of 42 px
+     * against "MIX 127" at seven characters meant the dry/wet has been
+     * rendering as "MIX 12" since the third stage landed, on every build. Drawn
+     * apart, the label takes what it needs and the value gets the rest, which
+     * for a three-digit number inside a three-character label is comfortable.
+     *
+     * The value is right-aligned into the cell so the three columns line up
+     * whatever their widths are. */
     const rest = knobs.length - N_STAGES;
     if (rest > 0) {
         const cell = Math.floor(SCREEN_W / rest);
         for (let i = 0; i < rest; i++) {
             const k = N_STAGES + i;
-            print(i * cell, CELL_Y, fit(`${knobs[k].label} ${knobValue(k)}`, cell - 2), 1);
+            const x = i * cell;
+            const lab = fit(knobs[k].label, cell - 2);
+            print(x, CELL_Y, lab, 1);
+            const val = fit(knobValue(k), cell - text_width(lab) - 4);
+            print(x + cell - 2 - text_width(val), CELL_Y, val, 1);
         }
     }
 }
@@ -392,19 +426,26 @@ function drawGridPage() {
 function drawUI() {
     clear_screen();
 
+    /* The track is in the TITLE, not the right-hand slot, because the right
+     * slot already carries the machine name on every FX page and that is the
+     * longer, more easily truncated string. One-based: the engine indexes from
+     * 0 and the hardware is labelled from 1, so the boundary is here. Shown
+     * only when there is more than one track to be on. */
+    const trk = nTracks > 1 ? `T${selTrack + 1} ` : '';
+
     if (page === PAGE_MACHINES) {
-        drawHeader('MACHINES', `${page + 1}/${PAGE_COUNT}`);
+        drawHeader(`${trk}MACHINES`, `${page + 1}/${PAGE_COUNT}`);
         drawMachinePage();
-        drawFooter('Jog: page');
+        drawFooter(nTracks > 1 ? 'Jog:page  Shift+jog:track' : 'Jog: page');
         return;
     }
 
     let right = `${page + 1}/${PAGE_COUNT}`;
     const slot = pageSlot(page);
     if (slot >= 0) right = machineName[slot];
-    drawHeader(PAGE_NAME[page], right);
+    drawHeader(`${trk}${PAGE_NAME[page]}`, right);
     drawGridPage();
-    drawFooter('Jog:page  Click:home');
+    drawFooter(nTracks > 1 ? 'Jog:page  Shift+jog:track' : 'Jog:page  Click:home');
 }
 
 /* ------------------------------------------------------------------ input */
@@ -488,6 +529,32 @@ function setPage(p) {
     needsRedraw = true;
 }
 
+/* Point the page at another of the engine's tracks.
+ *
+ * Clamps rather than wraps, unlike setPage. Pages are a short ring you spin
+ * through; tracks are an instrument's worth of material, and arriving at track
+ * 8 because you nudged once past track 1 is a jump, not a nudge.
+ *
+ * Everything the mirror holds is per track — machines, all three stages'
+ * parameters, both LFOs, level, pan — so the whole of it goes. Dropping only
+ * some would leave one track's values on screen under another track's machine
+ * names, which reads as the knobs having quietly stopped working. */
+function setTrack(t) {
+    if (t < 0 || t >= nTracks || t === selTrack) return;
+    selTrack = t;
+    host_module_set_param('track', `${t}`);
+
+    for (const key of Object.keys(values)) delete values[key];
+    for (let s = 0; s < N_STAGES; s++) {
+        labelsDirty[s] = true;
+        machineName[s] = '--';
+    }
+    refreshCursor = 0;
+    burst = BURST_READS;
+    announceView(`Track ${t + 1}`);
+    needsRedraw = true;
+}
+
 function onMidiMessageInternal(data) {
     /* Drop what is not ours before touching any state.
      *
@@ -537,7 +604,9 @@ function onMidiMessageInternal(data) {
 
     if (d1 === MoveMainKnob) {
         const delta = decodeDelta(d2);
-        if (delta !== 0) setPage(page + (delta > 0 ? 1 : -1));
+        if (delta === 0) return;
+        if (shiftHeld) setTrack(selTrack + (delta > 0 ? 1 : -1));
+        else setPage(page + (delta > 0 ? 1 : -1));
         return;
     }
 

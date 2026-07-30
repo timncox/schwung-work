@@ -1,308 +1,331 @@
 {
-  "title": "Overwork",
-  "children": [
-    {
-      "title": "What it is",
-      "lines": [
-        "26 machines on the",
-        "live input, with a",
-        "step sequencer that",
-        "parameter-locks",
-        "them.",
-        "A source stage and",
-        "two insert FX in",
-        "series, three LFOs."
-      ]
-    },
-    {
-      "title": "Feedback guard",
-      "lines": [
-        "With the speakers",
-        "live and nothing in",
-        "the input jack, the",
-        "mic hears the",
-        "speakers. Overwork",
-        "mutes the input",
-        "automatically and",
-        "says so on screen.",
-        "",
-        "SHIFT + Fill pad",
-        "overrides it."
-      ]
-    },
-    {
-      "title": "The main gesture",
-      "lines": [
-        "HOLD a step button",
-        "and TURN a knob.",
-        "That parameter is",
-        "now locked on that",
-        "step.",
-        "Hold+Shift+knob",
-        "edits the base",
-        "value instead."
-      ]
-    },
-    {
-      "title": "Step buttons",
-      "lines": [
-        "Tap: trig on/off",
-        "Hold+knob: lock",
-        "Hold+Shift+knob:",
-        "  edit base value",
-        "Hold+jog: set the",
-        "  attribute the mode",
-        "  pad selected",
-        "Shift+pad 75:",
-        "  clear its locks"
-      ]
-    },
-    {
-      "title": "Step LEDs",
-      "lines": [
-        "Dim: in length,",
-        "no trig",
-        "White: plain trig",
-        "Green: has locks",
-        "Cyan: conditional",
-        "Red: playhead",
-        "Bright green: held"
-      ]
-    },
-    {
-      "title": "Pads rows 1-3",
-      "lines": [
-        "Machine palette for",
-        "the FOCUSED STAGE:",
-        "6 sources on SRC,",
-        "21 effects on FX 1",
-        "and FX 2. Tap to",
-        "load one. The",
-        "loaded machine is",
-        "white; pads past",
-        "the family are",
-        "dark."
-      ]
-    },
-    {
-      "title": "Pad row 4",
-      "lines": [
-        "Play/Stop, Fill,",
-        "Stage focus,",
-        "Pattern page,",
-        "Edit page,",
-        "Copy, Paste, Clear.",
-        "",
-        "SHIFT + 68 arms",
-        "LIVE RECORD.",
-        "SHIFT + 71-75 =",
-        "Prob, Cond, Micro,",
-        "Retrig, ClearLocks."
-      ]
-    },
-    {
-      "title": "Knobs and jog",
-      "lines": [
-        "Knobs 1-8 are the",
-        "edit page's eight",
-        "parameters.",
-        "Jog sets pattern",
-        "length, or the held",
-        "step's attribute.",
-        "Jog click cycles",
-        "the edit page."
-      ]
-    },
-    {
-      "title": "Trig conditions",
-      "lines": [
-        "FILL and !FIL react",
-        "to the Fill pad.",
-        "PRE and !PRE follow",
-        "the last condition.",
-        "1ST fires only on",
-        "the first pass.",
-        "A:B fires on pass A",
-        "of every B."
-      ]
-    },
-    {
-      "title": "Lock behaviour",
-      "lines": [
-        "Each firing trig is",
-        "a full snapshot:",
-        "locked params take",
-        "their value, others",
-        "go back to base.",
-        "A trig that does",
-        "not fire changes",
-        "nothing.",
-        "",
-        "36 lockables: the",
-        "3 stages, their",
-        "machines, level,",
-        "pan and the voice",
-        "filter. Global MIX",
-        "is not one - it is",
-        "not per track."
-      ]
-    },
-    {
-      "title": "Notes",
-      "lines": [
-        "Retrig restarts the",
-        "LFOs and the filter",
-        "envelope, it does",
-        "not stutter audio.",
-        "Use Decimator FREZ",
-        "for that.",
-        "Start/continue",
-        "restarts pattern."
-      ]
-    },
-    {
-      "title": "Presets",
-      "lines": [
-        "Shift + jog click",
-        "opens the browser.",
-        "Jog scrolls, click",
-        "loads. Top entry",
-        "saves a new one.",
-        "Clear pad deletes.",
-        "",
-        "They live outside",
-        "the module, so a",
-        "reinstall keeps them"
-      ]
-    },
-    {
-      "title": "Granulator",
-      "lines": [
-        "Granulates the last",
-        "2 s of live input.",
-        "TUNE +/-2 oct, DENS",
-        "how often grains",
-        "fire, SIZE their",
-        "length, POS where",
-        "in the buffer, SCAN",
-        "moves that point,",
-        "SPRD scatters it,",
-        "AMNT how many."
-      ]
-    },
-    {
-      "title": "The reverbs",
-      "lines": [
-        "Three different",
-        "algorithms, not one",
-        "with three presets:",
-        "",
-        "Roomtone: room",
-        "with early refl.",
-        "Iron Room: plate",
-        "Voidspace: FDN,",
-        "smoothest decay."
-      ]
-    },
-    {
-      "title": "Live record",
-      "lines": [
-        "Shift + Play arms",
-        "it. With the seq",
-        "running, turning a",
-        "knob writes a lock",
-        "onto the step that",
-        "is playing, and",
-        "arms a trig there.",
-        "",
-        "The play pad turns",
-        "red while armed."
-      ]
-    },
-    {
-      "title": "Probability",
-      "lines": [
-        "Per step, 1-100.",
-        "Separate from the",
-        "trig condition:",
-        "both must pass.",
-        "",
-        "Shift + pattern page",
-        "picks the mode,",
-        "then hold a step",
-        "and turn the jog."
-      ]
-    },
-    {
-      "title": "Modulation",
-      "lines": [
-        "Three FX LFOs now,",
-        "plus an AHD mod",
-        "envelope that fires",
-        "on every trig.",
-        "",
-        "Edit page cycles",
-        "FX, LFO 1-3, Mod",
-        "Env, Global."
-      ]
-    },
-    {
-      "title": "MIDI CC",
-      "lines": [
-        "External CC only.",
-        "CC 8-15  FX1 A-H",
-        "CC 16-23 FX2 A-H",
-        "CC 24/25 FX machs",
-        "CC 26    dry/wet",
-        "CC 27/28 level/pan",
-        "CC 80-87 SRC A-H",
-        "CC 88    SRC mach",
-        "CC 32/40/48 LFOs",
-        "CC 56-60 mod env",
-        "CC 64/65/66 = seq,",
-        "fill, live record."
-      ]
-    },
-    {
-      "title": "Pattern bank",
-      "lines": [
-        "16 patterns.",
-        "SHIFT + a step",
-        "button selects one.",
-        "",
-        "The screen header",
-        "shows P1-P16, and",
-        "S when song mode",
-        "is running."
-      ]
-    },
-    {
-      "title": "Undo and song",
-      "lines": [
-        "Pad 81: undo,",
-        "shift+tap = redo.",
-        "Pad 82: tap recalls,",
-        "hold memorizes.",
-        "Pad 83: song mode.",
-        "",
-        "Song rows chain",
-        "patterns with",
-        "repeat counts."
-      ]
-    },
-    {
-      "title": "Trig types",
-      "lines": [
-        "A full trig applies",
-        "its locks AND",
-        "restarts the LFOs",
-        "and envelope.",
-        "",
-        "A lock trig applies",
-        "locks only \u2014",
-        "the classic trigless",
-        "lock."
-      ]
-    }
-  ]
+ "title": "Overwork",
+ "children": [
+  {
+   "title": "What it is",
+   "lines": [
+    "26 machines on the",
+    "live input, with a",
+    "step sequencer that",
+    "parameter-locks",
+    "them.",
+    "A source stage and",
+    "two insert FX in",
+    "series, three LFOs."
+   ]
+  },
+  {
+   "title": "Eight tracks",
+   "lines": [
+    "Each has its own",
+    "source, two FX, a",
+    "filter, LFOs and its",
+    "own sequencer lane.",
+    "",
+    "UP / DOWN step",
+    "through them.",
+    "MENU + a step button",
+    "jumps straight to",
+    "that track.",
+    "",
+    "The bar under the",
+    "title is all eight:",
+    "solid is selected,",
+    "underlined has trigs.",
+    "",
+    "MIDI channel N plays",
+    "track N."
+   ]
+  },
+  {
+   "title": "Feedback guard",
+   "lines": [
+    "With the speakers",
+    "live and nothing in",
+    "the input jack, the",
+    "mic hears the",
+    "speakers. Overwork",
+    "mutes the input",
+    "automatically and",
+    "says so on screen.",
+    "",
+    "SHIFT + Fill pad",
+    "overrides it."
+   ]
+  },
+  {
+   "title": "The main gesture",
+   "lines": [
+    "HOLD a step button",
+    "and TURN a knob.",
+    "That parameter is",
+    "now locked on that",
+    "step.",
+    "Hold+Shift+knob",
+    "edits the base",
+    "value instead."
+   ]
+  },
+  {
+   "title": "Step buttons",
+   "lines": [
+    "Tap: trig on/off",
+    "Hold+knob: lock",
+    "Hold+Shift+knob:",
+    "  edit base value",
+    "Hold+jog: set the",
+    "  attribute the mode",
+    "  pad selected",
+    "Shift+pad 75:",
+    "  clear its locks"
+   ]
+  },
+  {
+   "title": "Step LEDs",
+   "lines": [
+    "Dim: in length,",
+    "no trig",
+    "White: plain trig",
+    "Green: has locks",
+    "Cyan: conditional",
+    "Red: playhead",
+    "Bright green: held"
+   ]
+  },
+  {
+   "title": "Pads rows 1-3",
+   "lines": [
+    "Machine palette for",
+    "the FOCUSED STAGE:",
+    "6 sources on SRC,",
+    "21 effects on FX 1",
+    "and FX 2. Tap to",
+    "load one. The",
+    "loaded machine is",
+    "white; pads past",
+    "the family are",
+    "dark."
+   ]
+  },
+  {
+   "title": "Pad row 4",
+   "lines": [
+    "Play/Stop, Fill,",
+    "Stage focus,",
+    "Pattern page,",
+    "Edit page,",
+    "Copy, Paste, Clear.",
+    "",
+    "SHIFT + 68 arms",
+    "LIVE RECORD.",
+    "SHIFT + 71-75 =",
+    "Prob, Cond, Micro,",
+    "Retrig, ClearLocks."
+   ]
+  },
+  {
+   "title": "Knobs and jog",
+   "lines": [
+    "Knobs 1-8 are the",
+    "edit page's eight",
+    "parameters.",
+    "Jog sets pattern",
+    "length, or the held",
+    "step's attribute.",
+    "Jog click cycles",
+    "the edit page."
+   ]
+  },
+  {
+   "title": "Trig conditions",
+   "lines": [
+    "FILL and !FIL react",
+    "to the Fill pad.",
+    "PRE and !PRE follow",
+    "the last condition.",
+    "1ST fires only on",
+    "the first pass.",
+    "A:B fires on pass A",
+    "of every B."
+   ]
+  },
+  {
+   "title": "Lock behaviour",
+   "lines": [
+    "Each firing trig is",
+    "a full snapshot:",
+    "locked params take",
+    "their value, others",
+    "go back to base.",
+    "A trig that does",
+    "not fire changes",
+    "nothing.",
+    "",
+    "36 lockables: the",
+    "3 stages, their",
+    "machines, level,",
+    "pan and the voice",
+    "filter. Global MIX",
+    "is not one - it is",
+    "not per track."
+   ]
+  },
+  {
+   "title": "Notes",
+   "lines": [
+    "Retrig restarts the",
+    "LFOs and the filter",
+    "envelope, it does",
+    "not stutter audio.",
+    "Use Decimator FREZ",
+    "for that.",
+    "Start/continue",
+    "restarts pattern."
+   ]
+  },
+  {
+   "title": "Presets",
+   "lines": [
+    "Shift + jog click",
+    "opens the browser.",
+    "Jog scrolls, click",
+    "loads. Top entry",
+    "saves a new one.",
+    "Clear pad deletes.",
+    "",
+    "They live outside",
+    "the module, so a",
+    "reinstall keeps them"
+   ]
+  },
+  {
+   "title": "Granulator",
+   "lines": [
+    "Granulates the last",
+    "2 s of live input.",
+    "TUNE +/-2 oct, DENS",
+    "how often grains",
+    "fire, SIZE their",
+    "length, POS where",
+    "in the buffer, SCAN",
+    "moves that point,",
+    "SPRD scatters it,",
+    "AMNT how many."
+   ]
+  },
+  {
+   "title": "The reverbs",
+   "lines": [
+    "Three different",
+    "algorithms, not one",
+    "with three presets:",
+    "",
+    "Roomtone: room",
+    "with early refl.",
+    "Iron Room: plate",
+    "Voidspace: FDN,",
+    "smoothest decay."
+   ]
+  },
+  {
+   "title": "Live record",
+   "lines": [
+    "Shift + Play arms",
+    "it. With the seq",
+    "running, turning a",
+    "knob writes a lock",
+    "onto the step that",
+    "is playing, and",
+    "arms a trig there.",
+    "",
+    "The play pad turns",
+    "red while armed."
+   ]
+  },
+  {
+   "title": "Probability",
+   "lines": [
+    "Per step, 1-100.",
+    "Separate from the",
+    "trig condition:",
+    "both must pass.",
+    "",
+    "Shift + pattern page",
+    "picks the mode,",
+    "then hold a step",
+    "and turn the jog."
+   ]
+  },
+  {
+   "title": "Modulation",
+   "lines": [
+    "Three FX LFOs now,",
+    "plus an AHD mod",
+    "envelope that fires",
+    "on every trig.",
+    "",
+    "Edit page cycles",
+    "FX, LFO 1-3, Mod",
+    "Env, Global."
+   ]
+  },
+  {
+   "title": "MIDI CC",
+   "lines": [
+    "External CC only.",
+    "CC 8-15  FX1 A-H",
+    "CC 16-23 FX2 A-H",
+    "CC 24/25 FX machs",
+    "CC 26    dry/wet",
+    "CC 27/28 level/pan",
+    "CC 80-87 SRC A-H",
+    "CC 88    SRC mach",
+    "CC 32/40/48 LFOs",
+    "CC 56-60 mod env",
+    "CC 64/65/66 = seq,",
+    "fill, live record."
+   ]
+  },
+  {
+   "title": "Pattern bank",
+   "lines": [
+    "16 patterns.",
+    "SHIFT + a step",
+    "button selects one.",
+    "",
+    "The screen header",
+    "shows P1-P16, and",
+    "S when song mode",
+    "is running."
+   ]
+  },
+  {
+   "title": "Undo and song",
+   "lines": [
+    "Pad 81: undo,",
+    "shift+tap = redo.",
+    "Pad 82: tap recalls,",
+    "hold memorizes.",
+    "Pad 83: song mode.",
+    "",
+    "Song rows chain",
+    "patterns with",
+    "repeat counts."
+   ]
+  },
+  {
+   "title": "Trig types",
+   "lines": [
+    "A full trig applies",
+    "its locks AND",
+    "restarts the LFOs",
+    "and envelope.",
+    "",
+    "A lock trig applies",
+    "locks only —",
+    "the classic trigless",
+    "lock."
+   ]
+  }
+ ]
 }

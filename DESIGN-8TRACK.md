@@ -1,6 +1,6 @@
 # Work — the eight-track restructure
 
-Status: **steps 1-4 done (2026-07-29); 5 onwards not started.** Read this
+Status: **steps 1-4 and 6 done (2026-07-29); 5 and 7 not started.** Read this
 before touching `work_core.h`. It exists because the refactor spans more work
 than one session holds, and because two of its decisions are expensive to
 reverse.
@@ -10,11 +10,13 @@ listens on channel N and the published CC 8..28 map is reused verbatim on each,
 so nothing anyone has already mapped moves. A channel above the track count
 reaches nothing rather than falling back to the selected track.
 
-**`WORK_TRACKS` is 8.** The state format was what blocked it, and the fix is
-described in `CLAUDE.md` under "The preset blob": packed lanes, per-track key
-prefixes, and windowed reads. What remains is the SURFACE — eight tracks are
-reachable over MIDI and in a preset, but the Move's own controls still address
-one.
+**`WORK_TRACKS` is 8**, and every track is reachable — from the Move's own
+surface, over MIDI, and inside a preset. The state format was what blocked the
+flip; the fix is described in `CLAUDE.md` under "The preset blob".
+
+**None of it has been on a device.** The engine work is covered by 1185 checks
+and the surface by 46 more, but every hardware bug this module has shipped got
+past a green suite, so treat all of it as unverified until it has made a sound.
 
 ## Why
 
@@ -283,8 +285,11 @@ Each step lands with tests green; nothing here needs a big-bang merge.
    `work_create` adds 1.8 MB resident rather than the ~48 MB of address space
    the allocations suggest, because untouched tracks never fault their pages
    in. No idle-skip optimisation is needed.
-5. LFOs split into voice and FX families, two of each per track.
-6. Surface: TRACK modifier, per-stage palette, screen track strip.
+5. LFOs split into voice and FX families, two of each per track. **Not started.**
+6. Surface: track selection on both UIs, screen track strip. **Done,
+   2026-07-29** — see `CLAUDE.md`, "Reaching the eight tracks from the surface",
+   for the gestures and for which hardware was ruled out and why. Nothing here
+   has been on a device yet.
 7. Re-run `bench-tracks` on the Move against the real engine rather than N
    instances, and record the delta.
 

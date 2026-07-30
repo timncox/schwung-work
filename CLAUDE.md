@@ -227,6 +227,38 @@ These are all lessons other Schwung modules paid for. Do not relearn them.
   caught that `lock<N>_<P>` had a setter but **no getter**, so lock display and
   lock nudging were both silently reading the base value.
 
+## Reaching the eight tracks from the surface
+
+Everything either UI shows belongs to the SELECTED track, so changing track is
+navigation and not a parameter — it replaces every value on screen exactly as
+changing page does. Both UIs put it on a navigation control for that reason.
+
+**Overwork** (full surface): `UP` / `DOWN` step through the tracks, and holding
+`MENU` turns the sixteen step buttons into a direct-jump track picker (the LEDs
+change to say so, and change back on release). The screen's header rule doubles
+as an eight-cell strip — solid is selected, underlined has trigs — so "where is
+my material" is answerable without leaving the page.
+
+**Work** (chain slot): `SHIFT` + jog turn. A knob was tried first and does not
+fit: the machines page's scalar row is three cells of 42 px, and a fourth makes
+`LVL 117` render as `LVL 1`. There is no room for a second row either — the
+first already runs to y=56 against a footer rule at y=55.
+
+Both clamp at the ends rather than wrapping. Pages are a short ring you spin
+through; tracks are an instrument's worth of material, and landing on track 8
+because you nudged once past track 1 is a jump, not a nudge.
+
+The buttons are a CHOICE, and the alternatives were checked rather than assumed:
+the four row buttons beside the pad grid are **LED-only** (absent from schwung's
+`MoveCCButtons`, so they send nothing), `SHIFT` + step already selects the
+pattern and uses all sixteen, and pad row 4 is full on both its layers.
+
+`tracks` and `track_map` come from the ENGINE — the same rule the machine count
+follows. `track_map` is `"<trigs>:<source machine>"` per track in ONE read,
+because a parameter read is a blocking ~23 ms round trip and eight of them to
+redraw a strip is 184 ms of the audio thread's budget every time the selection
+moves.
+
 ## MIDI
 
 **Track N listens on channel N.** Channel 1 drives track 1, channel 8 drives

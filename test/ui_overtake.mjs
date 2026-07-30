@@ -332,6 +332,12 @@ function makeHost() {
 const STUBS = {
     '/data/UserData/schwung/shared/constants.mjs': `
         export const MoveKnob1 = 71, MoveShift = 49, MoveMainButton = 3, MoveMainKnob = 14;
+        /* Transcribed from schwung's src/shared/constants.mjs, not invented.
+         * Note the ORDER: Down is 54 and Up is 55, which reads backwards and is
+         * exactly the sort of thing a stub written from memory gets wrong — and
+         * then the harness proves the UI navigates correctly while the device
+         * navigates the other way. */
+        export const MoveMenu = 50, MoveDown = 54, MoveUp = 55;
         export const Black=0, White=120, LightGrey=118, DarkGrey=124, Red=127, BrightRed=1;
         export const Blue=125, Green=126, BrightGreen=8, Cyan=14, Purple=22, SkyBlue=47;
         export const Lime=31, OrangeRed=2, BurntOrange=28, YellowGreen=30, TealGreen=12, Rose=24;
@@ -604,6 +610,90 @@ async function testTransportPads() {
     ctx.host.onMidiMessageInternal(noteOn(69));           /* FILL */
     ctx.host.onMidiMessageInternal(noteOff(69));
     check(ctx.writes.some((w) => w.key === 'fill'), 'fill pad did not write fill');
+}
+
+/* Track selection: the two gestures, the boundaries, and the LED layer.
+ *
+ * The engine grew to eight tracks and every one of them is reachable over MIDI
+ * and inside a preset — but the Move's own surface addressed one until this
+ * landed, so all of it is new and none of it has hardware behind it yet. */
+const MENU = 50, UP = 55, DOWN = 54;
+const STEP = (n) => 16 + n;              /* step buttons are NOTES 16-31 */
+
+async function testTrackSelection() {
+    console.log('the surface can reach every track');
+    const ctx = await loadUI();
+    ctx.host.init();
+
+    const nTracks = parseInt(ctx.store.tracks, 10);
+    check(nTracks > 1,
+          `the contract says ${nTracks} track(s); this test needs more than one`);
+
+    /* --- MENU + step jumps straight to a track --- */
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(MENU, 127));
+    ctx.host.onMidiMessageInternal(noteOn(STEP(2)));
+    ctx.host.onMidiMessageInternal(noteOff(STEP(2)));
+    ctx.host.onMidiMessageInternal(cc(MENU, 0));
+    check(ctx.writes.some((w) => w.key === 'track' && w.val === '2'),
+          `MENU + step 3 should select track 3, wrote ${JSON.stringify(
+              ctx.writes.filter((w) => w.key === 'track'))}`);
+
+    /* And must NOT also toggle the trig under it — the modifier has to take
+     * the press entirely, or every track change edits the pattern too. */
+    check(!ctx.writes.some((w) => w.key === 'step2'),
+          'MENU + step also toggled the trig underneath it');
+
+    /* --- a step past the last track does nothing at all --- */
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(MENU, 127));
+    ctx.host.onMidiMessageInternal(noteOn(STEP(nTracks)));
+    ctx.host.onMidiMessageInternal(noteOff(STEP(nTracks)));
+    ctx.host.onMidiMessageInternal(cc(MENU, 0));
+    check(!ctx.writes.some((w) => w.key === 'track'),
+          `MENU + step ${nTracks + 1} selected a track that does not exist`);
+
+    /* --- UP and DOWN walk the set, and stop at the ends --- */
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(UP, 127));
+    check(ctx.writes.some((w) => w.key === 'track' && w.val === '3'),
+          'UP did not step to the next track');
+
+    /* Down from track 1 must not wrap to track 8: wrapping past the end turns
+     * a nudge into a jump across the instrument. */
+    for (let i = 0; i < nTracks + 2; i++) ctx.host.onMidiMessageInternal(cc(DOWN, 127));
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(DOWN, 127));
+    check(!ctx.writes.some((w) => w.key === 'track'),
+          'DOWN wrapped around past the first track');
+
+    for (let i = 0; i < nTracks + 2; i++) ctx.host.onMidiMessageInternal(cc(UP, 127));
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(UP, 127));
+    check(!ctx.writes.some((w) => w.key === 'track'),
+          'UP wrapped around past the last track');
+}
+
+async function testMenuTurnsTheStepsIntoATrackPicker() {
+    console.log('holding MENU relights the steps as the track picker');
+    const ctx = await loadUI();
+    ctx.host.init();
+
+    const nTracks = parseInt(ctx.store.tracks, 10);
+    const before = ctx.leds.get(STEP(nTracks));   /* a step with no track behind it */
+
+    ctx.host.onMidiMessageInternal(cc(MENU, 127));
+    check(ctx.leds.get(STEP(nTracks)) === 0,
+          `step ${nTracks + 1} should be dark in the picker, it is ${ctx.leds.get(STEP(nTracks))}`);
+    check(ctx.leds.get(STEP(0)) !== 0,
+          'track 1 should be lit in the picker');
+
+    /* Releasing has to put the pattern back. A modifier that leaves the grid
+     * showing tracks is worse than one that never lit them, because the next
+     * press looks like it will edit a step and does. */
+    ctx.host.onMidiMessageInternal(cc(MENU, 0));
+    check(ctx.leds.get(STEP(nTracks)) === before,
+          'releasing MENU did not restore the pattern on the step LEDs');
 }
 
 async function testJogSetsLengthAndStepAttrs() {
@@ -1829,6 +1919,8 @@ const tests = [
     testMachinePaletteLoadsMachines,
     testPaletteRefusesOutOfFamilyPads,
     testTransportPads,
+    testTrackSelection,
+    testMenuTurnsTheStepsIntoATrackPicker,
     testJogSetsLengthAndStepAttrs,
     testCopyPasteClear,
     testNoUnknownWritesAnywhere,
