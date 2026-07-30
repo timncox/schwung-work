@@ -461,6 +461,17 @@ struct work {
      * say nothing. Empty when the blob needed no translation. */
     char                 load_note[64];
 
+    /* Scratch for the state blob, and for one lane's packed bytes on the way
+     * in or out. Both live on the instance rather than the stack because
+     * work_get_param runs on the shim's AUDIO THREAD, where 48 KB of automatic
+     * storage is not something to assume; and rather than being static because
+     * a file-scope buffer would be shared by every instance in the chain.
+     *
+     * The blob is built whole and then served in windows — see the "state"
+     * and "state@<offset>" keys. */
+    char                 state_buf[WORK_STATE_MAX];
+    uint8_t              lane_buf[WORK_LANE_MAX];
+
     /* transport */
     float                bpm;
     int                  clock_ticks;
@@ -2860,6 +2871,65 @@ static void build_effective(work_t *w, work_track_t *tr, int frames) {
     }
 }
 
+/* Everything about a track that a preset can carry, set to its default.
+ *
+ * Split out of work_create because loading a v3 preset needs exactly this: a
+ * blob names the tracks it uses, and every track it does NOT name has to come
+ * back empty rather than keeping whatever the previous preset left there. When
+ * these defaults lived inline in the create loop, the only way to reset a track
+ * was to duplicate them at the load site — and a duplicated default list drifts,
+ * so a preset would have loaded track 3 with the filter wide open and track 4
+ * with it closed.
+ *
+ * Deliberately does NOT touch the allocations, the RNG seeds or the slot DSP
+ * state. Those belong to the instance, not the patch: freeing and re-seeding
+ * them on every preset load would drop a reverb tail and reshuffle every
+ * machine's noise mid-performance. `index` only seeds the per-track RNG, so it
+ * is unused here and named for the call site's benefit. */
+static void track_defaults(work_track_t *tr, int index) {
+    (void)index;
+
+    /* Wide open. A patch that never visits the filter page must sound
+     * exactly as it did before the page existed. */
+    tr->vfilt.base   = 0;
+    tr->vfilt.width  = 127;
+    tr->vfilt.reso   = 0;
+    tr->vfilt.env    = 64;      /* bipolar centre = no envelope */
+    tr->vfilt.attack = 0;
+    tr->vfilt.decay  = 48;
+    tr->vfilt.track  = 0;
+
+    tr->menv.dest   = -1;
+    tr->menv.attack = 0;
+    tr->menv.hold   = 8;
+    tr->menv.decay  = 48;
+    tr->menv.depth  = 64;
+
+    for (int i = 0; i < WORK_LFOS; ++i) {
+        tr->lfo[i].dest  = -1;
+        tr->lfo[i].speed = 32;
+        tr->lfo[i].mult  = 64;
+        tr->lfo[i].wave  = 0;
+        tr->lfo[i].depth = 64;
+        tr->lfo[i].phase = 0;
+        tr->lfo[i].trig  = 0;
+    }
+
+    tr->level = 127;               /* unity  */
+    tr->pan   = 64;                /* centre */
+
+    for (int i = 0; i < WORK_STAGES; ++i) {
+        tr->cfg[i].machine = WORK_FX_BYPASS;
+        for (int k = 0; k < WORK_PARAMS; ++k)
+            tr->cfg[i].p[k] = PARAM_DEFAULT[WORK_FX_BYPASS][k];
+    }
+
+    /* The sample itself stays. A preset records the PATH and the UI reloads the
+     * audio; clearing the buffer here would silence the track between the load
+     * and the reload, which reads as the preset being broken. */
+    tr->sample_path[0] = '\0';
+}
+
 work_t *work_create(const host_api_v1_t *host) {
     work_t *w = (work_t *)calloc(1, sizeof(work_t));
     if (!w) return NULL;
@@ -2902,34 +2972,11 @@ work_t *work_create(const host_api_v1_t *host) {
          * slot rather than refusing to load. */
         tr->sample = (int16_t *)calloc((size_t)WORK_SAMPLE_FRAMES * 2, sizeof(int16_t));
 
-        /* Wide open. A patch that never visits the filter page must sound
-         * exactly as it did before the page existed. */
-        tr->vfilt.base   = 0;
-        tr->vfilt.width  = 127;
-        tr->vfilt.reso   = 0;
-        tr->vfilt.env    = 64;      /* bipolar centre = no envelope */
-        tr->vfilt.attack = 0;
-        tr->vfilt.decay  = 48;
-        tr->vfilt.track  = 0;
-
-        tr->menv.dest   = -1;
-        tr->menv.attack = 0;
-        tr->menv.hold   = 8;
-        tr->menv.decay  = 48;
-        tr->menv.depth  = 64;
-
-        for (int i = 0; i < WORK_LFOS; ++i) {
-            tr->lfo[i].dest  = -1;
-            tr->lfo[i].speed = 32;
-            tr->lfo[i].mult  = 64;
-            tr->lfo[i].depth = 64;
-        }
-
-        tr->level = 127;               /* unity  */
-        tr->pan   = 64;                /* centre */
+        track_defaults(tr, t);
 
         /* Seeded per track as well as per slot, so two tracks holding the same
-         * machine do not generate bit-identical noise. */
+         * machine do not generate bit-identical noise. Instance state, not
+         * patch state — so it is here and not in track_defaults. */
         tr->rng = 0xC2B2AE35u ^ (uint32_t)(t * 0x27D4EB2Fu);
 
         for (int i = 0; i < WORK_STAGES; ++i) {
@@ -2949,10 +2996,6 @@ work_t *work_create(const host_api_v1_t *host) {
 
             s->rng = 0x9E3779B9u ^ (uint32_t)((t * WORK_STAGES + i) * 0x85EBCA6Bu);
             s->last_machine = WORK_FX_BYPASS;
-
-            tr->cfg[i].machine = WORK_FX_BYPASS;
-            for (int k = 0; k < WORK_PARAMS; ++k)
-                tr->cfg[i].p[k] = PARAM_DEFAULT[WORK_FX_BYPASS][k];
         }
     }
 
@@ -3510,6 +3553,191 @@ static int parse_slot_param(const char *key, int *slot, int *idx) {
     return 1;
 }
 
+/* -------------------------------------------------- packed lane encoding
+ *
+ * A lane is 64 steps, each with six fields and up to WORK_LOCKABLE parameter
+ * locks. v2 wrote them as "index=value" text inside a "stp" string, and one
+ * maximally dense lane came to 14,817 bytes against the host's 16,384-byte
+ * read buffer (schwung_host.c, js_host_module_get_param). Survivable at one
+ * track. At eight it is roughly 114 KB — seven times over — and the failure
+ * mode is silent truncation, so the preset loads and the pattern comes back
+ * short with nothing to say it happened.
+ *
+ * So v3 packs each lane to binary and base64s it. One step record:
+ *
+ *     u8      step index
+ *     u8      active
+ *     u8      cond
+ *     u8      micro + 64            biased; micro is -23..23
+ *     u8      retrig
+ *     u8      prob
+ *     u8      trig type
+ *     u8[5]   lock mask             WORK_LOCKABLE bits, little-endian
+ *     u8 × n  lock values           ascending lock index, n = bits set
+ *
+ * Twelve bytes plus one per lock, against roughly twenty plus seven per lock
+ * as text — about a quarter the size, and the dense lane lands near 4 KB. Only
+ * steps that differ from empty get a record at all, so a sparse pattern still
+ * costs almost nothing.
+ *
+ * The fields stay a byte each rather than bit-packing into the obvious spare
+ * room. Every one of them is bounded by a WORK_* constant that has already
+ * grown once, and a format that assumed cond fits in four bits would corrupt
+ * every saved preset on the day a seventeenth condition is added. The mask is
+ * read back by POPULATION COUNT over all 40 bits rather than by looping to
+ * WORK_LOCKABLE, so a blob written by a future engine with more lockables
+ * still parses: the extra values are consumed and ignored instead of
+ * desynchronising the rest of the lane.
+ */
+#define LANE_MASK_BYTES ((WORK_LOCKABLE + 7) / 8)
+#define LANE_REC_FIXED  (7 + LANE_MASK_BYTES)
+#define LANE_MASK_BITS  (LANE_MASK_BYTES * 8)
+
+/* The header sizes w->lane_buf from its own arithmetic, because a caller has
+ * to know how big a lane can get without knowing how one is encoded. Tie the
+ * two together here: if they ever disagree, lane_pack silently truncates the
+ * densest patterns and lane_unpack reads a short blob as a complete one. */
+_Static_assert(LANE_REC_FIXED + LANE_MASK_BITS <= WORK_LANE_STEP_MAX,
+               "WORK_LANE_STEP_MAX is smaller than one packed step record");
+
+static int b64_val(char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;                      /* '=' padding and any junk */
+}
+
+static const char B64_CHAR[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/* Base64 into a bounded buffer. Emits whole quartets only: a truncated
+ * encoding is still decodable up to where it stops, which matters because the
+ * caller's cap is the host's read buffer and the alternative is a half-written
+ * final group that decodes to garbage. */
+static int b64_encode(const uint8_t *in, int len, char *out, int cap) {
+    int n = 0;
+    for (int i = 0; i < len; i += 3) {
+        const int rem = len - i;
+        const unsigned a = in[i];
+        const unsigned b = rem > 1 ? in[i + 1] : 0u;
+        const unsigned c = rem > 2 ? in[i + 2] : 0u;
+        const unsigned v = (a << 16) | (b << 8) | c;
+        if (n + 4 > cap) break;
+        out[n++] = B64_CHAR[(v >> 18) & 63];
+        out[n++] = B64_CHAR[(v >> 12) & 63];
+        out[n++] = rem > 1 ? B64_CHAR[(v >> 6) & 63] : '=';
+        out[n++] = rem > 2 ? B64_CHAR[v & 63]        : '=';
+    }
+    return n;
+}
+
+/* Decode until the closing quote of the JSON string, or the buffer fills.
+ * `acc` is unsigned for the same reason sample_append_b64's is: it is a shift
+ * register, and a signed left-shift past the sign bit is undefined. */
+static int b64_decode(const char *in, uint8_t *out, int cap) {
+    unsigned acc = 0;
+    int bits = 0, n = 0;
+    for (const char *c = in; *c && *c != '"'; ++c) {
+        int v = b64_val(*c);
+        if (v < 0) continue;
+        acc = (acc << 6) | (unsigned)v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            if (n >= cap) break;
+            out[n++] = (uint8_t)((acc >> bits) & 0xFF);
+        }
+    }
+    return n;
+}
+
+static int lane_pack(const work_lane_t *ln, uint8_t *out, int cap) {
+    int n = 0;
+    for (int i = 0; i < WORK_STEPS; ++i) {
+        const work_step_t *st = &ln->step[i];
+        if (!st->active && !st->lock_mask && !st->cond && !st->micro &&
+            !st->retrig && !st->trig_type && st->prob == 100)
+            continue;
+
+        int nlk = 0;
+        for (int k = 0; k < WORK_LOCKABLE; ++k)
+            if (st->lock_mask & (1ull << k)) nlk++;
+        if (n + LANE_REC_FIXED + nlk > cap) break;
+
+        out[n++] = (uint8_t)i;
+        out[n++] = (uint8_t)(st->active ? 1 : 0);
+        out[n++] = st->cond;
+        out[n++] = (uint8_t)(st->micro + 64);
+        out[n++] = st->retrig;
+        out[n++] = st->prob;
+        out[n++] = st->trig_type;
+        for (int b = 0; b < LANE_MASK_BYTES; ++b)
+            out[n++] = (uint8_t)((st->lock_mask >> (b * 8)) & 0xFF);
+        for (int k = 0; k < WORK_LOCKABLE; ++k)
+            if (st->lock_mask & (1ull << k)) out[n++] = st->lock[k];
+    }
+    return n;
+}
+
+static void lane_unpack(work_lane_t *ln, const uint8_t *in, int len) {
+    memset(ln->step, 0, sizeof ln->step);
+    for (int i = 0; i < WORK_STEPS; ++i) ln->step[i].prob = 100;
+
+    int n = 0;
+    while (n + LANE_REC_FIXED <= len) {
+        const int idx    = in[n + 0];
+        const int active = in[n + 1] ? 1 : 0;
+        const int cond   = in[n + 2];
+        const int micro  = (int)in[n + 3] - 64;
+        const int retrig = in[n + 4];
+        const int prob   = in[n + 5];
+        const int ttype  = in[n + 6];
+        uint64_t mask = 0;
+        for (int b = 0; b < LANE_MASK_BYTES; ++b)
+            mask |= (uint64_t)in[n + 7 + b] << (b * 8);
+        n += LANE_REC_FIXED;
+
+        /* Every set bit carries a value byte, whether or not this engine knows
+         * what that lock index means. Counting only the ones below
+         * WORK_LOCKABLE would leave a future engine's extra values in the
+         * stream and read them as the next step's header. */
+        int nlk = 0;
+        for (int k = 0; k < LANE_MASK_BITS; ++k)
+            if (mask & (1ull << k)) nlk++;
+        if (n + nlk > len) break;         /* truncated blob: stop, don't guess */
+
+        work_step_t *st = (idx >= 0 && idx < WORK_STEPS) ? &ln->step[idx] : NULL;
+        if (st) {
+            st->active    = (uint8_t)active;
+            st->cond      = (uint8_t)iclamp(cond,   0, WORK_COND_COUNT - 1);
+            st->micro     = (int8_t) iclamp(micro, -23, 23);
+            st->retrig    = (uint8_t)iclamp(retrig, 0, WORK_RETRIG_COUNT - 1);
+            st->prob      = (uint8_t)iclamp(prob,   1, 100);
+            st->trig_type = (uint8_t)iclamp(ttype,  0, WORK_TRIG_TYPES - 1);
+        }
+        for (int k = 0; k < LANE_MASK_BITS; ++k) {
+            if (!(mask & (1ull << k))) continue;
+            if (st && k < WORK_LOCKABLE) step_set_lock(st, k, in[n]);
+            n++;
+        }
+    }
+}
+
+/* Find the value of key "<pfx><name>" in a blob, returning the character just
+ * past the colon. The prefix is how v3 keeps eight tracks in one flat object:
+ * track 3's machine is "t3m1", not a nested field, because apply_state walks
+ * the blob with strstr rather than parsing JSON and a nested "m1" would be
+ * found by whichever track came first. */
+static const char *jfind(const char *json, const char *pfx, const char *name) {
+    char key[32];
+    int n = snprintf(key, sizeof key, "\"%s%s\":", pfx, name);
+    if (n <= 0 || n >= (int)sizeof key) return NULL;
+    const char *q = strstr(json, key);
+    return q ? q + n : NULL;
+}
+
 /* Restore from the blob written by get_param("state"). Keys absent from the
  * blob keep their current value, so a partial blob is a legal patch. */
 /* Which lock map a blob's indices are written in.
@@ -3534,6 +3762,82 @@ static int state_stage_shift(const char *json) {
     return 0;
 }
 
+/* One track's fields, from the keys carrying `pfx`. v3 prefixes every per-track
+ * key with "t<N>"; v1 and v2 knew one track and used no prefix, so they come
+ * through here with pfx = "" and land on track 0. */
+static void apply_track_state(work_track_t *tr, const char *json, const char *pfx) {
+    const char *q;
+
+    if ((q = jfind(json, pfx, "lvl")) != NULL) tr->level = (uint8_t)iclamp(atoi(q), 0, 127);
+    if ((q = jfind(json, pfx, "pan")) != NULL) tr->pan   = (uint8_t)iclamp(atoi(q), 0, 127);
+
+    /* The sample path the patch expects. The engine does NOT load it — it has
+     * no filesystem and work_set_param runs on the audio thread. It only
+     * carries the string so the UI can see, after a preset load, that the
+     * audio in memory is not the audio this patch wants, and reload it. */
+    if ((q = jfind(json, pfx, "smp")) != NULL && *q == '"') {
+        const char *c = q + 1;
+        size_t i = 0;
+        while (*c && *c != '"' && i < sizeof(tr->sample_path) - 1) {
+            if (*c == '\\' && c[1]) c++;      /* unescape \" and \\ */
+            tr->sample_path[i++] = *c++;
+        }
+        tr->sample_path[i] = '\0';
+    }
+
+    for (int s = 0; s < WORK_STAGES; ++s) {
+        char name[8];
+        snprintf(name, sizeof name, "m%d", s + 1);
+        if ((q = jfind(json, pfx, name)) != NULL)
+            tr->cfg[s].machine = (uint8_t)iclamp(atoi(q), 0, WORK_FX_COUNT - 1);
+
+        snprintf(name, sizeof name, "p%d", s + 1);
+        if ((q = jfind(json, pfx, name)) != NULL && *q == '[') {
+            const char *c = q + 1;
+            for (int i = 0; i < WORK_PARAMS && *c && *c != ']'; ++i) {
+                tr->cfg[s].p[i] = (uint8_t)iclamp(atoi(c), 0, 127);
+                while (*c && *c != ',' && *c != ']') c++;
+                if (*c == ',') c++;
+            }
+        }
+    }
+
+    if ((q = jfind(json, pfx, "vf")) != NULL && *q == '[') {
+        const char *c = q + 1;
+        int v[7] = {0, 127, 0, 64, 0, 48, 0};
+        for (int i = 0; i < 7 && *c && *c != ']'; ++i) {
+            v[i] = iclamp(atoi(c), 0, 127);
+            while (*c && *c != ',' && *c != ']') c++;
+            if (*c == ',') c++;
+        }
+        tr->vfilt.base   = (uint8_t)v[0]; tr->vfilt.width = (uint8_t)v[1];
+        tr->vfilt.reso   = (uint8_t)v[2]; tr->vfilt.env   = (uint8_t)v[3];
+        tr->vfilt.attack = (uint8_t)v[4]; tr->vfilt.decay = (uint8_t)v[5];
+        tr->vfilt.track  = (uint8_t)v[6];
+    }
+
+    for (int n = 0; n < WORK_LFOS; ++n) {
+        char name[8];
+        snprintf(name, sizeof name, "l%d", n + 1);
+        if ((q = jfind(json, pfx, name)) != NULL && *q == '[') {
+            const char *c = q + 1;
+            int v[7] = {-1, 32, 64, 0, 64, 0, 0};
+            for (int i = 0; i < 7 && *c && *c != ']'; ++i) {
+                v[i] = atoi(c);
+                while (*c && *c != ',' && *c != ']') c++;
+                if (*c == ',') c++;
+            }
+            tr->lfo[n].dest  = (int8_t) iclamp(v[0], -1, WORK_STAGES * WORK_PARAMS - 1);
+            tr->lfo[n].speed = (uint8_t)iclamp(v[1], 0, 127);
+            tr->lfo[n].mult  = (uint8_t)iclamp(v[2], 0, 127);
+            tr->lfo[n].wave  = (uint8_t)iclamp(v[3], 0, 127);
+            tr->lfo[n].depth = (uint8_t)iclamp(v[4], 0, 127);
+            tr->lfo[n].phase = (uint8_t)iclamp(v[5], 0, 127);
+            tr->lfo[n].trig  = (uint8_t)iclamp(v[6], 0, 1);
+        }
+    }
+}
+
 static void apply_state(work_t *w, const char *json) {
     const char *q;
 
@@ -3545,74 +3849,36 @@ static void apply_state(work_t *w, const char *json) {
     w->load_note[0] = '\0';
 
     if ((q = strstr(json, "\"mix\":")) != NULL) w->mix = (uint8_t)iclamp(atoi(q + 6), 0, 127);
-    if ((q = strstr(json, "\"lvl\":")) != NULL) TRK(w)->level = (uint8_t)iclamp(atoi(q + 6), 0, 127);
-    if ((q = strstr(json, "\"pan\":")) != NULL) TRK(w)->pan   = (uint8_t)iclamp(atoi(q + 6), 0, 127);
 
-    /* The sample path the patch expects. The engine does NOT load it — it has
-     * no filesystem and work_set_param runs on the audio thread. It only
-     * carries the string so the UI can see, after a preset load, that the
-     * audio in memory is not the audio this patch wants, and reload it. */
-    if ((q = strstr(json, "\"smp\":\"")) != NULL) {
-        const char *c = q + 7;
-        size_t i = 0;
-        while (*c && *c != '"' && i < sizeof(TRK(w)->sample_path) - 1) {
-            if (*c == '\\' && c[1]) c++;      /* unescape \" and \\ */
-            TRK(w)->sample_path[i++] = *c++;
-        }
-        TRK(w)->sample_path[i] = '\0';
-    }
-
-    for (int s = 0; s < WORK_STAGES; ++s) {
-        char key[16];
-        snprintf(key, sizeof(key), "\"m%d\":", s + 1);
-        if ((q = strstr(json, key)) != NULL) {
-            int mc = iclamp(atoi(q + strlen(key)), 0, WORK_FX_COUNT - 1);
-            TRK(w)->cfg[s].machine = (uint8_t)mc;
-        }
-        snprintf(key, sizeof(key), "\"p%d\":[", s + 1);
-        if ((q = strstr(json, key)) != NULL) {
-            const char *c = q + strlen(key);
-            for (int i = 0; i < WORK_PARAMS && *c && *c != ']'; ++i) {
-                TRK(w)->cfg[s].p[i] = (uint8_t)iclamp(atoi(c), 0, 127);
-                while (*c && *c != ',' && *c != ']') c++;
-                if (*c == ',') c++;
+    if (version >= 3) {
+        /* Every track the blob names, and a reset for every track it does not.
+         * Leaving an unnamed track alone would let the previous preset's track
+         * 5 keep playing under this one — a patch is the whole instrument, not
+         * a diff against whatever was loaded before. */
+        for (int t = 0; t < WORK_TRACKS; ++t) {
+            char pfx[8];
+            snprintf(pfx, sizeof pfx, "t%d", t);
+            if (!jfind(json, pfx, "m1")) {
+                track_defaults(&w->trk[t], t);
+                memset(LANE(w, t)->step, 0, sizeof LANE(w, t)->step);
+                for (int i = 0; i < WORK_STEPS; ++i) LANE(w, t)->step[i].prob = 100;
+                w->trk[t].held_mask = 0;
+                continue;
             }
-        }
-    }
+            apply_track_state(&w->trk[t], json, pfx);
 
-    if ((q = strstr(json, "\"vf\":[")) != NULL) {
-        const char *c = q + 6;
-        int v[7] = {0, 127, 0, 64, 0, 48, 0};
-        for (int i = 0; i < 7 && *c && *c != ']'; ++i) {
-            v[i] = iclamp(atoi(c), 0, 127);
-            while (*c && *c != ',' && *c != ']') c++;
-            if (*c == ',') c++;
+            /* The lane, packed. A named track with no "ln" key is one whose
+             * lane was empty at save time, so it still gets cleared — the
+             * reset above only covers tracks the blob omits entirely. */
+            int plen = 0;
+            if ((q = jfind(json, pfx, "ln")) != NULL && *q == '"')
+                plen = b64_decode(q + 1, w->lane_buf, (int)sizeof w->lane_buf);
+            lane_unpack(LANE(w, t), w->lane_buf, plen);
+            w->trk[t].held_mask = 0;
         }
-        TRK(w)->vfilt.base = (uint8_t)v[0]; TRK(w)->vfilt.width  = (uint8_t)v[1];
-        TRK(w)->vfilt.reso = (uint8_t)v[2]; TRK(w)->vfilt.env    = (uint8_t)v[3];
-        TRK(w)->vfilt.attack = (uint8_t)v[4]; TRK(w)->vfilt.decay = (uint8_t)v[5];
-        TRK(w)->vfilt.track = (uint8_t)v[6];
-    }
-
-    for (int n = 0; n < WORK_LFOS; ++n) {
-        char key[16];
-        snprintf(key, sizeof(key), "\"l%d\":[", n + 1);
-        if ((q = strstr(json, key)) != NULL) {
-            const char *c = q + strlen(key);
-            int v[7] = {-1, 32, 64, 0, 64, 0, 0};
-            for (int i = 0; i < 7 && *c && *c != ']'; ++i) {
-                v[i] = atoi(c);
-                while (*c && *c != ',' && *c != ']') c++;
-                if (*c == ',') c++;
-            }
-            TRK(w)->lfo[n].dest  = (int8_t)iclamp(v[0], -1, WORK_STAGES * WORK_PARAMS - 1);
-            TRK(w)->lfo[n].speed = (uint8_t)iclamp(v[1], 0, 127);
-            TRK(w)->lfo[n].mult  = (uint8_t)iclamp(v[2], 0, 127);
-            TRK(w)->lfo[n].wave  = (uint8_t)iclamp(v[3], 0, 127);
-            TRK(w)->lfo[n].depth = (uint8_t)iclamp(v[4], 0, 127);
-            TRK(w)->lfo[n].phase = (uint8_t)iclamp(v[5], 0, 127);
-            TRK(w)->lfo[n].trig  = (uint8_t)iclamp(v[6], 0, 1);
-        }
+        w->last_step = -1;
+    } else {
+        apply_track_state(TRK(w), json, "");
     }
 
     if ((q = strstr(json, "\"sq\":[")) != NULL) {
@@ -3704,15 +3970,6 @@ static void apply_state(work_t *w, const char *json) {
  *
  * Nothing the render path reads moves until sample_end, so an interrupted
  * transfer leaves the previous sample playing rather than half of a new one. */
-static int b64_val(char c) {
-    if (c >= 'A' && c <= 'Z') return c - 'A';
-    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-    if (c >= '0' && c <= '9') return c - '0' + 52;
-    if (c == '+') return 62;
-    if (c == '/') return 63;
-    return -1;                      /* '=' padding and any junk */
-}
-
 /* Decode base64 straight into the sample buffer as little-endian int16.
  * Bounded by the remaining space, so a malformed or over-long chunk cannot
  * run past the allocation. */
@@ -4092,6 +4349,174 @@ void work_set_param(work_t *w, const char *key, const char *val) {
     }
 }
 
+/* A track that can make no sound and holds no pattern.
+ *
+ * Not a comparison against every default — that list would have to be kept in
+ * step with track_defaults by hand, and a missed field means a preset silently
+ * drops a setting. It is an INVARIANT instead: a track whose stages are all
+ * Bypass and whose lane is empty has no voice to trigger and nothing to
+ * process, so its level, pan, filter and LFOs cannot reach the output no
+ * matter what they are set to. Such a track is left out of the blob, and the
+ * loader gives it defaults on the way back in.
+ *
+ * Track 0 is written unconditionally by the caller: it is the one fed the live
+ * input, so an all-Bypass chain there still passes audio. */
+static int track_is_inaudible(const work_t *w, int t) {
+    const work_track_t *tr = &w->trk[t];
+    for (int s = 0; s < WORK_STAGES; ++s)
+        if (tr->cfg[s].machine != WORK_FX_BYPASS) return 0;
+    if (tr->sample_path[0]) return 0;
+
+    const work_lane_t *ln = &w->pat[w->cur_pattern].lane[t];
+    for (int i = 0; i < WORK_STEPS; ++i) {
+        const work_step_t *st = &ln->step[i];
+        if (st->active || st->lock_mask || st->cond || st->micro ||
+            st->retrig || st->trig_type || st->prob != 100) return 0;
+    }
+    return 1;
+}
+
+/* Build the whole blob into w->state_buf, and return its length.
+ *
+ * Built whole and then served in WINDOWS by the "state" and "state@<offset>"
+ * keys. v2 wrote straight into the caller's buffer and stopped when it filled,
+ * which at one track was a 90%-full 16 KB and at eight is a preset that loses
+ * most of its pattern and says nothing about it. A caller that reads "state"
+ * and stops still gets a truncated blob; a caller that keeps asking for
+ * "state@<n>" until the answer comes back short gets all of it. */
+static int state_build(work_t *w) {
+    char     *buf     = w->state_buf;
+    const int buf_len = (int)sizeof w->state_buf;
+    const int cap     = buf_len - 1;
+    int       n       = 0;
+
+    n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                            "{\"v\":3,\"mix\":%d,\"sel\":%d",
+                            w->mix, w->sel_track), cap);
+
+    for (int t = 0; t < WORK_TRACKS; ++t) {
+        if (t != 0 && track_is_inaudible(w, t)) continue;
+
+        char pfx[8];
+        snprintf(pfx, sizeof pfx, "t%d", t);
+        const work_track_t *tr = &w->trk[t];
+
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                ",\"%slvl\":%d,\"%span\":%d",
+                                pfx, tr->level, pfx, tr->pan), cap);
+
+        /* The sample PATH, not the audio. A source-machine patch that restored
+         * every parameter and then played silence read as a broken module, so
+         * the blob records which file the patch expects and the UI reloads it.
+         * Emitted only when set, so a patch with no sample is unchanged. */
+        if (tr->sample_path[0]) {
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                    ",\"%ssmp\":\"", pfx), cap);
+            for (const char *c = tr->sample_path; *c && n < cap; ++c) {
+                /* Only \" and \\ need escaping; anything below 0x20 would make
+                 * the blob invalid JSON, and a control character in a path is
+                 * corruption rather than a name, so it is dropped. */
+                if ((unsigned char)*c < 0x20) continue;
+                if (*c == '"' || *c == '\\')
+                    n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                            "\\%c", *c), cap);
+                else
+                    n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                            "%c", *c), cap);
+            }
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "\""), cap);
+        }
+
+        for (int s = 0; s < WORK_STAGES; ++s) {
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                    ",\"%sm%d\":%d,\"%sp%d\":[",
+                                    pfx, s + 1, tr->cfg[s].machine, pfx, s + 1), cap);
+            for (int i = 0; i < WORK_PARAMS; ++i)
+                n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s%d",
+                                        i ? "," : "", tr->cfg[s].p[i]), cap);
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "]"), cap);
+        }
+
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                ",\"%svf\":[%d,%d,%d,%d,%d,%d,%d]", pfx,
+                                tr->vfilt.base, tr->vfilt.width, tr->vfilt.reso,
+                                tr->vfilt.env, tr->vfilt.attack, tr->vfilt.decay,
+                                tr->vfilt.track), cap);
+
+        for (int l = 0; l < WORK_LFOS; ++l) {
+            const work_lfo_cfg_t *L = &tr->lfo[l];
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                    ",\"%sl%d\":[%d,%d,%d,%d,%d,%d,%d]", pfx, l + 1,
+                                    L->dest, L->speed, L->mult, L->wave,
+                                    L->depth, L->phase, L->trig), cap);
+        }
+
+        /* The lane, packed and base64'd. Omitted when empty, which is what
+         * keeps a patch that only uses two tracks from carrying six empty
+         * ones. */
+        const int plen = lane_pack(&w->pat[w->cur_pattern].lane[t],
+                                   w->lane_buf, (int)sizeof w->lane_buf);
+        if (plen > 0) {
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                    ",\"%sln\":\"", pfx), cap);
+            n = nclamp(n + b64_encode(w->lane_buf, plen, buf + n, cap - n), cap);
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "\""), cap);
+        }
+    }
+
+    n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                            ",\"sq\":[%d,%d,%d]",
+                            w->seq_on, CURPAT(w)->len, CURPAT(w)->page_mask), cap);
+
+    /* Flat mirrors of the arrays above, as comma-separated STRINGS.
+     *
+     * schwung's remote UI seeds a browser page by parsing this blob as a flat
+     * object and keeping only scalar fields — a JSON array is dropped on the
+     * floor. Rather than change the array form, which every saved preset
+     * depends on, the same values go out again as strings under an "f" prefix.
+     * apply_state ignores them, so they cost nothing on the way back in.
+     *
+     * SELECTED TRACK ONLY, and that is deliberate: the page shows one track's
+     * chain at a time, and mirroring all eight would multiply the largest
+     * fixed cost in the blob by eight to serve a view nothing renders.
+     *
+     * Keyed by the STAGE suffix — fp_src / fp1 / fp2 — the same spelling
+     * labels and eff use. They used to be numbered from 1, which after the SRC
+     * promotion would have made "fp1" the source stage while "labels1" meant
+     * the first insert: two conventions in one contract, and the browser
+     * editor would have had to know which key used which. */
+    for (int sl = 0; sl < WORK_STAGES; ++sl) {
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                ",\"fp%s\":\"", STAGE_SFX[sl]), cap);
+        for (int i = 0; i < WORK_PARAMS; ++i)
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s%d",
+                                    i ? "," : "", TRK(w)->cfg[sl].p[i]), cap);
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "\""), cap);
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                ",\"fe%s\":\"", STAGE_SFX[sl]), cap);
+        for (int i = 0; i < WORK_PARAMS; ++i)
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s%d",
+                                    i ? "," : "", TRK(w)->eff[sl][i]), cap);
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "\""), cap);
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                ",\"fn%s\":\"%s\"", STAGE_SFX[sl],
+                                MACHINE_NAME[TRK(w)->cfg[sl].machine]), cap);
+    }
+    n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                            ",\"fvf\":\"%d,%d,%d,%d,%d,%d,%d\"",
+                            TRK(w)->vfilt.base, TRK(w)->vfilt.width, TRK(w)->vfilt.reso,
+                            TRK(w)->vfilt.env, TRK(w)->vfilt.attack, TRK(w)->vfilt.decay,
+                            TRK(w)->vfilt.track), cap);
+    n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                            ",\"fseq\":\"%d,%d,%d,%d\"",
+                            w->seq_on, CURPAT(w)->len, w->seq_pos,
+                            w->cur_pattern), cap);
+
+    n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "}"), cap);
+    buf[n] = '\0';
+    return n;
+}
+
 int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
     if (!w || !key || !buf || buf_len <= 1) return -1;
     int cap = buf_len - 1;
@@ -4384,117 +4809,37 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
      * key — chain_params does not divert the component editor.
      */
 
-    if (strcmp(key, "state") == 0) {
-        int n = 0;
-        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                "{\"v\":2,\"mix\":%d,\"lvl\":%d,\"pan\":%d",
-                                w->mix, TRK(w)->level, TRK(w)->pan), cap);
-        /* The sample PATH, not the audio. A source-machine patch that restored
-         * every parameter and then played silence read as a broken module, so
-         * the blob records which file the patch expects and the UI reloads it.
-         * Emitted only when set, so a patch with no sample is unchanged. */
-        if (TRK(w)->sample_path[0]) {
-            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                    ",\"smp\":\""), cap);
-            for (const char *c = TRK(w)->sample_path; *c && n < cap; ++c) {
-                /* Only \" and \\ need escaping; anything below 0x20 would make
-                 * the blob invalid JSON, and a control character in a path is
-                 * corruption rather than a name, so it is dropped. */
-                if ((unsigned char)*c < 0x20) continue;
-                if (*c == '"' || *c == '\\')
-                    n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                            "\\%c", *c), cap);
-                else
-                    n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                            "%c", *c), cap);
-            }
-            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "\""), cap);
-        }
-        for (int s = 0; s < WORK_STAGES; ++s) {
-            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                    ",\"m%d\":%d,\"p%d\":[", s + 1,
-                                    TRK(w)->cfg[s].machine, s + 1), cap);
-            for (int i = 0; i < WORK_PARAMS; ++i)
-                n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s%d",
-                                        i ? "," : "", TRK(w)->cfg[s].p[i]), cap);
-            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "]"), cap);
-        }
-        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                ",\"vf\":[%d,%d,%d,%d,%d,%d,%d]",
-                                TRK(w)->vfilt.base, TRK(w)->vfilt.width, TRK(w)->vfilt.reso,
-                                TRK(w)->vfilt.env, TRK(w)->vfilt.attack, TRK(w)->vfilt.decay,
-                                TRK(w)->vfilt.track), cap);
-        /* Flat mirrors of the arrays above, as comma-separated STRINGS.
-          * schwung's remote UI seeds a browser page by parsing this blob as a
-          * flat object and keeping only scalar fields — a JSON array is
-          * dropped on the floor. Rather than change the array form, which
-          * every saved preset depends on, the same values go out again as
-          * strings under an "f" prefix. apply_state ignores them, so they
-          * cost nothing on the way back in. */
-        /* Keyed by the STAGE suffix — fp_src / fp1 / fp2 — the same spelling
-         * labels and eff use. They used to be numbered from 1, which after the
-         * SRC promotion would have made "fp1" the source stage while "labels1"
-         * meant the first insert: two conventions in one contract, and the
-         * browser editor would have had to know which key used which. */
-        for (int sl = 0; sl < WORK_STAGES; ++sl) {
-            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                    ",\"fp%s\":\"", STAGE_SFX[sl]), cap);
-            for (int i = 0; i < WORK_PARAMS; ++i)
-                n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s%d",
-                                        i ? "," : "", TRK(w)->cfg[sl].p[i]), cap);
-            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "\""), cap);
-            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                    ",\"fe%s\":\"", STAGE_SFX[sl]), cap);
-            for (int i = 0; i < WORK_PARAMS; ++i)
-                n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s%d",
-                                        i ? "," : "", TRK(w)->eff[sl][i]), cap);
-            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "\""), cap);
-            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                    ",\"fn%s\":\"%s\"", STAGE_SFX[sl],
-                                    MACHINE_NAME[TRK(w)->cfg[sl].machine]), cap);
-        }
-        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                ",\"fvf\":\"%d,%d,%d,%d,%d,%d,%d\"",
-                                TRK(w)->vfilt.base, TRK(w)->vfilt.width, TRK(w)->vfilt.reso,
-                                TRK(w)->vfilt.env, TRK(w)->vfilt.attack, TRK(w)->vfilt.decay,
-                                TRK(w)->vfilt.track), cap);
-        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                ",\"fseq\":\"%d,%d,%d,%d\"",
-                                w->seq_on, CURPAT(w)->len, w->seq_pos,
-                                w->cur_pattern), cap);
-        for (int l = 0; l < WORK_LFOS; ++l) {
-            work_lfo_cfg_t *L = &TRK(w)->lfo[l];
-            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                    ",\"l%d\":[%d,%d,%d,%d,%d,%d,%d]", l + 1,
-                                    L->dest, L->speed, L->mult, L->wave,
-                                    L->depth, L->phase, L->trig), cap);
-        }
-        /* Sequencer. Only steps that differ from empty are emitted, so a
-         * static patch's blob stays small. Steps are separated by '|',
-         * fields by ',', and a step's locks by '+' as "index=value". */
-        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                ",\"sq\":[%d,%d,%d],\"stp\":\"",
-                                w->seq_on, CURPAT(w)->len, CURPAT(w)->page_mask), cap);
-        int emitted = 0;
-        for (int i = 0; i < WORK_STEPS; ++i) {
-            const work_step_t *st = &CURLANE(w)->step[i];
-            if (!st->active && !st->lock_mask && !st->cond && !st->micro &&
-                !st->retrig && st->prob == 100)
-                continue;
-            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                    "%s%d,%d,%d,%d,%d,%d,%d", emitted ? "|" : "",
-                                    i, st->active, st->cond, st->micro, st->retrig,
-                                    st->prob, st->trig_type), cap);
-            emitted = 1;
-            for (int k = 0; k < WORK_LOCKABLE; ++k) {
-                if (!(st->lock_mask & (1ull << k))) continue;
-                n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                        "+%d=%d", k, st->lock[k]), cap);
-            }
-        }
-        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "\""), cap);
+    /* How long the whole blob is, so a caller can page it without having to
+     * know the size of the host binding's buffer. Reading until a short answer
+     * works too, but it makes the UI depend on a constant that lives in
+     * schwung rather than here — and a host that grew its buffer would silently
+     * turn a full read into a truncated one. */
+    if (strcmp(key, "state_len") == 0)
+        return nclamp(snprintf(buf, buf_len, "%d", state_build(w)), cap);
 
-        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "}"), cap);
+    /* The preset blob, or a window into it.
+     *
+     *     state            from byte 0
+     *     state@<offset>   from byte <offset>
+     *
+     * Both fill the caller's buffer and return how much they wrote. Read
+     * "state_len" first, then "state" and "state@<so far>" until that many
+     * bytes have arrived. A short answer also means the end, so a caller that
+     * knows the buffer size can skip the length read.
+     *
+     * The blob is rebuilt for each window rather than cached between them. It
+     * costs a few passes over 40 KB on a save, and the alternative is a cache
+     * that goes stale between two reads and hands out a preset assembled from
+     * two different moments. */
+    if (strcmp(key, "state") == 0 || strncmp(key, "state@", 6) == 0) {
+        const int total = state_build(w);
+        int off = (key[5] == '@') ? atoi(key + 6) : 0;
+        if (off < 0) off = 0;
+        if (off > total) off = total;
+        int n = total - off;
+        if (n > cap) n = cap;
+        memcpy(buf, w->state_buf + off, (size_t)n);
+        buf[n] = '\0';
         return n;
     }
 

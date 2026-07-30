@@ -1258,9 +1258,39 @@ function writePresetAtomically(file, payload) {
     return !!direct;
 }
 
+/* The whole state blob, assembled from as many reads as it takes.
+ *
+ * host_module_get_param hands back one buffer's worth — 16 KB in the binding —
+ * and eight tracks of pattern is more than that. Reading 'state' alone gets a
+ * PREFIX of the preset, not a short one that fails to load: valid JSON up to
+ * wherever it stopped, missing the later tracks, silent about it. So the
+ * engine reports the total at 'state_len' and serves windows at 'state@<n>'.
+ *
+ * The length is asked for first rather than reading until a short answer,
+ * because "short" means "shorter than the host's buffer" and that constant
+ * lives in schwung, not here. */
+function readState() {
+    const total = parseInt(getParam('state_len'), 10);
+    let blob = getParam('state');
+    if (!Number.isFinite(total) || total <= 0) return blob;
+
+    /* A window that comes back empty would spin this forever — a preset lost
+     * to a hang is worse than one lost to truncation, so give up and let the
+     * length check below reject what we have. */
+    while (blob.length < total) {
+        const next = getParam(`state@${blob.length}`);
+        if (!next) break;
+        blob += next;
+    }
+    return blob.length === total ? blob : '';
+}
+
 function savePreset() {
     if (typeof host_ensure_dir === 'function') host_ensure_dir(PRESET_DIR);
     else { try { os.mkdir(PRESET_DIR); } catch (e) {} }
+
+    const state = readState();
+    if (!state) { announce('Save failed'); return; }
 
     const name = nextPresetName();
     const file = `${safeStem(name)}.json`;
@@ -1268,7 +1298,7 @@ function savePreset() {
         v: 1,
         name: name,
         module: 'overwork',
-        state: getParam('state')
+        state: state
     });
 
     if (!writePresetAtomically(file, payload)) {

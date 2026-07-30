@@ -202,6 +202,26 @@ typedef enum {
 #define WORK_LOCK_VF_COUNT  7
 #define WORK_LOCKABLE       36
 
+/* How big a preset can get.
+ *
+ * WORK_LANE_MAX is one lane packed to binary at its worst: every one of 64
+ * steps carrying a record, and every record carrying a value for every bit the
+ * mask can express. The mask is sized in whole bytes, so it addresses 40 lock
+ * indices even though only WORK_LOCKABLE of them mean anything — the spare
+ * bits are counted here so that raising WORK_LOCKABLE within the same byte
+ * count cannot overflow the buffer.
+ *
+ * WORK_STATE_MAX is the whole blob: eight tracks of that lane in base64 (four
+ * characters per three bytes), plus each track's machines, parameters, LFOs,
+ * filter and sample path, plus the globals and the flat mirrors. Measured at
+ * about 40 KB in the worst case; 48 leaves room for a field or two without
+ * another format change. The blob is never read whole through a single host
+ * call — see "state@<offset>" — so this bound is about the engine's own
+ * scratch, not about what the host can carry. */
+#define WORK_LANE_STEP_MAX  (12 + 40)      /* fixed record + one value per mask bit */
+#define WORK_LANE_MAX       (WORK_STEPS * WORK_LANE_STEP_MAX)
+#define WORK_STATE_MAX      49152
+
 /* The previous map, kept only so a v1 blob can be translated on load. Nothing
  * outside migrate_v1_lock() may use these. */
 #define WORK_LOCK_V1_MACH0  16     /* stage 0 and 1's machines           */

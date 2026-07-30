@@ -91,6 +91,10 @@ int main(void) {
         "machines", "conds", "effm", "mix", "level", "pan", "load_note",
         "seq_on", "seq_len", "fill",
         "seq_pos", "meter", "state", "live_rec",
+        /* The windowed preset read. "state@0" is here so the harness's
+         * shape matching (digits collapse to '#') accepts every "state@<n>"
+         * the UI issues while paging a blob too big for one host buffer. */
+        "state_len", "state@0",
         "menv_dest", "menv_atk", "menv_hold", "menv_dec", "menv_depth",
         "pattern", "page_mask", "song_on", "song_len", "song_pos", "undo_state",
         "vf_base", "vf_width", "vf_reso", "vf_env", "vf_atk", "vf_dec", "vf_track",

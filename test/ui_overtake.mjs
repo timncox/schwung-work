@@ -54,6 +54,13 @@ function check(cond, msg) {
 
 /* ------------------------------------------------------------- the mock */
 
+/* How much of the state blob one mocked read returns. Deliberately far below
+ * the host binding's real 16 KB: at eight tracks the device pages a preset
+ * across several reads, and a mock generous enough to answer in one would go
+ * green against a UI that never learned to page. Small enough that even the
+ * fixture's few-hundred-byte blob takes several trips. */
+const MOCK_STATE_WINDOW = 64;
+
 /* Keys the engine serves as families — the fixture holds concrete instances,
  * so a request for lock12_3 is legal if lock<N>_<P> is a served family. */
 const FAMILIES = [
@@ -164,13 +171,30 @@ function makeHost() {
         host_module_get_param(key) {
             roundTrips.push({ bulk: false, keys: [key] });
             reads.push(key);
-            /* work_get_param("state") appends the recorded sample path when
-             * there is one. Modelling only the PARSE side and not this one is
-             * how a save that silently drops the path still passes. */
-            if (key === 'state' && store.sample_path) {
-                const esc = `${store.sample_path}`.replace(/([\\"])/g, '\\$1');
-                return `${store.state}`.replace(/\}\s*$/, `,"smp":"${esc}"}`);
+
+            /* The preset blob is served in WINDOWS: 'state' is the first
+             * buffer's worth, 'state@<n>' continues from byte n, and
+             * 'state_len' is the total. The engine caps a window at the host
+             * binding's buffer; the mock caps it much smaller so the paging
+             * path is actually exercised — a mock that always answered in one
+             * window would leave the loop in readState untested, which is the
+             * whole reason it exists.
+             *
+             * work_get_param also appends the recorded sample path when there
+             * is one. Modelling only the PARSE side and not this one is how a
+             * save that silently drops the path still passes. */
+            if (key === 'state' || key === 'state_len' || key.startsWith('state@')) {
+                let blob = `${store.state}`;
+                if (store.sample_path) {
+                    const esc = `${store.sample_path}`.replace(/([\\"])/g, '\\$1');
+                    blob = blob.replace(/\}\s*$/, `,"t0smp":"${esc}"}`);
+                }
+                if (key === 'state_len') return `${blob.length}`;
+                const off = key === 'state' ? 0 : parseInt(key.slice(6), 10);
+                if (!Number.isFinite(off) || off < 0 || off > blob.length) return '';
+                return blob.slice(off, off + MOCK_STATE_WINDOW);
             }
+
             if (key in store) return store[key];
             if (familyServed(key)) {
                 /* a member the fixture did not capture: answer the way the
@@ -258,7 +282,15 @@ function makeHost() {
                  * what the engine would actually hand back — without it the
                  * mock answers the fixture's stale path and a UI that
                  * correctly reloads the audio looks like it did nothing. */
-                const m = /"smp":"((?:[^"\\]|\\.)*)"/.exec(`${val}`);
+                /* v3 prefixes every per-track key with "t<N>", and get/set of
+                 * "sample_path" addresses the SELECTED track — so the path the
+                 * engine hands back after a load is the selected track's, not
+                 * the first one written into the blob. v1 and v2 knew one
+                 * track and used no prefix. */
+                const v = /"v":(\d+)/.exec(`${val}`);
+                const sel = /"sel":(\d+)/.exec(`${val}`);
+                const pfx = (v && +v[1] >= 3) ? `t${sel ? sel[1] : '0'}` : '';
+                const m = new RegExp(`"${pfx}smp":"((?:[^"\\\\]|\\\\.)*)"`).exec(`${val}`);
                 if (m) store.sample_path = m[1].replace(/\\(.)/g, '$1');
             }
             const fam = key.replace(/\d+/g, '#');
@@ -1027,7 +1059,7 @@ async function testPresetRestoresItsSample() {
     const file = [...a.vfs.files.keys()].find((f) => f.endsWith('.json'));
     check(!!file, 'nothing was saved');
     const saved = JSON.parse(a.vfs.files.get(file));
-    check(/"smp":"/.test(saved.state),
+    check(/"t0smp":"/.test(saved.state),
           `the saved patch does not record its sample: ${saved.state.slice(0, 120)}`);
 
     /* --- load half: a FRESH session holding nothing, which is what a reboot

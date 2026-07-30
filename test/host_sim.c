@@ -1531,10 +1531,10 @@ static void test_pre_promotion_preset_shifts_a_stage(void) {
     work_destroy(w);
 }
 
-/* A v2 blob must round-trip untouched, and must NOT be run through the
- * translation — that would move every lock one map further along. */
-static void test_v2_preset_is_not_migrated(void) {
-    printf("a v2 preset round-trips without translation\n");
+/* A blob written by THIS engine must round-trip untouched, and must not be run
+ * through any translation — that would move every lock one map further along. */
+static void test_current_preset_is_not_migrated(void) {
+    printf("a preset this engine wrote round-trips without translation\n");
     work_t *a = work_create(&host);
     work_set_param(a, "seq_len", "4");
     work_set_param(a, "step0", "1:0:0:0");
@@ -1544,7 +1544,7 @@ static void test_v2_preset_is_not_migrated(void) {
 
     static char blob[16384];
     work_get_param(a, "state", blob, sizeof(blob));
-    CHECK(strstr(blob, "\"v\":2") != NULL, "the blob does not declare v2");
+    CHECK(strstr(blob, "\"v\":3") != NULL, "the blob does not declare v3");
 
     work_t *b = work_create(&host);
     work_set_param(b, "state", blob);
@@ -1552,15 +1552,67 @@ static void test_v2_preset_is_not_migrated(void) {
     char s[128];
     work_get_param(b, "locks0", s, sizeof(s));
     CHECK(strcmp(s, "0=11,16=33,27=40,29=55") == 0,
-          "v2 locks came back as %s", s);
+          "locks came back as %s", s);
     work_get_param(b, "level", s, sizeof(s));
     CHECK(atoi(s) == 90, "level came back as %s", s);
     work_get_param(b, "pan", s, sizeof(s));
     CHECK(atoi(s) == 30, "pan came back as %s", s);
     work_get_param(b, "load_note", s, sizeof(s));
-    CHECK(s[0] == '\0', "a v2 load left a migration note: \"%s\"", s);
+    CHECK(s[0] == '\0', "the load left a migration note: \"%s\"", s);
 
     work_destroy(a); work_destroy(b);
+}
+
+/* A v2 blob is the format that shipped, so presets in it exist on the device.
+ * It has no per-track prefixes and its pattern is the "stp" text form — both
+ * of which v3 replaced — so this is written by hand rather than produced by
+ * the engine, which can no longer emit one. Its lock map is already the
+ * current one, so nothing about it may be translated.
+ *
+ * Every field lands on TRACK 0, because v2 had exactly one track. */
+static void test_v2_preset_loads_into_track_one(void) {
+    printf("a v2 preset loads whole, into track 1, untranslated\n");
+    work_t *w = work_create(&host);
+
+    static const char v2[] =
+        "{\"v\":2,\"mix\":100,\"lvl\":90,\"pan\":30"
+        ",\"smp\":\"/data/UserData/UserLibrary/Samples/old.wav\""
+        ",\"m1\":21,\"p1\":[10,20,30,40,50,60,70,80]"
+        ",\"m2\":5,\"p2\":[1,2,3,4,5,6,7,8]"
+        ",\"m3\":0,\"p3\":[0,0,0,0,0,0,0,0]"
+        ",\"vf\":[11,22,33,44,55,66,77]"
+        ",\"fp_src\":\"10,20,30,40,50,60,70,80\""
+        ",\"sq\":[1,4,15]"
+        ",\"stp\":\"0,1,0,0,0,100,0+0=11+16=33+27=40+29=55|2,1,0,0,0,100,0\"}";
+
+    work_set_param(w, "state", v2);
+
+    char s[256];
+    work_get_param(w, "locks0", s, sizeof s);
+    CHECK(strcmp(s, "0=11,16=33,27=40,29=55") == 0,
+          "a v2 lock set was translated when it should not have been: %s", s);
+    work_get_param(w, "level", s, sizeof s);
+    CHECK(atoi(s) == 90, "v2 level came back as %s", s);
+    work_get_param(w, "pan", s, sizeof s);
+    CHECK(atoi(s) == 30, "v2 pan came back as %s", s);
+    work_get_param(w, "mix", s, sizeof s);
+    CHECK(atoi(s) == 100, "v2 mix came back as %s", s);
+    work_get_param(w, "src", s, sizeof s);
+    CHECK(atoi(s) == 21, "v2 source machine came back as %s", s);
+    work_get_param(w, "fx1", s, sizeof s);
+    CHECK(atoi(s) == 5, "v2 insert 1 machine came back as %s", s);
+    work_get_param(w, "src_p3", s, sizeof s);
+    CHECK(atoi(s) == 30, "v2 source parameter C came back as %s", s);
+    work_get_param(w, "vf_reso", s, sizeof s);
+    CHECK(atoi(s) == 33, "v2 filter resonance came back as %s", s);
+    work_get_param(w, "sample_path", s, sizeof s);
+    CHECK(strstr(s, "old.wav") != NULL, "v2 sample path came back as \"%s\"", s);
+    work_get_param(w, "step2", s, sizeof s);
+    CHECK(s[0] == '1', "the second v2 trig did not survive: %s", s);
+    work_get_param(w, "load_note", s, sizeof s);
+    CHECK(s[0] == '\0', "a v2 load left a migration note: \"%s\"", s);
+
+    work_destroy(w);
 }
 
 /* ------------------------------------------------------------ level / pan */
@@ -1660,8 +1712,60 @@ static void test_level_and_pan_are_lockable(void) {
  * to 8, and it is the reason this test exists rather than a comment. */
 #define HOST_STATE_BUFFER 16384
 
-static void test_worst_case_state_fits_the_host_buffer(void) {
-    printf("the worst-case preset still fits the host's 16 KB read buffer\n");
+/* Fill every lane with the densest pattern the format can express: 64 steps,
+ * every one trigged and carrying every lockable. */
+static void densest_pattern(work_t *w) {
+    work_set_param(w, "seq_len", "64");
+    for (int t = 0; t < WORK_TRACKS; ++t) {
+        char tk[8];
+        snprintf(tk, sizeof tk, "%d", t);
+        work_set_param(w, "track", tk);
+        for (int i = 0; i < WORK_STEPS; ++i) {
+            char k[16], v[512];
+            int o = 0;
+            snprintf(k, sizeof k, "step%d", i);
+            work_set_param(w, k, "1:9:-5:2");
+            for (int lk = 0; lk < WORK_LOCKABLE; ++lk)
+                o += snprintf(v + o, sizeof(v) - (size_t)o, "%s%d=%d", lk ? "," : "", lk, 64);
+            snprintf(k, sizeof k, "locks%d", i);
+            work_set_param(w, k, v);
+        }
+    }
+    work_set_param(w, "track", "0");
+}
+
+/* Read the whole blob through the host's real buffer size, the way the UI has
+ * to: "state" for the first window, then "state@<so far>" until an answer
+ * comes back short. Returns the assembled length. */
+static int read_state_windowed(work_t *w, char *out, int out_cap) {
+    int total = 0;
+    for (;;) {
+        char win[HOST_STATE_BUFFER];
+        char key[32];
+        if (total == 0) snprintf(key, sizeof key, "state");
+        else            snprintf(key, sizeof key, "state@%d", total);
+
+        int n = work_get_param(w, key, win, sizeof win);
+        if (n <= 0) break;
+        if (total + n >= out_cap) break;
+        memcpy(out + total, win, (size_t)n);
+        total += n;
+        if (n < (int)sizeof(win) - 1) break;      /* short answer = the end */
+    }
+    out[total] = '\0';
+    return total;
+}
+
+/* One track's worth of the densest possible pattern must still come back in a
+ * SINGLE host read. Eight of them will not — that is what the window protocol
+ * below is for — but one has to, because a chain slot holds one track and
+ * paying for eight round-trips there would be a cliff nobody asked for.
+ *
+ * The v2 text format put this at 14,817 bytes against a 16,384-byte buffer:
+ * 90% full, and growing the lock map from 19 entries to 36 is what ate the
+ * margin. Packed, the same pattern is about 4,600. */
+static void test_one_dense_track_fits_a_single_read(void) {
+    printf("the densest single track still fits one host read\n");
     work_t *w = work_create(&host);
     assert(w);
 
@@ -1678,20 +1782,65 @@ static void test_worst_case_state_fits_the_host_buffer(void) {
     }
 
     static char blob[1 << 20];
-    int n = work_get_param(w, "state", blob, sizeof blob);
-    CHECK(n > 0 && n < HOST_STATE_BUFFER,
-          "the worst-case state blob is %d bytes against a %d byte host buffer — "
-          "a preset this dense would be truncated on load, silently",
+    int n = work_get_param(w, "state", blob, HOST_STATE_BUFFER);
+    CHECK(n > 0 && n < HOST_STATE_BUFFER - 1,
+          "one dense track is %d bytes against a %d byte host buffer",
           n, HOST_STATE_BUFFER);
 
-    /* And it must round-trip at that size rather than merely fitting. */
     work_t *b = work_create(&host);
     work_set_param(b, "state", blob);
-    char a1[128], b1[128];
+    char a1[256], b1[256];
     work_get_param(w, "locks63", a1, sizeof a1);
     work_get_param(b, "locks63", b1, sizeof b1);
     CHECK(strcmp(a1, b1) == 0,
           "the densest step did not survive the round trip:\n    %s\n    %s", a1, b1);
+
+    work_destroy(w); work_destroy(b);
+}
+
+/* The whole instrument at that density does NOT fit one read, and must not
+ * pretend to. This is the test that would have caught the silent truncation:
+ * it reads through the window protocol and then checks the LAST step of the
+ * LAST track, which is the first thing a truncated blob loses. */
+static void test_every_track_survives_the_window_protocol(void) {
+    printf("the densest whole pattern round-trips through windowed reads\n");
+    work_t *w = work_create(&host);
+    assert(w);
+    densest_pattern(w);
+
+    static char blob[WORK_STATE_MAX * 2];
+    int total = read_state_windowed(w, blob, (int)sizeof blob);
+
+    int single = work_get_param(w, "state", blob + sizeof(blob) - HOST_STATE_BUFFER,
+                                HOST_STATE_BUFFER);
+    if (WORK_TRACKS > 3) {
+        CHECK(total > single,
+              "the windowed read returned %d bytes and a single read returned %d — "
+              "at %d tracks a single read cannot be enough, so either the blob "
+              "is not being built whole or the window protocol is not paging",
+              total, single, WORK_TRACKS);
+    }
+
+    /* Re-read: the assembled blob has to be intact JSON, not two halves of two
+     * different builds. */
+    total = read_state_windowed(w, blob, (int)sizeof blob);
+    CHECK(blob[0] == '{' && blob[total - 1] == '}',
+          "the assembled blob is not a whole object: starts '%c', ends '%c', %d bytes",
+          blob[0], blob[total - 1], total);
+
+    work_t *b = work_create(&host);
+    work_set_param(b, "state", blob);
+
+    for (int t = 0; t < WORK_TRACKS; ++t) {
+        char tk[8], a1[256], b1[256];
+        snprintf(tk, sizeof tk, "%d", t);
+        work_set_param(w, "track", tk);
+        work_set_param(b, "track", tk);
+        work_get_param(w, "locks63", a1, sizeof a1);
+        work_get_param(b, "locks63", b1, sizeof b1);
+        CHECK(strcmp(a1, b1) == 0,
+              "track %d's last step did not survive:\n    %s\n    %s", t, a1, b1);
+    }
 
     work_destroy(w); work_destroy(b);
 }
@@ -2066,7 +2215,7 @@ static void test_state_carries_the_sample_path(void) {
 
     static char blob[65536];
     work_get_param(w, "state", blob, sizeof blob);
-    CHECK(strstr(blob, "\"smp\":\"") != NULL,
+    CHECK(strstr(blob, "\"t0smp\":\"") != NULL,
           "the state blob does not mention the sample at all");
 
     work_t *v = work_create(&host);
@@ -3049,8 +3198,10 @@ int main(void) {
     test_every_lock_index_has_a_label();
     test_v1_preset_locks_migrate();
     test_pre_promotion_preset_shifts_a_stage();
-    test_v2_preset_is_not_migrated();
-    test_worst_case_state_fits_the_host_buffer();
+    test_current_preset_is_not_migrated();
+    test_v2_preset_loads_into_track_one();
+    test_one_dense_track_fits_a_single_read();
+    test_every_track_survives_the_window_protocol();
     test_track_level_and_pan();
     test_level_and_pan_are_lockable();
     test_machine_lock_respects_the_family();
