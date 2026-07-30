@@ -1,8 +1,9 @@
 # Work — the eight-track restructure
 
-Status: **design agreed 2026-07-29, not yet implemented.** Read this before
-touching `work_core.h`. It exists because the refactor spans more work than one
-session holds, and because two of its decisions are expensive to reverse.
+Status: **steps 1 and 2 done (2026-07-29); 3 onwards not started.** Read this
+before touching `work_core.h`. It exists because the refactor spans more work
+than one session holds, and because two of its decisions are expensive to
+reverse.
 
 ## Why
 
@@ -198,11 +199,23 @@ slots 3 and 4 used on the `four-insert-slots` branch.
 
 Each step lands with tests green; nothing here needs a big-bang merge.
 
-1. `work_track_t` extracted, `WORK_TRACKS` = 1. Pure refactor, no behaviour
-   change, existing tests must pass untouched. **This is the step that catches
-   the hidden globals** — do not rush it.
-2. SRC promoted out of the FX slots into its own stage; machine list split into
-   source and effect families; `WORK_INSERTS` = 2.
+1. ~~`work_track_t` extracted, `WORK_TRACKS` = 1.~~ **done.** Pure refactor,
+   no behaviour change, existing tests passed untouched.
+2. ~~SRC promoted out of the FX slots into its own stage; machine list split
+   into source and effect families; `WORK_INSERTS` = 2.~~ **done.** What it
+   turned up, all of which was already broken and merely invisible:
+   - a machine p-lock bypassed the family gate entirely
+   - `meter` reported a stage that cannot hold a compressor
+   - the CC/NRPN machine selects had dead zones — 103 of 128 positions on the
+     source stage — because they scaled across all 26 codes and the refused
+     ones did nothing
+   - `test/dump_contract.c` probed keys with values the fixture had already
+     set, so `src` was reported read-only and the chain harness blamed the UI
+   - the manual site had Tilt tagged a source
+   The lesson for steps 3-6: **migrating the tests is where the bugs are.**
+   Several passed for the wrong reason the moment families were enforced — the
+   machine sweep loaded every machine into an insert, where every source was
+   refused, and swept an empty chain.
 3. Lock map rebuilt per-track, `lock_mask` widened, v1 -> v2 preset migration
    with its own tests.
 4. `WORK_TRACKS` = 8; sequencer grows to eight lanes.

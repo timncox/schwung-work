@@ -4,14 +4,14 @@
     {
       "title": "What it is",
       "lines": [
-        "20 FX machines on",
-        "the live input, with",
-        "a step sequencer",
-        "that parameter-locks",
+        "26 machines on the",
+        "live input, with a",
+        "step sequencer that",
+        "parameter-locks",
         "them.",
-        "Three insert slots",
-        "in series, three FX",
-        "LFOs."
+        "A source stage and",
+        "two insert FX in",
+        "series, three LFOs."
       ]
     },
     {
@@ -72,19 +72,23 @@
     {
       "title": "Pads rows 1-3",
       "lines": [
-        "Machine palette,",
-        "21 machines.",
-        "Tap to load one",
-        "into the focused",
-        "slot. The loaded",
-        "machine is white."
+        "Machine palette for",
+        "the FOCUSED STAGE:",
+        "6 sources on SRC,",
+        "21 effects on FX 1",
+        "and FX 2. Tap to",
+        "load one. The",
+        "loaded machine is",
+        "white; pads past",
+        "the family are",
+        "dark."
       ]
     },
     {
       "title": "Pad row 4",
       "lines": [
         "Play/Stop, Fill,",
-        "Slot focus,",
+        "Stage focus,",
         "Pattern page,",
         "Edit page,",
         "Copy, Paste, Clear.",
@@ -240,12 +244,18 @@
         "External CC only.",
         "CC 8-15  FX1 A-H",
         "CC 16-23 FX2 A-H",
-        "CC 24/25 machines",
+        "CC 24/25 FX machs",
         "CC 26    dry/wet",
+        "CC 80-87 SRC A-H",
+        "CC 88    SRC mach",
         "CC 32/40/48 LFOs",
         "CC 56-60 mod env",
         "CC 64/65/66 = seq,",
-        "fill, live record."
+        "fill, live record.",
+        "",
+        "A machine CC",
+        "sweeps that",
+        "stage's family."
       ]
     },
     {
@@ -284,7 +294,7 @@
         "and envelope.",
         "",
         "A lock trig applies",
-        "locks only —",
+        "locks only \u2014",
         "the classic trigless",
         "lock."
       ]

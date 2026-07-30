@@ -106,7 +106,7 @@ int main(void) {
         work_t *w = work_create(&host);
         char val[8];
         snprintf(val, sizeof(val), "%d", worst_mc);
-        for (int i = 1; i <= WORK_SLOTS; ++i) {
+        for (int i = 1; i <= WORK_STAGES; ++i) {
             char k[8];
             snprintf(k, sizeof(k), "fx%d", i);
             work_set_param(w, k, val);
@@ -119,7 +119,7 @@ int main(void) {
             work_process(w, work_buf, work_buf, BLOCK);
         }
         double dt = now_sec() - t0;
-        printf("\n  worst case: %d x %s = %.0f x realtime\n", WORK_SLOTS,
+        printf("\n  worst case: %d x %s = %.0f x realtime\n", WORK_STAGES,
                work_machine_name(worst_mc), dt > 0.0 ? (double)SECONDS / dt : 0.0);
         work_destroy(w);
     }

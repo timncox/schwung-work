@@ -50,9 +50,27 @@ if (!m) {
     check(site.length === engineNames.length,
           `site lists ${site.length} machines, engine has ${engineNames.length}`);
 
+    /* Which stage each machine loads into, from the engine's own families.
+     * The page states this per machine, and it is the kind of fact a reader
+     * acts on — "this one goes in the source stage" decides which pads they
+     * look at. It shipped wrong once already: Tilt is a bus-insert shelving EQ
+     * that was tagged a source, and Granulator is a source that reads as
+     * "granular", so the display family had been standing in for a fact it
+     * does not encode. */
+    const codes = (t) => (t || '').split(',').map(Number).filter(Number.isFinite);
+    const srcFamily = new Set(codes(contract.get.src_codes));
+    const fxFamily  = new Set(codes(contract.get.fx_codes));
+
     for (let i = 0; i < Math.min(site.length, engineNames.length); i++) {
         check(norm(site[i].n) === engineNames[i],
               `machine ${i}: site says "${site[i].n}", engine says "${engineNames[i]}"`);
+
+        const inSrc = srcFamily.has(i), inFx = fxFamily.has(i);
+        const engineStage = inSrc && inFx ? 'both' : inSrc ? 'src' : inFx ? 'fx' : 'none';
+        check(site[i].s === engineStage,
+              `machine ${i} ("${engineNames[i]}"): site says it loads in ` +
+              `"${site[i].s}", the engine puts it in "${engineStage}" — a reader ` +
+              `would look for it on the wrong stage's pads`);
 
         /* knob labels, from the generated hierarchy */
         const lvl = hierarchy.levels[`fx1_${slug(engineNames[i])}`];

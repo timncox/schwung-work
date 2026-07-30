@@ -24,9 +24,25 @@
 #include "plugin_api_v1.h"
 
 #define WORK_SR          44100
-#define WORK_SLOTS       3      /* insert FX 1, 2 and 3, in series */
+/* A track is a chain of STAGES in series:
+ *
+ *     input -> [0] SRC -> [1] insert FX 1 -> [2] insert FX 2 -> mix -> out
+ *
+ * Stage 0 is the source stage and takes only SRC-family machines; the inserts
+ * take only effect-family machines. That split is the point: loading a sampler
+ * no longer costs an FX slot, which is what it did when all three stages were
+ * interchangeable. It also makes each palette fit the pad grid without a Shift
+ * bank -- 21 effects and 6 sources, against 21 free palette pads.
+ *
+ * TWO inserts, matching the reference device. Do not grow this without reading
+ * the CC-space note further down: the map is full. */
+#define WORK_INSERTS     2
+#define WORK_STAGES      (1 + WORK_INSERTS)
+#define WORK_STAGE_SRC   0      /* stage index of the source stage      */
+#define WORK_STAGE_FX1   1      /* inserts run from here to WORK_STAGES */
+
 /* Tracks. The reference device has eight; this is the axis the engine grows
- * along, NOT the slot count. Still 1 here: work_track_t has been split out of
+ * along, NOT the stage count. Still 1 here: work_track_t has been split out of
  * struct work but nothing yet instantiates more than one. DESIGN-8TRACK.md. */
 #define WORK_TRACKS      1
 #define WORK_PARAMS      8      /* knob A-H, one per Move encoder */
@@ -146,54 +162,69 @@ typedef enum {
 #define WORK_PATTERNS   16     /* a bank; song mode chains them  */
 #define WORK_SONG_ROWS  32     /* rows in the song               */
 #define WORK_PAGE_STEPS 16
-/* Lockable parameters, in lock-index order:
- *   0..7   slot 1 parameters A-H
- *   8..15  slot 2 parameters A-H
- *   16     slot 1 machine
- *   17     slot 2 machine
+/* Lockable parameters, in lock-index order. Indices are numbered by STAGE, so
+ * 0 is the source stage and 1..2 are the inserts:
+ *   0..7   stage 0 (SRC)  parameters A-H
+ *   8..15  stage 1 (FX 1) parameters A-H
+ *   16     stage 0 machine
+ *   17     stage 1 machine
  *   18     global dry/wet
- *   19..26 slot 3 parameters A-H     (v0.8.0)
- *   27     slot 3 machine            (v0.8.0)
+ *   19..26 stage 2 (FX 2) parameters A-H     (v0.8.0)
+ *   27     stage 2 machine                   (v0.8.0)
  *
- * Append only — the index is part of the pattern format. That is why slot 3
- * sits ABOVE the machine and mix entries instead of following slot 2's
- * parameters: renumbering would silently move every lock in every pattern
- * ever saved. The map is not contiguous, so go through the two helpers below
- * rather than computing slot * WORK_PARAMS.
+ * Append only — the index is part of the pattern format. That is why stage 2
+ * sits ABOVE the machine and mix entries instead of following stage 1's
+ * parameters: renumbering would silently move every lock in every pattern ever
+ * saved. The map is not contiguous, so go through the helpers below rather than
+ * computing stage * WORK_PARAMS.
  *
- * A FOURTH slot does not fit. lock_mask is a uint32_t and four slots need 37
- * indices, so adding one means widening the mask AND versioning the pattern
- * format — not just bumping WORK_SLOTS. */
-#define WORK_LOCK_MACH1  16     /* slot 2's machine is the next index */
+ * These indices predate the SRC promotion, so what index 0..7 MEANS changed
+ * even though the number did not: it addressed the first FX slot, and now
+ * addresses the source stage. That is the one-time break DESIGN-8TRACK.md
+ * budgets for, and step 3 rebuilds the map per track with a "v":2 blob and a
+ * migration. Until then a v1 preset whose first slot held an effect loads its
+ * locks onto SRC. Do not add a fourth stage on top of this map — lock_mask is
+ * a uint32_t and four stages need 37 indices. */
+#define WORK_LOCK_MACH0  16     /* stage 1's machine is the next index    */
 #define WORK_LOCK_MIX    18
-#define WORK_LOCK_S3P0   19     /* slot 3 parameters A-H run from here */
-#define WORK_LOCK_MACH3  27
+#define WORK_LOCK_S2P0   19     /* stage 2 parameters A-H run from here   */
+#define WORK_LOCK_MACH2  27
 #define WORK_LOCKABLE    28
 
-/* (slot, knob) -> lock index, and back. Both return -1 for anything out of
+/* (stage, knob) -> lock index, and back. Both return -1 for anything out of
  * range so a caller cannot quietly address the wrong parameter. */
-static inline int work_lock_param_index(int slot, int knob) {
-    if (slot < 0 || slot >= WORK_SLOTS || knob < 0 || knob >= WORK_PARAMS)
+static inline int work_lock_param_index(int stage, int knob) {
+    if (stage < 0 || stage >= WORK_STAGES || knob < 0 || knob >= WORK_PARAMS)
         return -1;
-    return slot < 2 ? slot * WORK_PARAMS + knob : WORK_LOCK_S3P0 + knob;
+    return stage < 2 ? stage * WORK_PARAMS + knob : WORK_LOCK_S2P0 + knob;
 }
 
-static inline int work_lock_machine_index(int slot) {
-    if (slot < 0 || slot >= WORK_SLOTS) return -1;
-    return slot < 2 ? WORK_LOCK_MACH1 + slot : WORK_LOCK_MACH3;
+static inline int work_lock_machine_index(int stage) {
+    if (stage < 0 || stage >= WORK_STAGES) return -1;
+    return stage < 2 ? WORK_LOCK_MACH0 + stage : WORK_LOCK_MACH2;
 }
 
-/* Decode a lock index to the slot parameter it addresses. Returns the slot and
- * writes the knob, or -1 when the index is a machine select or the mix. */
+/* Decode a lock index to the stage parameter it addresses. Returns the stage
+ * and writes the knob, or -1 when the index is a machine select or the mix. */
 static inline int work_lock_decode(int index, int *knob) {
     if (index >= 0 && index < 2 * WORK_PARAMS) {
         if (knob) *knob = index % WORK_PARAMS;
         return index / WORK_PARAMS;
     }
-    if (index >= WORK_LOCK_S3P0 && index < WORK_LOCK_S3P0 + WORK_PARAMS) {
-        if (knob) *knob = index - WORK_LOCK_S3P0;
+    if (index >= WORK_LOCK_S2P0 && index < WORK_LOCK_S2P0 + WORK_PARAMS) {
+        if (knob) *knob = index - WORK_LOCK_S2P0;
         return 2;
     }
+    return -1;
+}
+
+/* Decode a lock index to the stage whose MACHINE it selects, or -1. The
+ * counterpart to work_lock_decode, and separate because a machine lock carries
+ * a machine code rather than a 0..127 parameter value. */
+static inline int work_lock_decode_machine(int index) {
+    if (index == WORK_LOCK_MACH2) return 2;
+    if (index == WORK_LOCK_MACH0 || index == WORK_LOCK_MACH0 + 1)
+        return index - WORK_LOCK_MACH0;
     return -1;
 }
 
@@ -325,7 +356,7 @@ typedef struct {
 /* FX LFO. Destination addresses a slot parameter as slot*8 + param, or -1 for
  * off. FX LFOs reach FX-slot parameters only. */
 typedef struct {
-    int8_t  dest;        /* -1 = off, else 0..(WORK_SLOTS*WORK_PARAMS-1) */
+    int8_t  dest;        /* -1 = off, else 0..(WORK_STAGES*WORK_PARAMS-1) */
     uint8_t speed;
     uint8_t mult;
     uint8_t wave;        /* tri, sine, square, saw, ramp, exp, random     */
@@ -383,19 +414,25 @@ void    work_process(work_t *w, const int16_t *in, int16_t *out, int frames);
  *   song_on / song_len / song_row<N> ("pattern:repeats:len") / song_pos
  *
  * MIDI CC, external only (Move's own encoders arrive as internal CCs):
- *   CC 8..15   FX 1 parameters A..H     CC 16..23  FX 2 parameters A..H
- *   CC 24/25   FX 1 / FX 2 machine      CC 26      global dry/wet
+ *   CC 8..15   insert FX 1 params A..H  CC 16..23  insert FX 2 params A..H
+ *   CC 24/25   insert 1 / 2 machine     CC 26      global dry/wet
  *   CC 32..38  FX LFO 1                 CC 40..46  FX LFO 2
  *   CC 48..54  FX LFO 3                 CC 56..60  modulation envelope
  *   CC 64      sequencer on/off         CC 65      fill
  *   CC 66      live record
- *   CC 80..87  FX 3 parameters A..H     CC 88      FX 3 machine
+ *   CC 80..87  SRC stage params A..H    CC 88      SRC stage machine
  *
- * FX 3 sits at 80 rather than continuing at 27, because the map was published
- * with two slots and 27..31 is not eight controls wide. Renumbering would
- * silently move every control someone had already assigned. NRPN mirrors these
- * numbers exactly, so CC 80 and NRPN 80 reach the same parameter.
+ * The source stage sits at 80 rather than continuing at 27, because 27..31 is
+ * not eight controls wide -- and because 8..26 was published meaning the two
+ * inserts and the dry/wet, which is still exactly what it means. Promoting SRC
+ * out of the slots moved nothing anyone had already assigned. NRPN mirrors
+ * these numbers exactly, so CC 80 and NRPN 80 reach the same parameter.
  */
+/* Whether a stage will accept a machine. The source stage takes the SRC family
+ * (Bypass, Granulator and the four voice machines); the inserts take the effect
+ * family. A refused machine is not substituted -- see work_set_param. */
+int     work_machine_fits_stage(int stage, int machine);
+
 void    work_set_param(work_t *w, const char *key, const char *val);
 int     work_get_param(work_t *w, const char *key, char *buf, int buf_len);
 

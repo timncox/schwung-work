@@ -128,7 +128,7 @@ static double run_tracks(const profile_t *p, int n, const int16_t *src,
         /* Any slot the profile does not name stays Bypass — a four-slot build
          * must not quietly charge this measurement for a slot the target
          * architecture does not have. */
-        for (int s = 3; s < WORK_SLOTS; ++s) set_slot(trk[i], s, WORK_FX_BYPASS);
+        for (int s = 3; s < WORK_STAGES; ++s) set_slot(trk[i], s, WORK_FX_BYPASS);
 
         /* Give the voice filter something to do; wide open it is skipped. */
         work_set_param(trk[i], "vf_base",  "40");
