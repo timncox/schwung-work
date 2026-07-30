@@ -318,8 +318,19 @@ typedef struct {
 /* One pattern: the steps plus the settings that belong to it rather than to
  * the engine. Length and the page play/loop mask move here so switching
  * pattern switches those too, as it does on the hardware. */
+/* One track's steps within a pattern. */
 typedef struct {
     work_step_t step[WORK_STEPS];
+} work_lane_t;
+
+/* A pattern holds one LANE PER TRACK. Length and the page mask are shared by
+ * every lane: one transport, one playhead, all lanes at the same step.
+ *
+ * Per-lane length (polymeter) is deliberately NOT here. It is a real feature
+ * and a separate one — it changes what "the current step" means, which every
+ * conditional trig and the whole song mode are written against. */
+typedef struct {
+    work_lane_t lane[WORK_TRACKS];
     uint8_t     len;                  /* 1..64                              */
     uint8_t     page_mask;            /* bit p set = page p plays           */
 } work_pattern_t;

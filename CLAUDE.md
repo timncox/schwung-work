@@ -122,8 +122,15 @@ wrapper turns it on at create.
 - Retrig restarts the FX LFOs and the filter envelope. It does **not** stutter
   audio — the Decimator's FREZ is the machine for that.
 
-Worst-case `state` blob (64 steps, every lock set) is **7570 bytes** against the
-device host's 16 KB read buffer. Re-measure if the format grows.
+Worst-case `state` blob (64 steps, every lock set) is **14,817 bytes** against
+the device host's 16,384-byte read buffer — 90% of it, measured 2026-07-29. It
+was 7570 when the map had 19 lockables; the v2 map has 36. Over the buffer a
+preset does not fail, it TRUNCATES, and the pattern comes back short.
+`test_worst_case_state_fits_the_host_buffer` fails before that can happen.
+
+This is what blocks eight lanes: the same density across eight would be about
+114 KB. A packed-binary-plus-base64 lane encoding is the way out, and it has to
+land before `WORK_TRACKS` goes up. See DESIGN-8TRACK.md.
 
 ## Machine list
 

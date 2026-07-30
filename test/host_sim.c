@@ -1647,6 +1647,55 @@ static void test_level_and_pan_are_lockable(void) {
 }
 
 
+
+/* The state blob has to fit the DEVICE HOST's read buffer, which is 16 KB.
+ * Over that and a preset does not fail loudly — it truncates, and the pattern
+ * comes back short.
+ *
+ * This is measured rather than assumed because the margin has been quietly
+ * shrinking: the worst case was 7570 bytes when the map had 19 lockables, and
+ * the v2 map has 36. Anything that widens a step, adds a lockable, or adds a
+ * LANE moves this number, and eight lanes at this density would be about
+ * 114 KB — seven times the buffer. That is the blocker on WORK_TRACKS going
+ * to 8, and it is the reason this test exists rather than a comment. */
+#define HOST_STATE_BUFFER 16384
+
+static void test_worst_case_state_fits_the_host_buffer(void) {
+    printf("the worst-case preset still fits the host's 16 KB read buffer\n");
+    work_t *w = work_create(&host);
+    assert(w);
+
+    work_set_param(w, "seq_len", "64");
+    for (int i = 0; i < WORK_STEPS; ++i) {
+        char k[16], v[512];
+        int o = 0;
+        snprintf(k, sizeof k, "step%d", i);
+        work_set_param(w, k, "1:9:-5:2");
+        for (int lk = 0; lk < WORK_LOCKABLE; ++lk)
+            o += snprintf(v + o, sizeof(v) - (size_t)o, "%s%d=%d", lk ? "," : "", lk, 64);
+        snprintf(k, sizeof k, "locks%d", i);
+        work_set_param(w, k, v);
+    }
+
+    static char blob[1 << 20];
+    int n = work_get_param(w, "state", blob, sizeof blob);
+    CHECK(n > 0 && n < HOST_STATE_BUFFER,
+          "the worst-case state blob is %d bytes against a %d byte host buffer — "
+          "a preset this dense would be truncated on load, silently",
+          n, HOST_STATE_BUFFER);
+
+    /* And it must round-trip at that size rather than merely fitting. */
+    work_t *b = work_create(&host);
+    work_set_param(b, "state", blob);
+    char a1[128], b1[128];
+    work_get_param(w, "locks63", a1, sizeof a1);
+    work_get_param(b, "locks63", b1, sizeof b1);
+    CHECK(strcmp(a1, b1) == 0,
+          "the densest step did not survive the round trip:\n    %s\n    %s", a1, b1);
+
+    work_destroy(w); work_destroy(b);
+}
+
 /* ------------------------------------------------------------- Tier A */
 
 static void test_pattern_bank(void) {
@@ -3001,6 +3050,7 @@ int main(void) {
     test_v1_preset_locks_migrate();
     test_pre_promotion_preset_shifts_a_stage();
     test_v2_preset_is_not_migrated();
+    test_worst_case_state_fits_the_host_buffer();
     test_track_level_and_pan();
     test_level_and_pan_are_lockable();
     test_machine_lock_respects_the_family();

@@ -319,6 +319,12 @@ typedef struct {
      *
      * level 127 is unity and pan 64 is centre, so a preset that has never heard
      * of either loads sounding exactly as it did. */
+    /* The locks this track's lane latched on its last firing trig. Per track,
+     * because each lane fires its own trigs — one shared set would let track 3
+     * apply track 5's locks. */
+    uint8_t              held[WORK_LOCKABLE];
+    uint64_t             held_mask;
+
     uint8_t              level;        /* 0..127, 127 = unity   */
     uint8_t              pan;          /* 0..127, 64 = centre   */
     float                lgain, rgain; /* resolved once per block from those   */
@@ -373,17 +379,16 @@ typedef struct {
     char                 sample_path[192];
 } work_track_t;
 
-/* The track an operation addresses.
+/* The track the PARAMETER interface addresses: the selected one.
  *
- * At WORK_TRACKS == 1 this is always track 0 and the macro is free. It exists
- * so the eventual move to eight tracks is an AUDIT rather than a rewrite: every
- * TRK(w) below is a site that must then answer "which track?", and the answer
- * is not the same everywhere. Param setters and getters address the SELECTED
- * track; the render path loops over ALL of them; MIDI depends on how per-track
- * MIDI gets resolved (see DESIGN-8TRACK.md, still undecided). Grep for TRK(
- * before changing WORK_TRACKS -- a blanket substitution here would silently
- * make eight tracks share track 0's chain. */
-#define TRK(w) (&(w)->trk[0])
+ * This is not the track the audio is on. The render path walks every track and
+ * names each explicitly (see work_process); nothing per-block may use this
+ * macro, because it answers "the track the UI is pointed at" and would make
+ * all eight share the selected track's chain.
+ *
+ * MIDI is the third case again: a channel selects the track, so an incoming CC
+ * addresses the track its channel names rather than the selected one. */
+#define TRK(w) (&(w)->trk[(w)->sel_track])
 
 struct work {
     const host_api_v1_t *host;
@@ -423,6 +428,9 @@ struct work {
      * played, which song mode moves underneath the editor. */
     work_pattern_t       pat[WORK_PATTERNS];
     uint8_t              cur_pattern;
+    /* Which track the PARAMETER interface addresses. The render path ignores
+     * it entirely — see the loop in work_process. */
+    uint8_t              sel_track;
     uint8_t              seq_on;
 
     /* edit history: one undo level plus a separate memorize slot, both
@@ -445,8 +453,7 @@ struct work {
     int                  pass;          /* pattern repetitions, for A:B and 1ST*/
     int                  pre_result;    /* last conditional outcome, for PRE   */
     uint32_t             cond_rng;      /* probability conditions              */
-    uint8_t              held[WORK_LOCKABLE];   /* values latched by the trig  */
-    uint64_t             held_mask;
+
 
     /* What the last state load had to change or drop, for the UI to show. A
      * migration that silently lands a lock somewhere else is exactly the
@@ -2498,6 +2505,13 @@ static void run_machine(mctx_t *m, int machine, float *l, float *r) {
  * rather than caching a pointer. */
 #define CURPAT(w) (&(w)->pat[(w)->cur_pattern])
 
+/* A lane is one track's steps inside the current pattern. LANE() names the
+ * track; CURLANE() is the SELECTED track's, which is what every step, lock and
+ * pattern-edit parameter addresses — the same rule as TRK(). The sequencer
+ * walks all of them. */
+#define LANE(w, t) (&CURPAT(w)->lane[t])
+#define CURLANE(w) LANE((w), (w)->sel_track)
+
 /* Does this step's condition allow it to fire on this pass? */
 static int cond_fires(work_t *w, int cond) {
     switch (cond) {
@@ -2536,7 +2550,7 @@ static int active_step(const work_t *w, double sf) {
     double best_start = -1e18;
 
     for (int i = 0; i < len; ++i) {
-        double start = (double)i * sf + ((double)CURPAT(w)->step[i].micro / 24.0) * sf;
+        double start = (double)i * sf + ((double)CURLANE(w)->step[i].micro / 24.0) * sf;
         if (start <= w->seq_frame && start > best_start) {
             best_start = start;
             best = i;
@@ -2640,9 +2654,60 @@ static void work_src_trigger(work_track_t *tr, int note, int vel) {
     }
 }
 
+/* One lane's trig for this step. Split out of seq_run because the transport is
+ * global and the trigs are not: the playhead advances once, then every track's
+ * lane decides for itself whether it fires. */
+static void lane_fire(work_t *w, work_track_t *tr, const work_step_t *st, int cur) {
+    if (!st->active) return;                  /* no trig: nothing changes */
+    if (!page_plays(w, cur)) return;          /* this page is silenced    */
+
+    if (!cond_fires(w, st->cond)) {
+        w->pre_result = 0;
+        return;
+    }
+    /* PROB is a separate gate from the condition: both must
+     * pass. 100 (the default) always passes. */
+    if (st->prob < 100 && rnd_01(&w->cond_rng) * 100.0f >= (float)st->prob) {
+        w->pre_result = 0;
+        return;
+    }
+    w->pre_result = 1;
+
+    /* The trig latches its locks. Parameters this trig does NOT lock revert to
+     * their base value, so each firing trig is a complete snapshot of the FX
+     * state — predictable to program, and the behaviour documented in help. */
+    tr->held_mask = st->lock_mask;
+    for (int i = 0; i < WORK_LOCKABLE; ++i) tr->held[i] = st->lock[i];
+
+    /* A LOCK trig applies its locks and stops there — the trigless lock. Only
+     * a FULL trig restarts the modulators. Retrig restarts the FX LFOs and the
+     * Multimode Filter envelope; it does not stutter audio — the Decimator's
+     * FREZ is the machine for that. */
+    if (st->trig_type == WORK_TRIG_FULL) {
+        if (st->retrig != WORK_RETRIG_OFF) {
+            for (int n = 0; n < WORK_LFOS; ++n) tr->lfo_ph[n] = 0.0f;
+            for (int sl = 0; sl < WORK_STAGES; ++sl) tr->slot[sl].env_stage = 1.0f;
+        }
+        tr->menv_stage = 1.0f;
+        tr->menv_t     = 0.0f;
+        /* An SRC machine has a voice to start, unlike every FX machine before
+         * it: a full trig fires the sample from its window start. A LOCK trig
+         * deliberately does not. That is what makes it a lock trig.
+         *
+         * PENDING rather than immediate, because the machine-change reset has
+         * not run yet: it runs after build_effective, and it clears the slot —
+         * including a voice started here. That swallowed the trig whenever a
+         * machine changed in the same block, which is every first block after
+         * loading one, and every step that carries a MACHINE LOCK. The second
+         * is the one that matters: locking a machine onto a step is meant to
+         * make that step sound like the new machine, not to make it silent. */
+        tr->src_trig_pending = 1;
+    }
+}
+
 static void seq_run(work_t *w, int frames) {
     if (!w->seq_on) {
-        w->held_mask = 0;
+        for (int t = 0; t < WORK_TRACKS; ++t) w->trk[t].held_mask = 0;
         return;
     }
 
@@ -2662,52 +2727,9 @@ static void seq_run(work_t *w, int frames) {
     if (cur == w->last_step) return;
     w->last_step = cur;
 
-    const work_step_t *st = &CURPAT(w)->step[cur];
-    if (!st->active) return;                  /* no trig: nothing changes */
-    if (!page_plays(w, cur)) return;          /* this page is silenced    */
-
-    if (!cond_fires(w, st->cond)) {
-        w->pre_result = 0;
-        return;
-    }
-    /* PROB is a separate gate from the condition: both must
-     * pass. 100 (the default) always passes. */
-    if (st->prob < 100 && rnd_01(&w->cond_rng) * 100.0f >= (float)st->prob) {
-        w->pre_result = 0;
-        return;
-    }
-    w->pre_result = 1;
-
-    /* The trig latches its locks. Parameters this trig does NOT lock revert to
-     * their base value, so each firing trig is a complete snapshot of the FX
-     * state — predictable to program, and the behaviour documented in help. */
-    w->held_mask = st->lock_mask;
-    for (int i = 0; i < WORK_LOCKABLE; ++i) w->held[i] = st->lock[i];
-
-    /* Retrig restarts the FX LFOs and the Multimode Filter envelope. It does
-     * not stutter audio — the Decimator's FREZ is the machine for that. */
-    /* A LOCK trig applies its locks and stops there — the trigless
-     * lock. Only a FULL trig restarts the modulators. */
-    if (st->trig_type == WORK_TRIG_FULL) {
-        if (st->retrig != WORK_RETRIG_OFF) {
-            for (int n = 0; n < WORK_LFOS; ++n) TRK(w)->lfo_ph[n] = 0.0f;
-            for (int s = 0; s < WORK_STAGES; ++s) TRK(w)->slot[s].env_stage = 1.0f;
-        }
-        TRK(w)->menv_stage = 1.0f;
-        TRK(w)->menv_t     = 0.0f;
-        /* An SRC machine has a voice to start, unlike every FX machine before
-         * it: a full trig fires the sample from its window start. A LOCK trig
-         * deliberately does not. That is what makes it a lock trig.
-         *
-         * PENDING rather than immediate, because the machine-change reset has
-         * not run yet: it runs after build_effective, and it clears the slot —
-         * including a voice started here. That swallowed the trig whenever a
-         * machine changed in the same block, which is every first block after
-         * loading one, and every step that carries a MACHINE LOCK. The second
-         * is the one that matters: locking a machine onto a step is meant to
-         * make that step sound like the new machine, not to make it silent. */
-        TRK(w)->src_trig_pending = 1;
-    }
+    /* One playhead, every lane. */
+    for (int t = 0; t < WORK_TRACKS; ++t)
+        lane_fire(w, &w->trk[t], &LANE(w, t)->step[cur], cur);
 }
 
 /* The voice filter's fields in edit-page order, which is also lock-index order.
@@ -2739,10 +2761,10 @@ static void build_effective(work_t *w, work_track_t *tr, int frames) {
     tr->eff_vfilt = tr->vfilt;
     w->eff_mix = w->mix;
 
-    if (w->seq_on && w->held_mask) {
+    if (w->seq_on && tr->held_mask) {
         for (int i = 0; i < WORK_LOCKABLE; ++i) {
-            if (!(w->held_mask & (1ull << i))) continue;
-            uint8_t v = w->held[i];
+            if (!(tr->held_mask & (1ull << i))) continue;
+            uint8_t v = tr->held[i];
             int knob = 0;
             int stage = work_lock_decode(i, &knob);
             if (stage >= 0)              { tr->eff[stage][knob] = v; continue; }
@@ -2858,7 +2880,8 @@ work_t *work_create(const host_api_v1_t *host) {
     for (int p = 0; p < WORK_PATTERNS; ++p) {
         w->pat[p].len = WORK_PAGE_STEPS;
         w->pat[p].page_mask = 0x0F;
-        for (int i = 0; i < WORK_STEPS; ++i) w->pat[p].step[i].prob = 100;
+        for (int t = 0; t < WORK_TRACKS; ++t)
+            for (int i = 0; i < WORK_STEPS; ++i) w->pat[p].lane[t].step[i].prob = 100;
     }
     for (int r = 0; r < WORK_SONG_ROWS; ++r) {
         w->song[r].pattern = (uint8_t)r;
@@ -3608,15 +3631,15 @@ static void apply_state(work_t *w, const char *json) {
     if ((q = strstr(json, "\"stp\":\"")) != NULL) {
         const int shift = version < 2 ? state_stage_shift(json) : 0;
         int dropped = 0;
-        memset(CURPAT(w)->step, 0, sizeof(CURPAT(w)->step));
-        for (int i = 0; i < WORK_STEPS; ++i) CURPAT(w)->step[i].prob = 100;
-        w->held_mask = 0;
+        memset(CURLANE(w)->step, 0, sizeof(CURLANE(w)->step));
+        for (int i = 0; i < WORK_STEPS; ++i) CURLANE(w)->step[i].prob = 100;
+        for (int t = 0; t < WORK_TRACKS; ++t) w->trk[t].held_mask = 0;
         w->last_step = -1;
 
         const char *c = q + 7;
         while (*c && *c != '"') {
             int idx = atoi(c);
-            work_step_t *st = (idx >= 0 && idx < WORK_STEPS) ? &CURPAT(w)->step[idx] : NULL;
+            work_step_t *st = (idx >= 0 && idx < WORK_STEPS) ? &CURLANE(w)->step[idx] : NULL;
             int field = 0;
 
             while (*c && *c != '|' && *c != '"') {
@@ -3780,7 +3803,7 @@ void work_set_param(work_t *w, const char *key, const char *val) {
          * lays a lock on the step that is playing — the live-record gesture,
          * routed through the same path the UI and MIDI CC both use. */
         if (w->live_rec && w->seq_on && w->seq_pos >= 0 && w->seq_pos < WORK_STEPS) {
-            work_step_t *st = &CURPAT(w)->step[w->seq_pos];
+            work_step_t *st = &CURLANE(w)->step[w->seq_pos];
             st->active = 1;
             step_set_lock(st, slot * WORK_PARAMS + idx, v);
         }
@@ -3844,6 +3867,14 @@ void work_set_param(work_t *w, const char *key, const char *val) {
     }
 
     /* Track level and pan. Global `mix` stays global — see the lock map. */
+    /* Which track every other parameter addresses. Out of range is REFUSED,
+      * not clamped: a UI that asks for track 9 has a bug, and silently editing
+      * track 8 instead would hide it behind edits that land somewhere real. */
+    if (strcmp(key, "track") == 0) {
+        int t = atoi(val);
+        if (t >= 0 && t < WORK_TRACKS) w->sel_track = (uint8_t)t;
+        return;
+    }
     if (strcmp(key, "level") == 0) { TRK(w)->level = (uint8_t)iclamp(atoi(val), 0, 127); return; }
     if (strcmp(key, "pan")   == 0) { TRK(w)->pan   = (uint8_t)iclamp(atoi(val), 0, 127); return; }
     if (strcmp(key, "mix") == 0) { w->mix = (uint8_t)iclamp(atoi(val), 0, 127); return; }
@@ -3906,7 +3937,7 @@ void work_set_param(work_t *w, const char *key, const char *val) {
     {
         int n = key_index(key, "trigtype");
         if (n >= 0) {
-            CURPAT(w)->step[n].trig_type =
+            CURLANE(w)->step[n].trig_type =
                 (uint8_t)iclamp(atoi(val), 0, WORK_TRIG_TYPES - 1);
             return;
         }
@@ -3937,8 +3968,11 @@ void work_set_param(work_t *w, const char *key, const char *val) {
 
     /* ------------------------------------------------ transform / quantize */
     if (strcmp(key, "transform") == 0) {
-        work_pattern_t *P = CURPAT(w);
-        int len = P->len ? P->len : 1;
+        /* Edits the SELECTED track's lane, like every other pattern edit:
+         * these are surface operations on the lane you are looking at, not
+         * on all eight at once. */
+        work_lane_t *P = CURLANE(w);
+        int len = CURPAT(w)->len ? CURPAT(w)->len : 1;   /* shared by the lanes */
         push_undo(w);
         if (strcmp(val, "reverse") == 0) {
             for (int i = 0; i < len / 2; ++i) {
@@ -3963,7 +3997,10 @@ void work_set_param(work_t *w, const char *key, const char *val) {
     if (strcmp(key, "quantize") == 0) {
         /* Pull micro-timing toward the grid; 127 lands everything exactly on it. */
         float amt = fclampf((float)atoi(val) / 127.0f, 0.0f, 1.0f);
-        work_pattern_t *P = CURPAT(w);
+        /* Edits the SELECTED track's lane, like every other pattern edit:
+         * these are surface operations on the lane you are looking at, not
+         * on all eight at once. */
+        work_lane_t *P = CURLANE(w);
         push_undo(w);
         for (int i = 0; i < WORK_STEPS; ++i)
             P->step[i].micro = (int8_t)lrintf((float)P->step[i].micro * (1.0f - amt));
@@ -3983,14 +4020,14 @@ void work_set_param(work_t *w, const char *key, const char *val) {
 
     {
         int n = key_index(key, "prob");
-        if (n >= 0) { CURPAT(w)->step[n].prob = (uint8_t)iclamp(atoi(val), 1, 100); return; }
+        if (n >= 0) { CURLANE(w)->step[n].prob = (uint8_t)iclamp(atoi(val), 1, 100); return; }
     }
 
     if (strcmp(key, "seq_clear") == 0) {
         push_undo(w);
-        memset(CURPAT(w)->step, 0, sizeof(CURPAT(w)->step));
-        for (int i = 0; i < WORK_STEPS; ++i) CURPAT(w)->step[i].prob = 100;
-        w->held_mask = 0;
+        memset(CURLANE(w)->step, 0, sizeof(CURLANE(w)->step));
+        for (int i = 0; i < WORK_STEPS; ++i) CURLANE(w)->step[i].prob = 100;
+        for (int t = 0; t < WORK_TRACKS; ++t) w->trk[t].held_mask = 0;
         w->last_step = -1;
         return;
     }
@@ -3998,21 +4035,21 @@ void work_set_param(work_t *w, const char *key, const char *val) {
     {
         int stp, idx;
         if (parse_lock_key(key, &stp, &idx)) {
-            step_set_lock(&CURPAT(w)->step[stp], idx, atoi(val));
+            step_set_lock(&CURLANE(w)->step[stp], idx, atoi(val));
             return;
         }
     }
 
     {
         int n = key_index(key, "locks");
-        if (n >= 0) { step_set_locks(&CURPAT(w)->step[n], val); return; }
+        if (n >= 0) { step_set_locks(&CURLANE(w)->step[n], val); return; }
     }
 
     {
         int n = key_index(key, "step");
         if (n >= 0) {
             /* "active:cond:micro:retrig" — trailing fields may be omitted */
-            work_step_t *st = &CURPAT(w)->step[n];
+            work_step_t *st = &CURLANE(w)->step[n];
             const char *c = val;
             st->active = (uint8_t)(atoi(c) ? 1 : 0);
             if ((c = strchr(c, ':')) != NULL) {
@@ -4105,6 +4142,10 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
     /* What the last preset load had to translate, if anything. */
     if (strcmp(key, "load_note") == 0)
         return nclamp(snprintf(buf, buf_len, "%s", w->load_note), cap);
+    if (strcmp(key, "track") == 0)
+        return nclamp(snprintf(buf, buf_len, "%d", w->sel_track), cap);
+    if (strcmp(key, "tracks") == 0)
+        return nclamp(snprintf(buf, buf_len, "%d", WORK_TRACKS), cap);
     if (strcmp(key, "level") == 0)
         return nclamp(snprintf(buf, buf_len, "%d", TRK(w)->level), cap);
     if (strcmp(key, "pan") == 0)
@@ -4153,7 +4194,7 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
     }
     {
         int n = key_index(key, "trigtype");
-        if (n >= 0) return nclamp(snprintf(buf, buf_len, "%d", CURPAT(w)->step[n].trig_type), cap);
+        if (n >= 0) return nclamp(snprintf(buf, buf_len, "%d", CURLANE(w)->step[n].trig_type), cap);
     }
 
     if (strncmp(key, "menv_", 5) == 0) {
@@ -4170,14 +4211,14 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
 
     {
         int n = key_index(key, "prob");
-        if (n >= 0) return nclamp(snprintf(buf, buf_len, "%d", CURPAT(w)->step[n].prob), cap);
+        if (n >= 0) return nclamp(snprintf(buf, buf_len, "%d", CURLANE(w)->step[n].prob), cap);
     }
 
     /* "a:c:m:r:nlocks" — one poll per step for the UI's grid */
     {
         int n = key_index(key, "step");
         if (n >= 0) {
-            const work_step_t *st = &CURPAT(w)->step[n];
+            const work_step_t *st = &CURLANE(w)->step[n];
             int nl = 0;
             for (int i = 0; i < WORK_LOCKABLE; ++i)
                 if (st->lock_mask & (1ull << i)) nl++;
@@ -4194,7 +4235,7 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
     {
         int stp, idx;
         if (parse_lock_key(key, &stp, &idx)) {
-            const work_step_t *st = &CURPAT(w)->step[stp];
+            const work_step_t *st = &CURLANE(w)->step[stp];
             int v = (st->lock_mask & (1ull << idx)) ? st->lock[idx] : -1;
             return nclamp(snprintf(buf, buf_len, "%d", v), cap);
         }
@@ -4203,7 +4244,7 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
     {
         int n = key_index(key, "locks");
         if (n >= 0) {
-            const work_step_t *st = &CURPAT(w)->step[n];
+            const work_step_t *st = &CURLANE(w)->step[n];
             int written = 0, out = 0;
             for (int i = 0; i < WORK_LOCKABLE; ++i) {
                 if (!(st->lock_mask & (1ull << i))) continue;
@@ -4436,7 +4477,7 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
                                 w->seq_on, CURPAT(w)->len, CURPAT(w)->page_mask), cap);
         int emitted = 0;
         for (int i = 0; i < WORK_STEPS; ++i) {
-            const work_step_t *st = &CURPAT(w)->step[i];
+            const work_step_t *st = &CURLANE(w)->step[i];
             if (!st->active && !st->lock_mask && !st->cond && !st->micro &&
                 !st->retrig && st->prob == 100)
                 continue;
