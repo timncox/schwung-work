@@ -2,7 +2,7 @@
   "id": "work-in",
   "name": "Work In",
   "abbrev": "WKIN",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Twenty-six machines on the live input, as a chain slot source",
   "dsp": "dsp.so",
   "ui_chain": "ui_chain.js",
