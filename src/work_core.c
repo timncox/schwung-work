@@ -3378,11 +3378,17 @@ static void sample_append_b64(work_t *w, const char *b64) {
     uint8_t  *dst = (uint8_t *)TRK(w)->sample;
     int       off = TRK(w)->sample_fill * 2 * (int)sizeof(int16_t);
 
-    int acc = 0, bits = 0;
+    /* `acc` is unsigned because it is a shift register, not a number: a signed
+     * int overflows its sign bit after a few characters and `acc << 6` is then
+     * undefined. It happened to produce the right bytes on every compiler this
+     * has met — the low bits survive either way — but UBSan flags it on every
+     * sample transfer, and "works by luck" is not a transfer protocol. */
+    unsigned acc = 0;
+    int bits = 0;
     for (const char *c = b64; *c; ++c) {
         int v = b64_val(*c);
         if (v < 0) continue;
-        acc = (acc << 6) | v;
+        acc = (acc << 6) | (unsigned)v;
         bits += 6;
         if (bits >= 8) {
             bits -= 8;
