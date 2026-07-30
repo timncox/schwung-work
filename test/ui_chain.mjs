@@ -33,6 +33,27 @@ const contract = JSON.parse(fs.readFileSync(path.join(root, 'build/contract.json
 const settable = new Set([...contract.settable, ...contract.commands]);
 const MACHINES = contract.get.machines.split(',');
 
+/* Which machines each stage accepts, and the key each stage's select answers
+ * to. Taken from the ENGINE's answer rather than restated here — a second copy
+ * of this table is a copy that drifts, and these tests exist to catch exactly
+ * that drift in the UI's copy. */
+const codes = (t) => (t || '').split(',').map(Number).filter(Number.isFinite);
+const SRC_FAMILY = codes(contract.get.src_codes);
+const FX_FAMILY  = codes(contract.get.fx_codes);
+const STAGE_KEY  = ['src', 'fx1', 'fx2'];
+/* Pages: machines, one per stage, then the two LFOs. Derived, because a page
+ * walk that stops one page short passes without ever seeing the last page. */
+const PAGE_COUNT = 1 + STAGE_KEY.length + 2;
+
+/* The longest machine name in a family — the case that catches truncation and
+ * layout collisions. Named by length rather than by name, so a rename cannot
+ * break a test that is not about names. */
+function longestIn(family) {
+    let best = family[0];
+    for (const c of family) if (MACHINES[c].length > MACHINES[best].length) best = c;
+    return best;
+}
+
 let checks = 0;
 let failures = 0;
 function check(cond, msg) {
@@ -216,67 +237,88 @@ async function testPageFillsInPromptly() {
 }
 
 /* Knob response has been wrong in both directions on hardware, so pin the
- * numbers. One detent moves one; a fast spin moves a quarter of the range. */
+ * numbers. One detent moves one; a fast spin moves a quarter of the range.
+ *
+ * A machine select steps through its stage's FAMILY, so the range that sets
+ * the acceleration is the family's length, not the whole machine list's. The
+ * FX 1 knob is used here because its family is the long one — the source
+ * family is six machines and would reach an end stop before the cap bit. */
 async function testKnobResponseCurve() {
     console.log('knob response: one detent moves one, a fast spin moves a quarter of the range');
-    const cap = Math.ceil((MACHINES.length - 1) / 4);
+    const cap = Math.ceil((FX_FAMILY.length - 1) / 4);
+    const KNOB_FX1 = KNOB1 + 1;                 /* stage 1's select */
+    const seedFx1 = (pos) => { const o = {}; o[STAGE_KEY[1]] = `${FX_FAMILY[pos]}`; return o; };
 
-    let ctx = await loadUI({ machine1: '5' });
+    let ctx = await loadUI(seedFx1(5));
     ctx.host.init();
     settle(ctx);
     ctx.writes.length = 0;
-    ctx.host.onMidiMessageInternal(cc(KNOB1, 1));
-    let w = ctx.writes.find((x) => x.key === 'machine1');
-    check(w && parseInt(`${w.val}`, 10) === 6,
-          `one detent moved machine1 to ${w && w.val} — expected 6`);
+    ctx.host.onMidiMessageInternal(cc(KNOB_FX1, 1));
+    let w = ctx.writes.find((x) => x.key === STAGE_KEY[1]);
+    check(w && parseInt(`${w.val}`, 10) === FX_FAMILY[6],
+          `one detent moved the FX 1 machine to ${w && w.val} — expected ${FX_FAMILY[6]}`);
 
-    ctx = await loadUI({ machine1: '5' });
+    ctx = await loadUI(seedFx1(5));
     ctx.host.init();
     settle(ctx);
     ctx.writes.length = 0;
-    ctx.host.onMidiMessageInternal(cc(KNOB1, 25));
-    w = ctx.writes.find((x) => x.key === 'machine1');
-    check(w && parseInt(`${w.val}`, 10) === 5 + cap,
-          `a 25-detent event moved machine1 to ${w && w.val} — expected ${5 + cap}`);
+    ctx.host.onMidiMessageInternal(cc(KNOB_FX1, 25));
+    w = ctx.writes.find((x) => x.key === STAGE_KEY[1]);
+    check(w && parseInt(`${w.val}`, 10) === FX_FAMILY[5 + cap],
+          `a 25-detent event moved the FX 1 machine to ${w && w.val} — ` +
+          `expected ${FX_FAMILY[5 + cap]}`);
 
-    /* Four flicks must cross the entire list. This is the "super slow"
+    /* Four flicks must cross the entire family. This is the "super slow"
      * regression: one-step-per-event needed twenty. */
-    ctx = await loadUI({ machine1: '0' });
+    ctx = await loadUI(seedFx1(0));
     ctx.host.init();
     settle(ctx);
-    for (let i = 0; i < 4; i++) ctx.host.onMidiMessageInternal(cc(KNOB1, 63));
-    const last = ctx.writes.filter((x) => x.key === 'machine1').pop();
-    check(last && parseInt(`${last.val}`, 10) === MACHINES.length - 1,
-          `four full flicks reached machine ${last && last.val} of ${MACHINES.length - 1}`);
+    for (let i = 0; i < 4; i++) ctx.host.onMidiMessageInternal(cc(KNOB_FX1, 63));
+    const last = ctx.writes.filter((x) => x.key === STAGE_KEY[1]).pop();
+    const end = FX_FAMILY[FX_FAMILY.length - 1];
+    check(last && parseInt(`${last.val}`, 10) === end,
+          `four full flicks reached machine ${last && last.val}, not ${end}`);
 }
 
-/* The machine select's bound must come from the engine's own list. A constant
- * here is what left Granulator — the 21st machine — unreachable. */
+/* The machine select's bound must come from the engine's own family, not from a
+ * constant. A constant here is what left Granulator — the 21st machine —
+ * unreachable. Both families are swept, because they are different lengths and
+ * a bound taken from the wrong one would still pass on the other. */
 async function testMachineRangeFollowsTheEngine() {
     console.log('every machine the engine lists is reachable');
-    const ctx = await loadUI({ machine1: `${MACHINES.length - 2}` });
-    ctx.host.init();
-    settle(ctx);
+    for (const [stage, fam] of [[0, SRC_FAMILY], [1, FX_FAMILY]]) {
+        const seed = {};
+        seed[STAGE_KEY[stage]] = `${fam[fam.length - 2]}`;
+        const ctx = await loadUI(seed);
+        ctx.host.init();
+        settle(ctx);
 
-    ctx.writes.length = 0;
-    ctx.host.onMidiMessageInternal(cc(KNOB1, 40));
-    const w = ctx.writes.find((x) => x.key === 'machine1');
-    check(w && parseInt(`${w.val}`, 10) === MACHINES.length - 1,
-          `could not reach "${MACHINES[MACHINES.length - 1]}" (index ${MACHINES.length - 1}); ` +
-          `got ${w && w.val}`);
+        ctx.writes.length = 0;
+        ctx.host.onMidiMessageInternal(cc(KNOB1 + stage, 40));
+        const end = fam[fam.length - 1];
+        const w = ctx.writes.find((x) => x.key === STAGE_KEY[stage]);
+        check(w && parseInt(`${w.val}`, 10) === end,
+              `stage ${stage}: could not reach "${MACHINES[end]}" (code ${end}); ` +
+              `got ${w && w.val}`);
 
-    /* and it must not run off the end into a machine that does not exist */
-    ctx.writes.length = 0;
-    ctx.host.onMidiMessageInternal(cc(KNOB1, 40));
-    const over = ctx.writes.find((x) => x.key === 'machine1');
-    check(!over, `machine1 was pushed past the end of the list to ${over && over.val}`);
+        /* and it must not run off the end into a machine that does not exist,
+         * or into one the stage would refuse */
+        ctx.writes.length = 0;
+        ctx.host.onMidiMessageInternal(cc(KNOB1 + stage, 40));
+        const over = ctx.writes.find((x) => x.key === STAGE_KEY[stage]);
+        check(!over,
+              `stage ${stage}'s machine was pushed past the end of its family ` +
+              `to ${over && over.val}`);
+    }
 }
 
 /* A read that times out returns null. Collapsing that into 0 meant the mirror
  * silently became Bypass, and the next knob turn WROTE that back to the DSP. */
 async function testFailedReadNeverBecomesZero() {
     console.log('a failed read leaves the mirror alone instead of writing Bypass');
-    const ctx = await loadUI({ machine1: '13' });
+    const seed = {};
+    seed[STAGE_KEY[1]] = `${FX_FAMILY[13]}`;
+    const ctx = await loadUI(seed);
     ctx.host.init();
     settle(ctx);
 
@@ -285,13 +327,13 @@ async function testFailedReadNeverBecomesZero() {
     ctx.failReads(0);
 
     ctx.writes.length = 0;
-    ctx.host.onMidiMessageInternal(cc(KNOB1, 1));
-    const w = ctx.writes.find((x) => x.key === 'machine1');
-    check(w && parseInt(`${w.val}`, 10) === 14,
-          `after a dead param channel the UI wrote machine1=${w && w.val}; it must ` +
-          `continue from 13, not from a zeroed mirror`);
+    ctx.host.onMidiMessageInternal(cc(KNOB1 + 1, 1));
+    const w = ctx.writes.find((x) => x.key === STAGE_KEY[1]);
+    check(w && parseInt(`${w.val}`, 10) === FX_FAMILY[14],
+          `after a dead param channel the UI wrote ${STAGE_KEY[1]}=${w && w.val}; ` +
+          `it must continue from ${FX_FAMILY[13]}, not from a zeroed mirror`);
 
-    const zeroed = ctx.writes.find((x) => x.key === 'machine1' && `${x.val}` === '0');
+    const zeroed = ctx.writes.find((x) => x.key === STAGE_KEY[1] && `${x.val}` === '0');
     check(!zeroed, 'a failed read produced a write of 0 — that is the snap-to-Bypass bug');
 }
 
@@ -338,14 +380,15 @@ function layoutProblems(screen) {
 
 async function testLayoutNeverCollides() {
     console.log('no drawn text overflows the screen or its neighbour');
-    /* The widest machine names in the engine, in both slots at once. */
-    const widest = MACHINES.reduce((a, b) => (b.length > a.length ? b : a));
-    const idx = MACHINES.indexOf(widest);
-    const ctx = await loadUI({ machine1: `${idx}`, machine2: `${idx}` });
+    /* The widest name each stage can actually hold, in every stage at once. */
+    const seed = {};
+    seed[STAGE_KEY[0]] = `${longestIn(SRC_FAMILY)}`;
+    for (let i = 1; i < STAGE_KEY.length; i++) seed[STAGE_KEY[i]] = `${longestIn(FX_FAMILY)}`;
+    const ctx = await loadUI(seed);
     ctx.host.init();
     settle(ctx, 80);
 
-    for (let p = 0; p < 5; p++) {
+    for (let p = 0; p < PAGE_COUNT; p++) {
         settle(ctx, 30);
         const problems = layoutProblems(ctx.screen);
         check(problems.length === 0,
@@ -362,13 +405,15 @@ async function testMachineNamesAreNotTruncatedToSixChars() {
      * This test used to hardcode a prefix of the machine it wanted, so it
      * failed the moment the machine was renamed — and a test that breaks on a
      * rename is testing the name, not the truncation it exists to catch. */
-    const longest = MACHINES.reduce((a, b) => (b.length > a.length ? b : a), '');
-    const idx = MACHINES.indexOf(longest);
+    const idx = longestIn(FX_FAMILY);
+    const longest = MACHINES[idx];
     check(longest.length > 12,
           `no machine name is long enough to catch truncation (longest is ` +
           `"${longest}") — this test can no longer fail`);
 
-    const ctx = await loadUI({ machine1: `${idx}` });
+    const seed = {};
+    seed[STAGE_KEY[1]] = `${idx}`;
+    const ctx = await loadUI(seed);
     ctx.host.init();
     settle(ctx, 80);
 
@@ -384,22 +429,24 @@ async function testMachineNamesAreNotTruncatedToSixChars() {
  * labels and the eight values are stale. They must refresh — just not from
  * inside the knob handler. */
 async function testMachineChangeRefreshesLabels() {
-    console.log('a machine change refreshes that slot\'s labels, off the input path');
-    const ctx = await loadUI({ machine1: '0' });
+    console.log('a machine change refreshes that stage\'s labels, off the input path');
+    const seed = {};
+    seed[STAGE_KEY[1]] = '0';
+    const ctx = await loadUI(seed);
     ctx.host.init();
     settle(ctx, 80);
 
     const target = MACHINES.indexOf('Flutter');
-    ctx.store.machine1 = `${target}`;
+    ctx.store[STAGE_KEY[1]] = `${target}`;
     ctx.store.labels1 = contract.get.labels1;
 
     ctx.reads.length = 0;
-    ctx.host.onMidiMessageInternal(cc(KNOB1, 1));
+    ctx.host.onMidiMessageInternal(cc(KNOB1 + 1, 1));
     check(ctx.reads.length === 0, 'the knob handler read the DSP');
 
     settle(ctx, 40);
     check(ctx.reads.includes('labels1'),
-          'the knob labels for the changed slot were never refreshed');
+          'the knob labels for the changed stage were never refreshed');
 }
 
 async function testEveryWrittenKeyIsAccepted() {

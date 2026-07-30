@@ -26,9 +26,24 @@ const contract = JSON.parse(fs.readFileSync(path.join(root, 'build/contract.json
 const settable = new Set([...contract.settable, ...contract.commands]);
 
 /* Where MIX sits on the GLOBAL page. Derived rather than written down, because
- * the page grew an FX 3 select and every hardcoded index after it shifted. */
-const N_SLOTS = (contract.get.effm || '0,0').split(',').length - 1;
-const MIX_KNOB = N_SLOTS;
+ * the page grew a third select and every hardcoded index after it shifted. */
+const N_STAGES = (contract.get.effm || '0,0').split(',').length - 1;
+const MIX_KNOB = N_STAGES;
+
+/* Which machines each stage accepts, taken from the ENGINE's answer rather
+ * than restated here. A second copy of this table is a copy that drifts, and
+ * these tests exist precisely to catch the UI's copy drifting from it. */
+const codes = (t) => (t || '').split(',').map(Number).filter(Number.isFinite);
+const SRC_FAMILY = codes(contract.get.src_codes);
+const FX_FAMILY  = codes(contract.get.fx_codes);
+/* The key each stage's machine select answers to, stage-indexed. */
+const STAGE_KEY  = ['src', 'fx1', 'fx2'];
+
+/* Palette pads in reading order, minus undo/memo/song — the same order the UI
+ * builds from PALETTE_PADS. Position N here holds family member N. */
+const PALETTE_ORDER = [92, 93, 94, 95, 96, 97, 98, 99,
+                       84, 85, 86, 87, 88, 89, 90, 91,
+                       76, 77, 78, 79, 80];
 
 let checks = 0;
 let failures = 0;
@@ -366,7 +381,9 @@ async function testInitReadsOnlyServedKeys() {
     check(ctx.unknownReads.size === 0,
           `UI read keys the engine does not serve: ${[...ctx.unknownReads].join(', ')}`);
     check(ctx.reads.includes('machines'), 'UI never asked for the machine list');
-    check(ctx.reads.includes('labels1'), 'UI never asked for slot 1 knob labels');
+    check(ctx.reads.includes('labels_src'), 'UI never asked for the SRC stage knob labels');
+    check(ctx.reads.includes('src_codes') && ctx.reads.includes('fx_codes'),
+          'UI never asked the engine which machines each stage accepts');
     check(ctx.screen.length > 0, 'init drew nothing to the screen');
     check(ctx.leds.size > 20, `init painted only ${ctx.leds.size} LEDs`);
 }
@@ -387,9 +404,9 @@ async function testHoldStepPlusKnobLocks() {
           `expected one lock write, got ${JSON.stringify(ctx.writes)}`);
     if (lockWrites.length) {
         check(lockWrites[0].key === 'lock2_0',
-              `expected lock2_0 (step 3, slot 1 knob A), got ${lockWrites[0].key}`);
+              `expected lock2_0 (step 3, SRC knob A), got ${lockWrites[0].key}`);
     }
-    const baseWrites = ctx.writes.filter((w) => /^fx\d_p\d$/.test(w.key));
+    const baseWrites = ctx.writes.filter((w) => /^(src|fx\d)_p\d$/.test(w.key));
     check(baseWrites.length === 0,
           `the base parameter must not move while locking, got ${JSON.stringify(baseWrites)}`);
 
@@ -401,17 +418,17 @@ async function testHoldStepPlusKnobLocks() {
           `release after locking should not rewrite the step, got ${JSON.stringify(stepWrites)}`);
 }
 
-/* The lock index map is APPEND-ONLY: slot 3's parameters live at 19-26, not at
- * 16-23, because 16/17/18 were already the machine selects and the mix. Get
- * this wrong and holding a step while turning a knob on slot 3 writes a lock
- * onto slot 1's MACHINE — the patch would change machine mid-pattern and
- * nothing would say why. */
-async function testSlotThreeLocksAppendRatherThanCollide() {
-    console.log("slot 3's locks land at 19-26, clear of the machine and mix indices");
+/* The lock index map is APPEND-ONLY: the LAST stage's parameters live at 19-26,
+ * not at 16-23, because 16/17/18 were already the machine selects and the mix.
+ * Get this wrong and holding a step while turning a knob on FX 2 writes a lock
+ * onto the SRC MACHINE — the patch would change machine mid-pattern and nothing
+ * would say why. */
+async function testLastStageLocksAppendRatherThanCollide() {
+    console.log("FX 2's locks land at 19-26, clear of the machine and mix indices");
     const ctx = await loadUI();
     ctx.host.init();
 
-    /* focus slot 3: the slot pad cycles 1 -> 2 -> 3 */
+    /* focus FX 2: the stage pad cycles SRC -> FX 1 -> FX 2 */
     for (let i = 0; i < 2; i++) {
         ctx.host.onMidiMessageInternal(noteOn(70));
         ctx.host.onMidiMessageInternal(noteOff(70));
@@ -427,18 +444,18 @@ async function testSlotThreeLocksAppendRatherThanCollide() {
           `expected one lock write, got ${JSON.stringify(ctx.writes)}`);
     if (locks.length) {
         check(locks[0].key === 'lock2_19',
-              `slot 3 knob A must lock index 19, got ${locks[0].key} — 16 is ` +
-              `slot 1's machine select, so an off-by-map here silently ` +
+              `FX 2 knob A must lock index 19, got ${locks[0].key} — 16 is ` +
+              `the SRC machine select, so an off-by-map here silently ` +
               `changes machine mid-pattern`);
     }
     ctx.host.onMidiMessageInternal(stepUp(2));
 
-    /* and the knob edits slot 3's base parameter, not slot 1's */
+    /* and the knob edits FX 2's base parameter, not SRC's */
     ctx.writes.length = 0;
     ctx.host.onMidiMessageInternal(cc(KNOB1, 1));
-    const base = ctx.writes.filter((w) => /^fx\d_p\d$/.test(w.key));
-    check(base.length === 1 && base[0].key === 'fx3_p1',
-          `knob 1 with slot 3 focused wrote ${JSON.stringify(base)}, expected fx3_p1`);
+    const base = ctx.writes.filter((w) => /^(src|fx\d)_p\d$/.test(w.key));
+    check(base.length === 1 && base[0].key === 'fx2_p1',
+          `knob 1 with FX 2 focused wrote ${JSON.stringify(base)}, expected fx2_p1`);
 }
 
 /* Nudging an existing lock must start from the LOCK's value, not the base —
@@ -490,31 +507,56 @@ async function testShiftEscapesTheLockGesture() {
     ctx.host.onMidiMessageInternal(cc(KNOB1, 1));
 
     const lockWrites = ctx.writes.filter((w) => /^lock\d+_\d+$/.test(w.key));
-    const baseWrites = ctx.writes.filter((w) => /^fx\d_p\d$/.test(w.key));
+    const baseWrites = ctx.writes.filter((w) => /^(src|fx\d)_p\d$/.test(w.key));
     check(lockWrites.length === 0, 'shift + knob must not create a lock');
     check(baseWrites.length === 1,
           `shift + knob should edit the base, got ${JSON.stringify(ctx.writes)}`);
 }
 
 async function testMachinePaletteLoadsMachines() {
-    console.log('palette pads load machines into the focused slot');
+    console.log('palette pads load machines into the focused stage');
     const ctx = await loadUI();
     ctx.host.init();
     ctx.writes.length = 0;
 
     ctx.host.onMidiMessageInternal(noteOn(92));           /* palette index 0 */
     ctx.host.onMidiMessageInternal(noteOff(92));
-    let w = ctx.writes.find((x) => x.key === 'machine1');
-    check(!!w && `${w.val}` === '0', `pad 92 should load machine 0 into FX1, got ${w && w.val}`);
+    let w = ctx.writes.find((x) => x.key === 'src');
+    check(!!w && `${w.val}` === `${SRC_FAMILY[0]}`,
+          `pad 92 should load source ${SRC_FAMILY[0]} into SRC, got ${w && w.val}`);
 
-    /* focus the other slot, then load again */
+    /* focus the next stage, then load again. The palette is a different FAMILY
+     * now, so the same pad position means a different machine. */
     ctx.writes.length = 0;
-    ctx.host.onMidiMessageInternal(noteOn(70));           /* PAD_SLOT */
+    ctx.host.onMidiMessageInternal(noteOn(70));           /* PAD_STAGE */
     ctx.host.onMidiMessageInternal(noteOff(70));
     ctx.host.onMidiMessageInternal(noteOn(99));           /* palette index 7 */
     ctx.host.onMidiMessageInternal(noteOff(99));
-    w = ctx.writes.find((x) => x.key === 'machine2');
-    check(!!w && `${w.val}` === '7', `pad 99 should load machine 7 into FX2, got ${w && w.val}`);
+    w = ctx.writes.find((x) => x.key === 'fx1');
+    check(!!w && `${w.val}` === `${FX_FAMILY[7]}`,
+          `pad 99 should load effect ${FX_FAMILY[7]} into FX 1, got ${w && w.val}`);
+}
+
+/* The SRC stage takes six machines and the pads offer twenty-one positions.
+ * The fifteen spare pads must be DEAD, not wrap around or load an effect the
+ * engine would refuse — a pad that silently does nothing is a small confusion,
+ * a pad that loads a reverb into the source stage is a broken patch. */
+async function testPaletteRefusesOutOfFamilyPads() {
+    console.log('palette pads past the focused stage\'s family are dead');
+    const ctx = await loadUI();
+    ctx.host.init();
+    ctx.writes.length = 0;
+
+    /* SRC is focused at init. Palette position 7 is past the six sources. */
+    ctx.host.onMidiMessageInternal(noteOn(99));
+    ctx.host.onMidiMessageInternal(noteOff(99));
+    check(!ctx.writes.some((x) => x.key === 'src'),
+          `a pad past the source family loaded something: ${JSON.stringify(ctx.writes)}`);
+
+    /* And it is dark rather than left showing the previous stage's machine. */
+    ctx.host.tick();
+    check(ctx.leds.get(99) === 0,
+          `pad 99 should be dark on the SRC stage, got ${ctx.leds.get(99)}`);
 }
 
 async function testTransportPads() {
@@ -749,37 +791,46 @@ async function atGlobalWith(seed) {
     return ctx;
 }
 
+/* A machine knob steps through its stage's FAMILY, so both the acceleration
+ * cap and the end stops come from that family's length — not from the length of
+ * the whole machine list. Both families are checked because they are very
+ * different sizes (six sources, twenty-one effects) and the cap arithmetic is
+ * where an off-by-one would hide. */
+async function stepMachineKnob(stage, fam, fromPos, delta) {
+    const seed = {};
+    seed[STAGE_KEY[stage]] = `${fam[fromPos]}`;
+    const ctx = await atGlobalWith(seed);
+    ctx.host.onMidiMessageInternal(cc(KNOB1 + stage, delta));
+    const w = ctx.writes.find((x) => x.key === STAGE_KEY[stage]);
+    return w ? parseInt(`${w.val}`, 10) : null;
+}
+
 async function testKnobResponseCurve() {
     console.log('knob response: one detent moves one, a fast spin moves a quarter of the range');
 
-    const nMachines = JSON.parse(
-        fs.readFileSync(path.join(root, 'build/contract.json'), 'utf8')
-    ).get.machines.split(',').length;                 /* 21, from the engine */
-    const cap = Math.ceil((nMachines - 1) / 4);
+    for (const [stage, fam, name] of [[0, SRC_FAMILY, 'SRC'], [1, FX_FAMILY, 'FX 1']]) {
+        const cap = Math.ceil((fam.length - 1) / 4);
 
-    let ctx = await atGlobalWith({ machine1: '5' });
-    ctx.host.onMidiMessageInternal(cc(KNOB1, 1));     /* one detent */
-    let w = ctx.writes.find((x) => x.key === 'machine1');
-    check(w && parseInt(`${w.val}`, 10) === 6,
-          `one detent moved machine1 to ${w && w.val} — expected 6`);
+        let got = await stepMachineKnob(stage, fam, 1, 1);        /* one detent */
+        check(got === fam[2],
+              `${name}: one detent moved to ${got} — expected ${fam[2]}, the next ` +
+              `machine in the family rather than the next machine CODE`);
 
-    ctx = await atGlobalWith({ machine1: '5' });
-    ctx.host.onMidiMessageInternal(cc(KNOB1, 25));    /* a full-speed spin */
-    w = ctx.writes.find((x) => x.key === 'machine1');
-    check(w && parseInt(`${w.val}`, 10) === 5 + cap,
-          `a 25-detent event moved machine1 to ${w && w.val} — expected ${5 + cap}: ` +
-          `neither an end stop nor a single step`);
+        got = await stepMachineKnob(stage, fam, 1, 25);           /* full-speed spin */
+        check(got === fam[1 + cap],
+              `${name}: a 25-detent event moved to ${got} — expected ${fam[1 + cap]}: ` +
+              `neither an end stop nor a single step`);
 
-    /* the top of the list must be REACHABLE — Granulator was excluded when this
-     * range was a hardcoded constant */
-    ctx = await atGlobalWith({ machine1: `${nMachines - 2}` });
-    ctx.host.onMidiMessageInternal(cc(KNOB1, 40));
-    w = ctx.writes.find((x) => x.key === 'machine1');
-    check(w && parseInt(`${w.val}`, 10) === nMachines - 1,
-          `could not reach the last machine (${nMachines - 1}); got ${w && w.val}`);
+        /* the end of each family must be REACHABLE — Granulator was excluded
+         * when this range was a hardcoded constant */
+        got = await stepMachineKnob(stage, fam, fam.length - 2, 40);
+        check(got === fam[fam.length - 1],
+              `${name}: could not reach the last machine in the family ` +
+              `(${fam[fam.length - 1]}); got ${got}`);
+    }
 
     /* wide ranges keep the acceleration, or 0-127 becomes unusable */
-    ctx = await atGlobalWith({ mix: '40' });
+    const ctx = await atGlobalWith({ mix: '40' });
     ctx.host.onMidiMessageInternal(cc(KNOB1 + MIX_KNOB, 20));   /* MIX, 0-127 */
     const m = ctx.writes.find((x) => x.key === 'mix');
     check(m && parseInt(`${m.val}`, 10) === 60,
@@ -795,8 +846,8 @@ async function testFetchAllUsesBulkReads() {
     ctx.host.init();
 
     ctx.roundTrips.length = 0;
-    ctx.host.onMidiMessageInternal(noteOn(76));      /* palette: load a machine */
-    ctx.host.onMidiMessageInternal(noteOff(76));
+    ctx.host.onMidiMessageInternal(noteOn(PALETTE_ORDER[1]));   /* load a machine */
+    ctx.host.onMidiMessageInternal(noteOff(PALETTE_ORDER[1]));
 
     check(ctx.roundTrips.length > 0, 'loading a machine refreshed nothing');
     check(ctx.roundTrips.length <= 4,
@@ -817,12 +868,15 @@ async function testFetchAllUsesBulkReads() {
  * that assumed fixed records would land somewhere else entirely. */
 async function testBulkDecodeIsPositionallyCorrect() {
     console.log('bulk-read values land on the right keys');
-    const ctx = await atGlobalWith({ machine1: '13', mix: '99' });
+    const seed = { mix: '99' };
+    seed[STAGE_KEY[1]] = `${FX_FAMILY[13]}`;
+    const ctx = await atGlobalWith(seed);
 
-    ctx.host.onMidiMessageInternal(cc(KNOB1, 1));           /* machine1 +1 */
-    const w = ctx.writes.find((x) => x.key === 'machine1');
-    check(w && parseInt(`${w.val}`, 10) === 14,
-          `machine1 continued from the wrong base: wrote ${w && w.val}, expected 14`);
+    ctx.host.onMidiMessageInternal(cc(KNOB1 + 1, 1));       /* FX 1 machine +1 */
+    const w = ctx.writes.find((x) => x.key === STAGE_KEY[1]);
+    check(w && parseInt(`${w.val}`, 10) === FX_FAMILY[14],
+          `the FX 1 machine continued from the wrong base: wrote ${w && w.val}, ` +
+          `expected ${FX_FAMILY[14]}`);
 
     ctx.writes.length = 0;
     ctx.host.onMidiMessageInternal(cc(KNOB1 + MIX_KNOB, 1));   /* mix +1 */
@@ -1323,7 +1377,7 @@ async function testPaletteNeverShadowsTheFunctionPads() {
         ctx.writes.length = 0;
         ctx.host.onMidiMessageInternal(noteOn(pad));
         ctx.host.onMidiMessageInternal(noteOff(pad));
-        const loaded = ctx.writes.find((w) => /^machine[12]$/.test(w.key));
+        const loaded = ctx.writes.find((w) => STAGE_KEY.indexOf(w.key) >= 0);
         check(!loaded,
               `pad ${pad} (${key}) loaded machine ${loaded && loaded.val} instead ` +
               `of doing its own job`);
@@ -1331,7 +1385,13 @@ async function testPaletteNeverShadowsTheFunctionPads() {
 }
 
 /* Every machine the engine has must be reachable from the pads, not just from
- * the GLOBAL page knob — that is what the palette is for. */
+ * the GLOBAL page knob — that is what the palette is for.
+ *
+ * The sweep walks the STAGES rather than a Shift bank: each stage shows its own
+ * family, and between them the families have to cover the whole machine list.
+ * This is also the check that the effect family still FITS — twenty-one effects
+ * against twenty-one free pads is exact, so a twenty-second effect would fall
+ * off the end of the palette and be reachable from nothing. */
 async function testEveryMachineIsReachableFromThePalette() {
     console.log('every machine the engine lists can be loaded from a pad');
     const ctx = await loadUI();
@@ -1339,24 +1399,23 @@ async function testEveryMachineIsReachableFromThePalette() {
     const total = ctx.store.machines.split(',').length;
 
     const reached = new Set();
-    for (const shift of [false, true]) {
-        if (shift) holdShift(ctx, true);
-        else holdShift(ctx, false);
-        for (const pad of [92,93,94,95,96,97,98,99,84,85,86,87,88,89,90,91,76,77,78,79,80]) {
+    for (let stage = 0; stage < N_STAGES; stage++) {
+        for (const pad of PALETTE_ORDER) {
             ctx.writes.length = 0;
             ctx.host.onMidiMessageInternal(noteOn(pad));
             ctx.host.onMidiMessageInternal(noteOff(pad));
-            const w = ctx.writes.find((x) => /^machine[12]$/.test(x.key));
+            const w = ctx.writes.find((x) => STAGE_KEY.indexOf(x.key) >= 0);
             if (w) reached.add(parseInt(`${w.val}`, 10));
         }
+        ctx.host.onMidiMessageInternal(noteOn(70));      /* next stage */
+        ctx.host.onMidiMessageInternal(noteOff(70));
     }
-    holdShift(ctx, false);
 
     const missing = [];
     for (let i = 0; i < total; i++) if (!reached.has(i)) missing.push(i);
     check(missing.length === 0,
           `machines ${missing.join(', ')} of ${total} cannot be loaded from any ` +
-          `pad — the palette is smaller than the machine list`);
+          `pad on any stage — a family is bigger than the palette`);
 }
 
 
@@ -1580,16 +1639,17 @@ async function testLoadClosesTheBrowserAndPadsWorkAgain() {
     check(/Loaded/.test(screen),
           `the confirmation vanished with the browser; screen was "${screen}"`);
 
-    /* and the palette works again — this is the reported symptom */
+    /* and the palette works again — this is the reported symptom. One Shot is
+     * a source, so it now sits at its position in the SRC family rather than
+     * behind a Shift bank. */
     ctx.writes.length = 0;
-    holdShift(ctx, true);
-    ctx.host.onMidiMessageInternal(noteOn(92));
-    ctx.host.onMidiMessageInternal(noteOff(92));
-    holdShift(ctx, false);
-    const loaded = ctx.writes.find((w) => /^machine[12]$/.test(w.key));
+    const oneShot = SRC_FAMILY.indexOf(21);
+    ctx.host.onMidiMessageInternal(noteOn(PALETTE_ORDER[oneShot]));
+    ctx.host.onMidiMessageInternal(noteOff(PALETTE_ORDER[oneShot]));
+    const loaded = ctx.writes.find((w) => STAGE_KEY.indexOf(w.key) >= 0);
     check(loaded && parseInt(`${loaded.val}`, 10) === 21,
-          `Shift + first palette pad loaded ${loaded && loaded.val}, expected 21 ` +
-          `(One Shot) — the pads are still locked out`);
+          `the One Shot palette pad loaded ${loaded && loaded.val}, expected 21 ` +
+          `— the pads are still locked out`);
 }
 
 /* A FAILED load must keep the browser open: the next thing you want is
@@ -1654,12 +1714,12 @@ async function testRealInputStillWorksThroughTheFilter() {
     await gotoGlobalPage(ctx);
     ctx.writes.length = 0;
     ctx.host.onMidiMessageInternal(cc(KNOB1, 1));
-    check(ctx.writes.some((w) => w.key === 'machine1'),
+    check(ctx.writes.some((w) => w.key === STAGE_KEY[0]),
           'the filter swallowed a real knob turn');
 
     ctx.writes.length = 0;
-    ctx.host.onMidiMessageInternal(noteOn(76));
-    ctx.host.onMidiMessageInternal(noteOff(76));
+    ctx.host.onMidiMessageInternal(noteOn(PALETTE_ORDER[1]));
+    ctx.host.onMidiMessageInternal(noteOff(PALETTE_ORDER[1]));
     check(ctx.writes.length > 0, 'the filter swallowed a real pad press');
 }
 
@@ -1731,11 +1791,12 @@ const tests = [
     testShiftDoesNotLatchFromTheLaunchGesture,
     testStepsArriveAsNotes,
     testHoldStepPlusKnobLocks,
-    testSlotThreeLocksAppendRatherThanCollide,
+    testLastStageLocksAppendRatherThanCollide,
     testLockNudgeStartsFromLock,
     testPlainTapTogglesTrig,
     testShiftEscapesTheLockGesture,
     testMachinePaletteLoadsMachines,
+    testPaletteRefusesOutOfFamilyPads,
     testTransportPads,
     testJogSetsLengthAndStepAttrs,
     testCopyPasteClear,

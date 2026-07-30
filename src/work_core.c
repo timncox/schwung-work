@@ -507,8 +507,25 @@ const char *work_cond_name(int cond) {
     return COND_NAME[cond];
 }
 
-/* "1:TUNE" for slot 1 knob A, "2:MACH" for slot 2's machine select, "MIX" for
- * the global dry/wet. The label follows whichever machine the slot holds. */
+/* How a stage is named wherever one has to fit in a few characters: lock
+ * labels, and the UIs that read them back. Indexed by stage, so it cannot
+ * disagree with the stage order the rest of the engine uses. */
+static const char *const STAGE_TAG[WORK_STAGES] = { "SRC", "FX1", "FX2" };
+
+/* The suffix each stage answers to on the keys that carry one — "labels_src" /
+ * "labels1" / "labels2", "eff_src" / "eff1" / "eff2", and the flat state
+ * mirrors. The emitting counterpart to parse_stage_suffix, kept next to
+ * STAGE_TAG so the two cannot drift apart. */
+static const char *const STAGE_SFX[WORK_STAGES] = { "_src", "1", "2" };
+
+/* "SRC:TUNE" for the source stage's knob A, "FX2:MACH" for the second insert's
+ * machine select, "MIX" for the global dry/wet. The label follows whichever
+ * machine the stage holds.
+ *
+ * Derived from the two decode helpers rather than a hand-written chain of
+ * cases. The chain is how the last stage added ended up labelled "?" — it was
+ * added to the map and to the UI and not to this function, and nothing failed
+ * until a lock was displayed on hardware. */
 int work_lock_label(work_t *w, int index, char *buf, int buf_len) {
     if (!w || !buf || buf_len <= 1) return -1;
     int cap = buf_len - 1;
@@ -517,18 +534,18 @@ int work_lock_label(work_t *w, int index, char *buf, int buf_len) {
         return nclamp(snprintf(buf, (size_t)buf_len, "?"), cap);
     if (index == WORK_LOCK_MIX)
         return nclamp(snprintf(buf, (size_t)buf_len, "MIX"), cap);
-    if (index == WORK_LOCK_MACH3)
-        return nclamp(snprintf(buf, (size_t)buf_len, "3:MACH"), cap);
-    if (index == WORK_LOCK_MACH1 || index == WORK_LOCK_MACH1 + 1)
-        return nclamp(snprintf(buf, (size_t)buf_len, "%d:MACH",
-                               index - WORK_LOCK_MACH1 + 1), cap);
+
+    int mstage = work_lock_decode_machine(index);
+    if (mstage >= 0)
+        return nclamp(snprintf(buf, (size_t)buf_len, "%s:MACH",
+                               STAGE_TAG[mstage]), cap);
 
     int knob = 0;
-    int slot = work_lock_decode(index, &knob);
-    if (slot < 0) return nclamp(snprintf(buf, (size_t)buf_len, "?"), cap);
-    const char *nm = PARAM_NAME[TRK(w)->cfg[slot].machine][knob];
+    int stage = work_lock_decode(index, &knob);
+    if (stage < 0) return nclamp(snprintf(buf, (size_t)buf_len, "?"), cap);
+    const char *nm = PARAM_NAME[TRK(w)->cfg[stage].machine][knob];
     if (!nm[0]) nm = "-";
-    return nclamp(snprintf(buf, (size_t)buf_len, "%d:%s", slot + 1, nm), cap);
+    return nclamp(snprintf(buf, (size_t)buf_len, "%s:%s", STAGE_TAG[stage], nm), cap);
 }
 
 /* Default parameter values per machine. Chosen so that loading a machine and
@@ -2647,13 +2664,23 @@ static void build_effective(work_t *w, int frames) {
             if (!(w->held_mask & (1u << i))) continue;
             uint8_t v = w->held[i];
             int knob = 0;
-            int slot = work_lock_decode(i, &knob);
-            if (slot >= 0)                    TRK(w)->eff[slot][knob] = v;
-            else if (i == WORK_LOCK_MIX)      w->eff_mix = v;
-            else if (i == WORK_LOCK_MACH3)    TRK(w)->eff_machine[2] =
-                                                  (uint8_t)iclamp(v, 0, WORK_FX_COUNT - 1);
-            else                              TRK(w)->eff_machine[i - WORK_LOCK_MACH1] =
-                                                  (uint8_t)iclamp(v, 0, WORK_FX_COUNT - 1);
+            int stage = work_lock_decode(i, &knob);
+            if (stage >= 0)              { TRK(w)->eff[stage][knob] = v; continue; }
+            if (i == WORK_LOCK_MIX)      { w->eff_mix = v;               continue; }
+
+            /* A machine lock goes through the SAME family gate as
+             * work_set_param. A lock is a way to change a machine, not a way
+             * around the rule about which machines a stage accepts — without
+             * this, a p-lock could drop a reverb into the source stage or a
+             * sampler into an insert, and no surface could show or undo it
+             * because the base machine underneath would still look right.
+             *
+             * An out-of-family lock is IGNORED, not substituted: there is no
+             * near-enough machine, and a stage quietly playing something else
+             * is worse than one that left the lock on the floor. */
+            int ms = work_lock_decode_machine(i);
+            if (ms >= 0 && work_machine_fits_stage(ms, v))
+                TRK(w)->eff_machine[ms] = v;
         }
     }
 
@@ -2841,9 +2868,6 @@ void work_destroy(work_t *w) {
     free(w);
 }
 
-/* A SOURCE machine replaces its input instead of processing it. Granulator is
- * deliberately NOT one: with no sample loaded it granulates the live input,
- * which is the behaviour it shipped with and which people may be relying on. */
 /* Which machines each stage will accept.
  *
  * The families are NOT complements. Granulator sits in the source family
@@ -3978,9 +4002,19 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
         return n;
     }
 
-    if (strcmp(key, "meter") == 0)
-        return nclamp(snprintf(buf, buf_len, "%d:%d",
-                               (int)(-TRK(w)->slot[0].gr), (int)(-TRK(w)->slot[1].gr)), cap);
+    /* Compressor gain reduction, one field per INSERT. The source stage is not
+     * reported because it cannot hold a compressor — that is an effect, and the
+     * families are enforced — so a field for it would read 0 forever and invite
+     * someone to wonder why their meter is dead. Derived from WORK_STAGES so a
+     * third insert would appear here without being remembered. */
+    if (strcmp(key, "meter") == 0) {
+        int n = 0;
+        for (int s = WORK_STAGE_FX1; s < WORK_STAGES; ++s)
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s%d",
+                                    s > WORK_STAGE_FX1 ? ":" : "",
+                                    (int)(-TRK(w)->slot[s].gr)), cap);
+        return n;
+    }
 
     /* The eight knob labels for whichever machine a slot currently holds.
      * The UI reads these rather than carrying its own copy of the table —
@@ -4110,21 +4144,26 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
           * every saved preset depends on, the same values go out again as
           * strings under an "f" prefix. apply_state ignores them, so they
           * cost nothing on the way back in. */
+        /* Keyed by the STAGE suffix — fp_src / fp1 / fp2 — the same spelling
+         * labels and eff use. They used to be numbered from 1, which after the
+         * SRC promotion would have made "fp1" the source stage while "labels1"
+         * meant the first insert: two conventions in one contract, and the
+         * browser editor would have had to know which key used which. */
         for (int sl = 0; sl < WORK_STAGES; ++sl) {
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                    ",\"fp%d\":\"", sl + 1), cap);
+                                    ",\"fp%s\":\"", STAGE_SFX[sl]), cap);
             for (int i = 0; i < WORK_PARAMS; ++i)
                 n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s%d",
                                         i ? "," : "", TRK(w)->cfg[sl].p[i]), cap);
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "\""), cap);
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                    ",\"fe%d\":\"", sl + 1), cap);
+                                    ",\"fe%s\":\"", STAGE_SFX[sl]), cap);
             for (int i = 0; i < WORK_PARAMS; ++i)
                 n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s%d",
                                         i ? "," : "", TRK(w)->eff[sl][i]), cap);
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "\""), cap);
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                    ",\"fn%d\":\"%s\"", sl + 1,
+                                    ",\"fn%s\":\"%s\"", STAGE_SFX[sl],
                                     MACHINE_NAME[TRK(w)->cfg[sl].machine]), cap);
         }
         n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),

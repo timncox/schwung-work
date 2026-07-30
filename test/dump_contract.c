@@ -38,14 +38,27 @@ static void emit(work_t *w, const char *key) {
     first = 0;
 }
 
-/* A key counts as settable if writing a value changes what reading returns. */
+/* A key counts as settable if writing a value changes what reading returns.
+ *
+ * TWO probes, not one. The fixture below already loads machines and sets
+ * parameters, so a probe that happens to equal the value already there changes
+ * nothing and the key gets reported as read-only. That is not hypothetical:
+ * "src" was dropped from the settable list because the fixture had already set
+ * it to 22, and the chain harness then failed the UI for writing a key "the
+ * engine does not accept" — a false accusation produced entirely by the order
+ * of two lines in this file. */
 static int settable(work_t *w, const char *key, const char *probe) {
-    char before[8192], after[8192];
-    int b = work_get_param(w, key, before, sizeof(before));
+    char before[8192], mid[8192], after[8192];
+    if (work_get_param(w, key, before, sizeof(before)) < 0) return 0;
     work_set_param(w, key, probe);
-    int a = work_get_param(w, key, after, sizeof(after));
-    if (b < 0 || a < 0) return 0;
-    return strcmp(before, after) != 0;
+    if (work_get_param(w, key, mid, sizeof(mid)) < 0) return 0;
+    if (strcmp(before, mid) != 0) return 1;
+
+    /* No change — which may only mean the probe matched what was already
+     * there. Try a different value before concluding the key is read-only. */
+    work_set_param(w, key, strcmp(probe, "0") == 0 ? "1" : "0");
+    if (work_get_param(w, key, after, sizeof(after)) < 0) return 0;
+    return strcmp(mid, after) != 0;
 }
 
 int main(void) {
@@ -137,11 +150,14 @@ int main(void) {
 
     /* Probe the writable keys with values that must change the read-back. */
     struct { const char *key; const char *probe; } probes[] = {
-        {"src", "22"}, {"machine1", "5"}, {"machine2", "3"},
-        {"fx1", "5"}, {"fx2", "3"},
-        {"fx1", "7"}, {"fx2", "9"}, {"fx3", "11"}, {"mix", "77"},
+        /* Machine selects, by stage. The probes have to be IN FAMILY or the
+         * engine refuses them and the key looks read-only: 21 is One Shot, a
+         * source; 5 and 9 are effects. */
+        {"src", "21"}, {"fx1", "5"}, {"fx2", "9"},
+        {"machine1", "5"}, {"machine2", "3"},   /* the insert aliases */
+        {"mix", "77"},
         {"seq_on", "0"}, {"seq_len", "9"}, {"fill", "1"}, {"seq_clear", "1"},
-        {"src_p1", "40"}, {"fx1_p1", "42"}, {"fx2_p8", "13"}, {"fx3_p4", "55"},
+        {"src_p1", "40"}, {"fx1_p1", "42"}, {"fx2_p8", "13"},
         /* Every LFO field, on every LFO. A partial probe list here is worse
          * than none: the UI harnesses use `settable` to flag writes the engine
          * would ignore, and a key missing from this list reads as a bug in the

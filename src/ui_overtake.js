@@ -17,10 +17,12 @@
  *                                          selects (condition / micro / retrig)
  *                     hold + pad 83        clear that step's locks
  *
- *   Pads row 1-3    machine palette, 21 machines. Tap loads one into the
- *   (76-99)           focused slot.
+ *   Pads row 1-3    machine palette for the FOCUSED STAGE — the six sources on
+ *   (76-99)           SRC, the twenty-one effects on FX 1 and FX 2. Tap loads
+ *                     one. Each family fits the rows outright, so there is no
+ *                     longer a SHIFT bank to reach the rest of the list.
  *
- *   Pad row 4       68 play/stop   69 fill     70 slot focus  71 pattern page
+ *   Pad row 4       68 play/stop   69 fill     70 stage focus 71 pattern page
  *   (68-75)         72 edit page   73 copy     74 paste       75 clear
  *                   SHIFT + 71/72/73/74/75 = probability / condition / micro /
  *                   retrig mode, and clear-locks-on-the-held-step.
@@ -106,7 +108,7 @@ const PAD_MONITOR     = 69;   /* shift + fill         */
 /* Row 4: transport and navigation */
 const PAD_PLAY  = 68;
 const PAD_FILL  = 69;
-const PAD_SLOT  = 70;
+const PAD_STAGE = 70;
 const PAD_PPAGE = 71;
 const PAD_EPAGE = 72;
 const PAD_COPY  = 73;
@@ -181,20 +183,25 @@ const MACHINE_COLOR = [
  * was harmless only while the machine count stayed below the index of the
  * first function pad — at 21 machines nothing reached pad 81. Adding the
  * Phase 3 machines pushed the count past it, and pressing Undo would have
- * loaded a machine instead.
+ * loaded a machine instead. So both paths go through this one function.
  *
- * So both paths now go through one function. It returns the machine a pad
- * selects, or -1 for "not a palette pad", and SHIFT reaches the upper bank so
- * every machine the engine has stays reachable by pad however many there are.
- */
+ * The palette shows the FOCUSED STAGE's family, not the whole machine list:
+ * six sources on SRC, twenty-one effects on an insert. Two things fall out of
+ * that and both are worth having. The SHIFT bank is retired — each family fits
+ * the 21 free pads outright — which in turn kills one of the latched-Shift
+ * symptoms, where a palette pad loaded machine+21 and Compressor arrived as
+ * Wavescan. And a pad can no longer offer a machine the stage would refuse.
+ *
+ * 21 effects against 21 pads is exact. Adding an effect without freeing a pad
+ * puts it out of reach of the surface entirely; that has happened twice. */
 const PALETTE_SLOTS = PALETTE_PADS.filter(
     (pad) => pad !== PAD_UNDO && pad !== PAD_MEMO && pad !== PAD_SONG);
 
-function paletteMachine(pad, shift) {
-    const slot = PALETTE_SLOTS.indexOf(pad);
-    if (slot < 0) return -1;
-    const code = slot + (shift ? PALETTE_SLOTS.length : 0);
-    return code < nMachines() ? code : -1;
+function paletteMachine(pad) {
+    const i = PALETTE_SLOTS.indexOf(pad);
+    if (i < 0) return -1;
+    const fam = familyFor(focusStage);
+    return i < fam.length ? fam[i] : -1;
 }
 
 
@@ -210,7 +217,7 @@ function paletteMachine(pad, shift) {
  * And latched Shift does not look like one bug, it looks like several
  * unrelated ones — a knob edits the base value instead of writing a parameter
  * lock, a palette pad loads machine+21 so Compressor arrives as Wavescan,
- * and the slot pad opens the sample browser rather than switching slots. Every
+ * and the stage pad opens the sample browser rather than switching stages. Every
  * one of those was reported separately from hardware and chased separately.
  *
  * The origin is the launch gesture. Overwork is opened with Shift+Vol+jog
@@ -240,7 +247,7 @@ function settleShift() {
 
 let editPage   = EDIT_FX;
 let attrMode   = MODE_NONE;
-let focusSlot  = 0;          /* which FX slot the palette and knobs address */
+let focusStage = 0;          /* which stage the palette and knobs address   */
 let patPage    = 0;          /* 0-3, the visible sixteen of up to 64 steps  */
 let shiftHeld  = false;
 let needsRedraw = true;
@@ -291,6 +298,26 @@ let machineList = [];
 let condList    = [];
 let fxLabels    = [[], [], []];
 let effVals     = [[], [], []];
+
+/* Which machines each stage accepts, asked of the ENGINE rather than derived
+ * here. A local copy of a table the engine owns is a copy that drifts, and
+ * this one decides what the pads can even load. */
+let familyCodes = [[], [], []];
+
+function familyFor(stage) { return familyCodes[stage] || []; }
+
+/* The machine knobs mirror a POSITION in the family; the engine speaks machine
+ * codes. Sweeping raw codes would stall on every code the stage refuses, which
+ * on hardware reads as a dead encoder rather than as a rule being enforced. */
+function codeToPos(stage, code) {
+    const i = familyFor(stage).indexOf(code);
+    return i < 0 ? 0 : i;
+}
+function posToCode(stage, pos) {
+    const fam = familyFor(stage);
+    if (!fam.length) return 0;
+    return fam[Math.max(0, Math.min(fam.length - 1, pos))];
+}
 let cfg         = {};        /* key -> value for everything the knobs edit  */
 let steps       = [];        /* per step: {active, cond, micro, retrig, nlocks} */
 let seqPos      = 0;
@@ -379,38 +406,51 @@ function setNum(key, v) {
     host_module_set_param(key, `${v}`);
 }
 
-/* Lock indices, mirroring the map in work_core.h. The map is APPEND-ONLY, so
- * slot 3's parameters sit ABOVE the machine and mix entries rather than after
- * slot 2's — computing slot * 8 + knob gives the wrong index for slot 3 and
- * would write a lock onto slot 1's MACHINE select. */
-const N_SLOTS       = 3;
-const LOCK_MACH1    = 16;
-const LOCK_MIX      = 18;
-const LOCK_S3P0     = 19;
-const LOCK_MACH3    = 27;
-const DEST_MAX      = N_SLOTS * 8 - 1;
+/* Stages, mirroring work_core.h: stage 0 is SRC and the two inserts follow it.
+ * The engine keys them "src" / "fx1" / "fx2", so fx1 is stage 1 — off by one
+ * from the array index on purpose, because that is what the engine answers to.
+ * Parameters, labels and effective values all key off the same suffix. */
+const N_INSERTS     = 2;
+const N_STAGES      = 1 + N_INSERTS;
+const STAGE_SRC     = 0;
+const STAGE_KEY     = ['src', 'fx1', 'fx2'];
+const STAGE_LABEL   = ['SRC', 'FX 1', 'FX 2'];
 
-function lockForParam(slot, knob) {
-    return slot < 2 ? slot * 8 + knob : LOCK_S3P0 + knob;
+function paramKey(stage, knob) { return `${STAGE_KEY[stage]}_p${knob + 1}`; }
+function labelsKey(stage) { return stage === STAGE_SRC ? 'labels_src' : `labels${stage}`; }
+function effKey(stage)    { return stage === STAGE_SRC ? 'eff_src'    : `eff${stage}`; }
+
+/* Lock indices, mirroring the map in work_core.h. The map is APPEND-ONLY, so
+ * stage 2's parameters sit ABOVE the machine and mix entries rather than after
+ * stage 1's — computing stage * 8 + knob gives the wrong index for the last
+ * stage and would write a lock onto the SRC MACHINE select. */
+const LOCK_MACH0    = 16;
+const LOCK_MIX      = 18;
+const LOCK_S2P0     = 19;
+const LOCK_MACH2    = 27;
+const DEST_MAX      = N_STAGES * 8 - 1;
+
+function lockForParam(stage, knob) {
+    return stage < 2 ? stage * 8 + knob : LOCK_S2P0 + knob;
 }
 function isMachineKey(key) {
-    return /^machine[1-9]$/.test(key);
+    return STAGE_KEY.indexOf(key) >= 0;
 }
-function lockForMachine(slot) {
-    return slot < 2 ? LOCK_MACH1 + slot : LOCK_MACH3;
+function lockForMachine(stage) {
+    return stage < 2 ? LOCK_MACH0 + stage : LOCK_MACH2;
 }
 
-/* The knob descriptors for the current edit page. FX labels come from the DSP
- * so they always match whichever machine the focused slot holds. */
+/* The knob descriptors for the current edit page. Stage labels come from the
+ * DSP so they always match whichever machine the focused stage holds. */
 function pageKnobs() {
     if (editPage === EDIT_FX) {
         const out = [];
         for (let i = 0; i < 8; i++) {
-            const lab = fxLabels[focusSlot][i];
+            const lab = fxLabels[focusStage][i];
             out.push({
-                key: `fx${focusSlot + 1}_p${i + 1}`,
+                key: paramKey(focusStage, i),
                 label: lab && lab.length ? lab : '',
-                lock: lockForParam(focusSlot, i),
+                lock: lockForParam(focusStage, i),
                 min: 0, max: 127
             });
         }
@@ -453,17 +493,20 @@ function pageKnobs() {
             { key: '', label: '', lock: -1, min: 0, max: 0 }
         ];
     }
-    /* EDIT_GLOBAL */
-    return [
-        { key: 'machine1', label: 'FX1',  lock: lockForMachine(0), min: 0, max: nMachines() - 1 },
-        { key: 'machine2', label: 'FX2',  lock: lockForMachine(1), min: 0, max: nMachines() - 1 },
-        { key: 'machine3', label: 'FX3',  lock: lockForMachine(2), min: 0, max: nMachines() - 1 },
-        { key: 'mix',     label: 'MIX',  lock: LOCK_MIX, min: 0, max: 127 },
-        { key: 'seq_len', label: 'LEN',  lock: -1, min: 1, max: MAX_STEPS },
-        { key: '', label: '', lock: -1, min: 0, max: 0 },
-        { key: '', label: '', lock: -1, min: 0, max: 0 },
-        { key: '', label: '', lock: -1, min: 0, max: 0 }
-    ];
+    /* EDIT_GLOBAL. The machine knobs keep CODE bounds rather than family
+     * bounds, because `min`/`max` here also clamp a machine parameter-LOCK and
+     * a lock stores a machine code. Stepping within the family is the knob
+     * handler's job — see adjustKnob. Built from N_STAGES so a stage cannot be
+     * left off the page the way one was left out of the label refresh. */
+    const out = [];
+    for (let s = 0; s < N_STAGES; s++) {
+        out.push({ key: STAGE_KEY[s], label: STAGE_LABEL[s], stage: s,
+                   lock: lockForMachine(s), min: 0, max: nMachines() - 1 });
+    }
+    out.push({ key: 'mix',     label: 'MIX', lock: LOCK_MIX, min: 0, max: 127 });
+    out.push({ key: 'seq_len', label: 'LEN', lock: -1, min: 1, max: MAX_STEPS });
+    while (out.length < 8) out.push({ key: '', label: '', lock: -1, min: 0, max: 0 });
+    return out;
 }
 
 /* The scalars fetchAll mirrors, in one place so the batch and the unpack
@@ -479,13 +522,15 @@ const SCALAR_KEYS = [
  * the old version stalled the UI for over a second per detent. */
 function fetchAll() {
     const keys = [];
-    /* Static tables — asked for once, then never again. */
+    /* Static tables — asked for once, then never again. The families are
+     * compiled into the engine and cannot change while it runs. */
     if (machineList.length === 0) keys.push('machines');
     if (condList.length === 0) keys.push('conds');
+    if (familyFor(STAGE_SRC).length === 0) keys.push('src_codes', 'fx_codes');
 
-    for (let s = 1; s <= N_SLOTS; s++) {
-        keys.push(`machine${s}`, `labels${s}`, `eff${s}`);
-        for (let i = 1; i <= 8; i++) keys.push(`fx${s}_p${i}`);
+    for (let s = 0; s < N_STAGES; s++) {
+        keys.push(STAGE_KEY[s], labelsKey(s), effKey(s));
+        for (let i = 0; i < 8; i++) keys.push(paramKey(s, i));
     }
     for (const k of pageKnobs()) if (k.key && keys.indexOf(k.key) < 0) keys.push(k.key);
     for (const k of SCALAR_KEYS) if (keys.indexOf(k) < 0) keys.push(k);
@@ -501,16 +546,21 @@ function fetchAll() {
 
     if (v.machines) machineList = v.machines.split(',');
     if (v.conds) condList = v.conds.split(',');
+    if (v.src_codes && v.fx_codes) {
+        const s2n = (t) => t.split(',').map((x) => parseInt(x, 10)).filter(Number.isFinite);
+        familyCodes = [s2n(v.src_codes)];
+        for (let i = 1; i < N_STAGES; i++) familyCodes.push(s2n(v.fx_codes));
+    }
 
-    for (let s = 0; s < N_SLOTS; s++) {
-        const code = num(`machine${s + 1}`);
-        cfg[`machine${s + 1}`] = code;
+    for (let s = 0; s < N_STAGES; s++) {
+        const code = num(STAGE_KEY[s]);
+        cfg[STAGE_KEY[s]] = code;
         machineName[s] = machineList[code] || `#${code}`;
-        const lab = v[`labels${s + 1}`];
+        const lab = v[labelsKey(s)];
         fxLabels[s] = lab ? lab.split(',') : [];
-        const ev = v[`eff${s + 1}`];
+        const ev = v[effKey(s)];
         effVals[s] = ev ? ev.split(',').map((x) => parseInt(x, 10)) : [];
-        for (let i = 0; i < 8; i++) cfg[`fx${s + 1}_p${i + 1}`] = num(`fx${s + 1}_p${i + 1}`);
+        for (let i = 0; i < 8; i++) cfg[paramKey(s, i)] = num(paramKey(s, i));
     }
 
     for (const k of pageKnobs()) if (k.key) cfg[k.key] = num(k.key);
@@ -905,7 +955,7 @@ function drawSampleBrowser() {
      * and a load that worked used to look identical on screen. NOT
      * "Back:exit" — in overtake mode Back belongs to the host and leaves the
      * module altogether. */
-    const foot = sampleStatus || 'Click:load  Sh+Slot:close';
+    const foot = sampleStatus || 'Click:load  Sh+Stage:close';
     print(0, 57, foot.length > 25 ? foot.slice(0, 25) : foot, 1);
 }
 
@@ -923,6 +973,13 @@ function scaledMove(k, delta) {
     const cap  = span > 0 ? Math.ceil(span / 4) : 1;
     const mag  = Math.min(Math.abs(delta), Math.max(1, cap));
     return delta > 0 ? mag : -mag;
+}
+
+/* The same rule applied to a machine select, whose range is its stage's FAMILY
+ * rather than the descriptor's code bounds. Scaling by the code range instead
+ * would let one flick cross the whole six-machine source family. */
+function familyMove(stage, delta) {
+    return scaledMove({ min: 0, max: Math.max(0, familyFor(stage).length - 1) }, delta);
 }
 
 function toggleStep(idx) {
@@ -961,9 +1018,19 @@ function lockKnob(idx, knob, delta) {
     let base = parseInt(cur, 10);
     if (!Number.isFinite(base) || cur === '') base = cfg[k.key] | 0;
 
-    let v = base + scaledMove(k, delta);
-    if (v < k.min) v = k.min;
-    if (v > k.max) v = k.max;
+    let v;
+    if (isMachineKey(k.key)) {
+        /* A machine lock stores a machine CODE, and the engine ignores one its
+         * stage will not accept. Stepping through the family means the value
+         * written is always one that will actually take — otherwise the screen
+         * would show a lock that does nothing on playback. */
+        const stage = STAGE_KEY.indexOf(k.key);
+        v = posToCode(stage, codeToPos(stage, base) + familyMove(stage, delta));
+    } else {
+        v = base + scaledMove(k, delta);
+        if (v < k.min) v = k.min;
+        if (v > k.max) v = k.max;
+    }
     host_module_set_param(`lock${idx}_${k.lock}`, `${v}`);
 
     heldUsed = true;
@@ -1013,13 +1080,27 @@ function adjustKnob(knob, delta) {
     const k = pageKnobs()[knob];
     if (!k || !k.key) return;
 
+    /* A machine knob steps through its stage's FAMILY. Stepping raw machine
+     * codes would stop dead on every code the stage refuses — the encoder
+     * would look broken rather than the rule looking enforced. */
+    if (isMachineKey(k.key)) {
+        const stage = STAGE_KEY.indexOf(k.key);
+        const cur = cfg[k.key] | 0;
+        const code = posToCode(stage, codeToPos(stage, cur) + familyMove(stage, delta));
+        if (code === cur) return;
+        setNum(k.key, code);
+        fetchAll();
+        announceParameter(k.label, knobText(knob));
+        needsRedraw = true;
+        return;
+    }
+
     let v = (cfg[k.key] | 0) + scaledMove(k, delta);
     if (v < k.min) v = k.min;
     if (v > k.max) v = k.max;
     if (v === cfg[k.key]) return;
 
     setNum(k.key, v);
-    if (isMachineKey(k.key)) fetchAll();
     if (k.key === 'seq_len') seqLen = v;
 
     announceParameter(k.label, knobText(knob));
@@ -1028,9 +1109,9 @@ function adjustKnob(knob, delta) {
 
 function loadMachine(code) {
     sampleStatus = '';
-    setNum(`machine${focusSlot + 1}`, code);
+    setNum(STAGE_KEY[focusStage], code);
     fetchAll();
-    announce(`${machineList[code] || code} in FX ${focusSlot + 1}`);
+    announce(`${machineList[code] || code} in ${STAGE_LABEL[focusStage]}`);
 }
 
 function copyPage() {
@@ -1292,7 +1373,12 @@ function knobText(i) {
     if (k.key.endsWith('_trig')) return v ? 'Rtrg' : 'Free';
     if (k.key.endsWith('_dest')) {
         if (v < 0) return 'Off';
-        return `FX${(v >> 3) + 1}${String.fromCharCode(65 + (v & 7))}`;
+        /* A destination addresses a stage and a knob within it, so it names the
+         * stage rather than counting FX slots — "SRCa" and "FX 2c", not "FX1a"
+         * for something that is now the source. */
+        const stage = v >> 3;
+        const tag = STAGE_LABEL[stage] || `?${stage}`;
+        return `${tag}${String.fromCharCode(97 + (v & 7))}`;
     }
     return `${v}`;
 }
@@ -1302,7 +1388,7 @@ function drawUI() {
 
     /* Header: edit page + focused machine, then transport on the right */
     let title = EDIT_NAME[editPage];
-    if (editPage === EDIT_FX) title = `FX${focusSlot + 1} ${machineName[focusSlot]}`;
+    if (editPage === EDIT_FX) title = `${STAGE_LABEL[focusStage]} ${machineName[focusStage]}`;
     if (title.length > 20) title = title.slice(0, 20);
     print(0, 1, title, 1);
 
@@ -1324,9 +1410,9 @@ function drawUI() {
         if (heldStep >= 0 && knobs[i].lock >= 0) {
             const lv = getParam(`lock${heldStep}_${knobs[i].lock}`);
             if (lv !== '' && parseInt(lv, 10) >= 0) val = `*${lv}`;
-        } else if (editPage === EDIT_FX && effVals[focusSlot].length === 8) {
+        } else if (editPage === EDIT_FX && effVals[focusStage].length === 8) {
             /* show the value actually reaching the DSP when it differs */
-            const e = effVals[focusSlot][i];
+            const e = effVals[focusStage][i];
             if (Number.isFinite(e) && e !== (cfg[knobs[i].key] | 0)) val = `${e}~`;
         }
         print(x, y + 9, val, 1);
@@ -1382,17 +1468,22 @@ function paintSteps(force) {
 function paintPalette(force) {
     for (let i = 0; i < PALETTE_PADS.length; i++) {
         const pad = PALETTE_PADS[i];
-        const code = paletteMachine(pad, shiftDown());
-        if (code < 0) continue;
-        let color = Black;
-        {
-            /* A machine added to the engine without a colour here would
-             * otherwise hand `undefined` to setLED and light nothing. */
-            color = MACHINE_COLOR[code] !== undefined ? MACHINE_COLOR[code] : LightGrey;
-            /* the machine loaded in the focused slot burns brighter */
-            if (code === (cfg[`machine${focusSlot + 1}`] | 0)) color = White;
+        const code = paletteMachine(pad);
+        /* A pad past the end of this stage's family is DARKENED rather than
+         * left alone: the source family is six long and the effect family
+         * twenty-one, so switching stages must not leave fifteen pads still
+         * lit with effects that the source stage would refuse. */
+        if (code < 0) {
+            if (pad !== PAD_UNDO && pad !== PAD_MEMO && pad !== PAD_SONG)
+                setLED(pad, Black, force);
+            continue;
         }
-        setLED(PALETTE_PADS[i], color, force);
+        /* A machine added to the engine without a colour here would otherwise
+         * hand `undefined` to setLED and light nothing. */
+        let color = MACHINE_COLOR[code] !== undefined ? MACHINE_COLOR[code] : LightGrey;
+        /* the machine loaded in the focused stage burns brighter */
+        if (code === (cfg[STAGE_KEY[focusStage]] | 0)) color = White;
+        setLED(pad, color, force);
     }
 }
 
@@ -1405,10 +1496,10 @@ function paintFunctions(force) {
 function paintTransport(force) {
     setLED(PAD_PLAY,  liveRec ? Red : (seqOn ? BrightGreen : DarkGrey), force);
     setLED(PAD_FILL,  fillLatched ? BrightRed : (!monitor ? OrangeRed : 0x0C), force);
-    /* One colour per slot, so the pad says which one the knobs address without
-     * looking at the screen. Two colours for three slots would leave slot 3
-     * indistinguishable from slot 2. */
-    setLED(PAD_SLOT,  [SkyBlue, YellowGreen, BurntOrange][focusSlot] || SkyBlue, force);
+    /* One colour per stage, so the pad says which one the knobs address
+     * without looking at the screen. Two colours for three stages would leave
+     * FX 2 indistinguishable from FX 1. */
+    setLED(PAD_STAGE, [SkyBlue, YellowGreen, BurntOrange][focusStage] || SkyBlue, force);
     setLED(PAD_PPAGE, [Blue, Cyan, Purple, OrangeRed][patPage % 4], force);
     if (shiftDown()) {
         /* while shift is held row 4 IS the step-attribute mode row */
@@ -1442,10 +1533,10 @@ function handlePadPress(note) {
     if (sampleMode) {
         /* The closing gesture MUST get through this guard. Swallowing every
          * pad while a modal is open is how a user ends up stuck in it with no
-         * way back — the browser opens on SHIFT + slot pad and has to close
+         * way back — the browser opens on SHIFT + stage pad and has to close
          * the same way. */
-        if (shiftDown() && note === PAD_SLOT) { closeSampleBrowser(); return; }
-        announce('Sample browser open. Shift and slot pad to close.');
+        if (shiftDown() && note === PAD_STAGE) { closeSampleBrowser(); return; }
+        announce('Sample browser open. Shift and stage pad to close.');
         return;
     }
     if (presetMode && note !== PAD_CLEAR) {
@@ -1453,9 +1544,11 @@ function handlePadPress(note) {
         return;
     }
 
-    /* Machine palette. SHIFT reaches the upper bank; a pad that is undo, memo
-     * or song is never a palette pad, so those keep working. */
-    const pi = paletteMachine(note, shiftDown());
+    /* Machine palette for the focused stage. A pad that is undo, memo or song
+     * is never a palette pad, so those keep working. Shift is deliberately not
+     * consulted: each family fits the pads outright, so a shift-latched palette
+     * press now loads exactly what the pad shows. */
+    const pi = paletteMachine(note);
     if (pi >= 0) { loadMachine(pi); return; }
 
     /* SHIFT + row 4 selects the step-attribute mode the jog edits. */
@@ -1485,8 +1578,8 @@ function handlePadPress(note) {
                 announce(attrMode === MODE_PROB ? 'Probability mode' : 'Mode off');
                 needsRedraw = true;
                 return;
-            case PAD_SLOT:
-                /* SHIFT + slot pad opens the sample browser. Without a gesture
+            case PAD_STAGE:
+                /* SHIFT + stage pad opens the sample browser. Without a gesture
                  * the whole SRC machine set is unreachable on hardware, which
                  * is exactly how Mono shipped a preset browser that never
                  * listed a file. */
@@ -1535,10 +1628,15 @@ function handlePadPress(note) {
             announce(fillLatched ? 'Fill on' : 'Fill off');
             needsRedraw = true;
             return;
-        case PAD_SLOT:
-            focusSlot = (focusSlot + 1) % N_SLOTS;
+        case PAD_STAGE:
+            focusStage = (focusStage + 1) % N_STAGES;
             fetchAll();
-            announceView(`FX ${focusSlot + 1}, ${machineName[focusSlot]}`);
+            /* Repaint at once rather than waiting for the periodic pass: the
+             * palette under the pads just changed to a different family, and
+             * for a moment the surface would otherwise offer machines this
+             * stage refuses. */
+            paintPalette(true);
+            announceView(`${STAGE_LABEL[focusStage]}, ${machineName[focusStage]}`);
             return;
         case PAD_PPAGE:
             patPage = (patPage + 1) % Math.max(1, Math.ceil(seqLen / PAGE_STEPS));
@@ -1773,7 +1871,7 @@ function onMidiMessageInternal(data) {
 globalThis.init = function () {
     editPage = EDIT_FX;
     attrMode = MODE_NONE;
-    focusSlot = 0;
+    focusStage = 0;
     patPage = 0;
     heldStep = -1;
     heldUsed = false;
@@ -1806,15 +1904,17 @@ globalThis.tick = function () {
      * channel had — which is what made other reads time out and return
      * nothing. Twenty-two updates a second is still smoother than the eye. */
     if (tickCount % 2 === 0) {
-        const v = getParams(['seq_pos', 'eff1', 'eff2', 'eff3']);
+        const keys = ['seq_pos'];
+        for (let s = 0; s < N_STAGES; s++) keys.push(effKey(s));
+        const v = getParams(keys);
         const pos = parseInt(v.seq_pos, 10);
         if (Number.isFinite(pos) && pos !== seqPos) {
             seqPos = pos;
             paintSteps(false);
             needsRedraw = true;
         }
-        for (let s = 0; s < N_SLOTS; s++) {
-            const ev = v[`eff${s + 1}`];
+        for (let s = 0; s < N_STAGES; s++) {
+            const ev = v[effKey(s)];
             if (ev) effVals[s] = ev.split(',').map((x) => parseInt(x, 10));
         }
     }
