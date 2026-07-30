@@ -421,42 +421,76 @@ answers `tool not found: overwork` — its open_tool path searches
 the overtake list would make the suite fully unattended; until then every test
 skips with a clear message rather than failing.
 
-## The browser editor (not built yet)
+## The browser editor
 
-**Follow `smack`.** It has the identical three-build shape to Work — audio_fx +
-sound_generator + overtake — and already ships one. Read `smack/src/web_ui.html`
-before writing anything here.
+`src/web_ui.html` — one page, shipped into **`work-in`** (sound generator) and
+**`overwork`** (overtake tool) by `scripts/build.sh`. It sniffs its own
+parameter prefix at runtime (`overtake_dsp:` as the tool, `synth:` in a slot)
+rather than being built twice.
 
-A correction, because the first pass here got it wrong: schwung's
-`docs/MODULES.md` says a custom `web_ui.html` is synth-slot only and audio-FX
-modules cannot have one. Do not stop there. `remote_ui.go` also serves one for
-an OVERTAKE tool (`handleSubscribeTool`), and smack proves the whole pattern
-works in practice. The shape is:
+**The audio_fx build does not get one and cannot.** `remote_ui.go` only looks
+for `web_ui.html` on a slot's `synth` component, so a chain slot could never
+load it. That build's Remote UI is the auto-generated controls, which is what
+`ui_hierarchy` and `chain_params` are for — see below.
 
-- ONE `src/web_ui.html`. `scripts/build.sh` copies it into the sound_generator
-  and overtake module dirs (`work-in/`, `overwork/`) and adds it to both
-  tarballs. The audio_fx build does not get one and does not need one — the
-  chain slot has the auto-generated controls.
-- The page sniffs its own prefix at runtime rather than being built twice:
+Three constraints shaped the whole page, and none of them are obvious:
 
-      let PREFIX = null;   /* "overtake_dsp:" (tool) or "synth:" (slot) */
+- **Everything it draws must be a scalar in the `state` blob.** The manager
+  parses `state` as a flat object and drops every array, and
+  `schwungRemote.getParam` answers from the iframe's CACHE of that parse
+  rather than reading the device. A value the mirror omits is a value the page
+  cannot obtain at all — which is why `fmach`, `ffam*` and `flab*` exist:
+  `machines`, `src_codes` and `labels_src` are served as their own keys and
+  the browser can reach none of them.
+- **Writes go through one `rui_set` key** — `"<param>:<value>"`. The param
+  channel is a blocking round trip serviced once per SPI frame, so a key per
+  control would be a round trip per control, and dragging a slider would be a
+  queue.
+- **The step grid unpacks the lane's base64 in JS** rather than reading 64
+  step values. The lane is already in the blob it was handed.
 
-  seeded from the first `onParamChange` burst, since `getParam` reads a LOCAL
-  CACHE and not the device.
-- Writes go through a single `rui_set` key rather than one param per control,
-  which matters here for the same reason everything else does: the param
-  channel is a blocking round-trip serviced once per SPI frame.
-- Anything under the module dir is served at
-  `/api/remote-ui/module-assets/<module-id>/<path>`; `module.json`,
-  `config.json` and `secrets/` are refused. The iframe is sandboxed
-  `allow-scripts allow-same-origin` — no navigation, popups or form submission.
-- The manager polls `rui_poll` (rev:on:tick:bpm) and only does the expensive
-  full `state` read when the revision moves. **The engine serves this as of
-  v0.8.0.**
-- It seeds the page by parsing `state` as a FLAT object, so only scalar fields
-  survive. Work's blob is not flat — `p1`/`l1`/`vf` are arrays and `stp` is
-  packed — so anything the page needs from those it must request itself, or
-  the engine grows a flat view.
+What it shows: eight tracks with what each is running, then full detail for
+the selected one — three stages under the loaded machines' own knob names, the
+voice filter, four LFOs, the mod envelope, and the pattern. Every parameter
+shows the knob value AND the effective one when a lock or LFO has moved them
+apart; without that a modulated parameter looks stuck. Selecting a track
+writes `track`, exactly as the surface does.
+
+**Verify by rendering it.** `make build/state.json` emits a real blob from the
+engine (`test/dump_state.c`), and `node test/make_web_harness.mjs` replays it
+through a mock with the manager's own semantics — flat parse, arrays dropped —
+into `build/web_ui_harness.html`. Open that file in a browser. It is the only
+way to catch the class of bug that shipped here first time: `#ui { display:
+none }` in the sheet against `style.display = ""` in the code, which built the
+entire page and showed none of it. Reading the code would not have found it.
+
+`test/site_matches_engine.mjs` guards the seam: every mirror key the page
+names must exist in a real blob, and a hardcoded machine name fails the suite.
+
+### The chain slot's Remote UI
+
+`ui_hierarchy` and `chain_params` are both served, and the hierarchy carries
+**`"remote_only": true`**.
+
+That flag is the whole reason the chain slot can have a Remote UI at all.
+schwung-manager builds the browser's control list from `ui_hierarchy` and has
+no other source, but on the device answering that key hands
+`enterComponentEdit()` to the generic hierarchy editor and `ui_chain.js` never
+loads — and that editor re-reads `chain_params` only on preset change or for
+keys matching `/_rate_mode$/`, so Work's labels would sit on the previous
+machine. One key, two surfaces, opposite needs. `remote_only` splits them
+(timncox/schwung#5; schwung's `hierarchyDrivesDeviceEditor`, documented in its
+`docs/MODULES.md`).
+
+**This needs a schwung host that knows the flag.** An older host ignores it and
+diverts as it always did — the old behaviour, not a new break, and the labels
+are correct either way now because the hierarchy is built from the loaded
+machine rather than declared statically.
+
+Machine options in `chain_params` come from `work_machine_fits_stage`, the same
+gate `set_param` enforces, so a client cannot offer a machine the write would
+then refuse. LFO destination ranges follow the family, because both count from
+zero and `dest` 8 otherwise names two different things.
 
 ## Verification
 
