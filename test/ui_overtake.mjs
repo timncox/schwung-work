@@ -305,7 +305,14 @@ function makeHost() {
         print(x, y, text) { screen.push({ x, y, text }); },
         fill_rect() {},
         draw_rect() {},
-        text_width(t) { return String(t).length * 5; },
+        /* The device font is the 5x7 bitmap, loaded with charSpacing 1
+         * (js_display.c), and text_width sums glyph advance INCLUDING the
+         * trailing spacing. Glyphs are auto-trimmed to their ink, so a given
+         * string may be narrower — but 6 per char is the exact upper bound,
+         * and a mock that reports less than the hardware can draw is a mock
+         * that flatters every right-aligned layout. Measure at the worst
+         * case. */
+        text_width(t) { return String(t).length * 6; },
         move_midi_internal_send() {},
         Date,
         Math,
@@ -1507,6 +1514,116 @@ async function testMachineColorTableCoversEveryMachine() {
 }
 
 
+/* Every edit page has to fit the 128x64 screen and not print on top of itself.
+ *
+ * Worth its own test because the pages are built from tables that have grown
+ * twice — three LFO pages became four, and the header gained a track number —
+ * and a page that overflows or collides does not throw, it just renders
+ * something you cannot read. The chain editor had exactly that for months: its
+ * scalar row printed label and value as one string and silently cut "MIX 127"
+ * to "MIX 12".
+ *
+ * Prints the pages as it goes, so a human can read what the device draws
+ * without being at the device. */
+/* The device font is the 5x7 bitmap in scripts/generate_font.py, loaded with
+ * charSpacing 1 (js_display.c). Glyphs are auto-trimmed to their ink, so the
+ * advance is at most 5+1 and usually less. Measuring at the maximum is the
+ * right direction here — it is the widest thing the hardware can draw, and a
+ * check that passes at the maximum passes for every string. */
+const SCREEN_W = 128, SCREEN_H = 64, GLYPH_H = 7;
+const spanOf = (s) => String(s.text).length * 6;
+
+/* Assert one rendered screen, and print it so a human can read what the device
+ * draws without being at the device. */
+function checkScreen(ctx, label) {
+    const drawn = ctx.screen.slice();
+    check(drawn.length > 0, `${label}: drew nothing at all`);
+
+    for (const s of drawn) {
+        const end = s.x + spanOf(s);
+        check(s.x >= 0 && end <= SCREEN_W,
+              `${label}: "${s.text}" runs from x=${s.x} to ${end}, past the ${SCREEN_W}px screen`);
+        check(s.y >= 0 && s.y + GLYPH_H <= SCREEN_H,
+              `${label}: "${s.text}" at y=${s.y} falls outside the ${SCREEN_H}px screen`);
+    }
+
+    /* Overlap, within a row. Two strings on the same baseline whose spans
+     * intersect are printed on top of each other. */
+    const byRow = new Map();
+    for (const s of drawn) {
+        if (!byRow.has(s.y)) byRow.set(s.y, []);
+        byRow.get(s.y).push(s);
+    }
+    for (const [y, row] of byRow) {
+        row.sort((a, b) => a.x - b.x);
+        for (let i = 1; i < row.length; i++) {
+            const prev = row[i - 1];
+            check(row[i].x >= prev.x + spanOf(prev),
+                  `${label}: "${prev.text}" and "${row[i].text}" overlap on row y=${y}`);
+        }
+    }
+
+    const rows = [...byRow.entries()].sort((a, b) => a[0] - b[0])
+        .map(([y, r]) => `    y${String(y).padStart(2)}  ` +
+             r.sort((a, b) => a.x - b.x).map((s) => s.text).join(' | '));
+    console.log(`  --- ${label} ---\n${rows.join('\n')}`);
+}
+
+async function testEveryPageRendersInsideTheScreen() {
+    console.log('every screen fits the display and does not overprint');
+    const ctx = await loadUI();
+    ctx.host.init();
+
+    const pageCount = ctx.host.__editPageCount();
+    for (let p = 0; p < pageCount; p++) {
+        ctx.screen.length = 0;
+        ctx.host.tick();                       /* draws the current page */
+        checkScreen(ctx, `edit page ${p}`);
+
+        ctx.host.onMidiMessageInternal(noteOn(72));   /* next page */
+        ctx.host.onMidiMessageInternal(noteOff(72));
+    }
+}
+
+/* The two list screens, fed the longest content they can actually be handed.
+ *
+ * Both used to cut their rows at 24 characters and their footers at 25 — a
+ * character count standing in for a pixel budget, on a proportional font. The
+ * preset footer was not cut at all: "Click:load  Shift+click:exit" is 143px on
+ * a 128px screen, so the exit gesture ran off the edge unread. */
+async function testBrowserScreensFitTheirContent() {
+    console.log('the sample and preset browsers fit their longest rows');
+    const ctx = await loadUI();
+    ctx.host.init();
+
+    const long = 'A_VERY_LONG_SAMPLE_FILE_NAME_INDEED';
+    ctx.vfs.dirs.add('/data/UserData/UserLibrary/Samples');
+    ctx.vfs.binaries.set(`/data/UserData/UserLibrary/Samples/${long}.wav`,
+                         makeWav({ frames: 400 }));
+
+    /* Both browsers draw on OPEN (and only redraw on change), so read the
+     * screen as it stands rather than clearing and ticking — a tick with
+     * nothing to redraw would leave it blank. */
+    holdShift(ctx, true);
+    ctx.host.onMidiMessageInternal(noteOn(70));
+    ctx.host.onMidiMessageInternal(noteOff(70));
+    holdShift(ctx, false);
+    ctx.host.tick();
+    checkScreen(ctx, 'sample browser');
+
+    /* out again, then into the presets with a long name to list */
+    holdShift(ctx, true);
+    ctx.host.onMidiMessageInternal(noteOn(70));
+    ctx.host.onMidiMessageInternal(noteOff(70));
+    holdShift(ctx, false);
+
+    openPresets(ctx);
+    ctx.host.onMidiMessageInternal(cc(3, 127));   /* click "+ Save new" */
+    ctx.host.tick();
+    checkScreen(ctx, 'preset browser');
+}
+
+
 /* The palette shows ONE family at a time, so the thing that matters is not
  * "is the table complete" but "can you tell apart the machines you can
  * actually see at once".
@@ -2011,6 +2128,8 @@ const tests = [
     testRealInputStillWorksThroughTheFilter,
     testMachineColorTableCoversEveryMachine,
     testColoursAreDistinctWithinAView,
+    testEveryPageRendersInsideTheScreen,
+    testBrowserScreensFitTheirContent,
     testPaletteNeverShadowsTheFunctionPads,
     testEveryMachineIsReachableFromThePalette,
     testSampleScanFindsNestedFiles,

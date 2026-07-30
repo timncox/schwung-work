@@ -1076,8 +1076,7 @@ function drawSampleBrowser() {
                 label.replace(/\.wav$/i, '') === sampleLoaded;
             label = (isLoaded ? '\u2022' : ' ') + label;
             if (idx === sampleIndex) fill_rect(0, y - 1, 128, 9, 1);
-            print(2, y, label.length > 24 ? label.slice(0, 24) : label,
-                  idx === sampleIndex ? 0 : 1);
+            print(2, y, clip(label, 126), idx === sampleIndex ? 0 : 1);
         }
     }
 
@@ -1086,8 +1085,8 @@ function drawSampleBrowser() {
      * and a load that worked used to look identical on screen. NOT
      * "Back:exit" — in overtake mode Back belongs to the host and leaves the
      * module altogether. */
-    const foot = sampleStatus || 'Click:load  Sh+Stage:close';
-    print(0, 57, foot.length > 25 ? foot.slice(0, 25) : foot, 1);
+    const foot = sampleStatus || 'Click:load Sh+Stg:close';
+    print(0, 57, clip(foot, 128), 1);
 }
 
 /* --------------------------------------------------------------- editing */
@@ -1511,12 +1510,11 @@ function drawPresets() {
         const y = 13 + r * 10;
         const label = idx === 0 ? '+ Save new' : presets[idx - 1].name;
         if (idx === presetIndex) fill_rect(0, y - 1, 128, 9, 1);
-        print(2, y, label.length > 24 ? label.slice(0, 24) : label,
-              idx === presetIndex ? 0 : 1);
+        print(2, y, clip(label, 126), idx === presetIndex ? 0 : 1);
     }
 
     fill_rect(0, 55, 128, 1, 1);
-    print(0, 57, 'Click:load  Shift+click:exit', 1);
+    print(0, 57, clip('Click:load Sh+click:exit', 128), 1);
 }
 
 /* --------------------------------------------------------------- display */
@@ -1569,17 +1567,50 @@ function drawTrackStrip() {
     }
 }
 
+/* Clip to a pixel budget, not a character count.
+ *
+ * Character counts were what the screen used to do everywhere, and they were
+ * always a guess: the font is proportional (glyphs are auto-trimmed to their
+ * ink), so twenty characters is anywhere from 40 to 120 pixels wide. Where two
+ * things share a row, the guess eventually collides — the header did, once the
+ * transport readout grew a track number. Ask the font. */
+/* Four knob columns across 128px. The cell is 32 wide; the printable part is
+ * two pixels short of it so adjacent columns keep a visible gap rather than
+ * running together at full width. */
+const COL_X = 32;
+const COL_W = COL_X - 2;
+
+function clip(s, px) {
+    let t = `${s}`;
+    while (t.length && text_width(t) > px) t = t.slice(0, -1);
+    return t;
+}
+
 function drawUI() {
     clear_screen();
 
-    /* Header: edit page + focused machine, then transport on the right */
-    let title = EDIT_NAME[editPage];
-    if (editPage === EDIT_FX) title = `${STAGE_LABEL[focusStage]} ${machineName[focusStage]}`;
-    if (title.length > 20) title = title.slice(0, 20);
-    print(0, 1, title, 1);
-
+    /* Header: edit page + focused machine, then transport on the right.
+     *
+     * These do not both fit. "SRC Polysample" is 80px and the transport is
+     * 59px on a 128px screen, so at eight tracks the default state already
+     * overprints — the track number is what pushed it over. The transport is
+     * fixed-content and wins; the title gives ground in the order that costs
+     * the least. The stage tag goes first: which stage is focused is also on
+     * the PAD_STAGE LED and spelled out on the GLOBAL page, so dropping it
+     * loses nothing, where truncating loses the end of the machine's name. */
     const right = `T${selTrack + 1} P${curPattern + 1}${songOn ? 'S' : ''} ${seqOn ? '>' : '||'}${seqPos + 1}/${seqLen}`;
-    print(128 - text_width(right), 1, right, 1);
+    const rightX = 128 - text_width(right);
+    print(rightX, 1, right, 1);
+
+    const room = rightX - 3;
+    let title = EDIT_NAME[editPage];
+    if (editPage === EDIT_FX) {
+        const bare = machineName[focusStage];
+        const full = `${STAGE_LABEL[focusStage]} ${bare}`;
+        title = text_width(full) <= room ? full : bare;
+    }
+    print(0, 1, clip(title, room), 1);
+
     drawTrackStrip();
 
     /* Four columns, two rows of knobs. A held step turns the row into the
@@ -1587,10 +1618,9 @@ function drawUI() {
     const knobs = pageKnobs();
     for (let i = 0; i < 8; i++) {
         if (!knobs[i] || !knobs[i].label) continue;
-        const x = (i % 4) * 32;
+        const x = (i % 4) * COL_X;
         const y = 13 + (i < 4 ? 0 : 1) * 20;
-        const lab = knobs[i].label.length > 6 ? knobs[i].label.slice(0, 6) : knobs[i].label;
-        print(x, y, lab, 1);
+        print(x, y, clip(knobs[i].label, COL_W), 1);
 
         let val = knobText(i);
         if (heldStep >= 0 && knobs[i].lock >= 0) {
@@ -1601,7 +1631,7 @@ function drawUI() {
             const e = effVals[focusStage][i];
             if (Number.isFinite(e) && e !== (cfg[knobs[i].key] | 0)) val = `${e}~`;
         }
-        print(x, y + 9, val, 1);
+        print(x, y + 9, clip(val, COL_W), 1);
     }
 
     if (!monitor) {
@@ -1625,7 +1655,7 @@ function drawUI() {
         foot = `Pg${patPage + 1} ${MODE_NAME[attrMode]}${fillLatched ? ' FILL' : ''}${liveRec ? ' REC' : ''}`;
         if (sampleLoaded) foot += ` ${sampleLoaded}`;
     }
-    print(0, 57, foot.length > 24 ? foot.slice(0, 24) : foot, 1);
+    print(0, 57, clip(foot, 128), 1);
 }
 
 /* ------------------------------------------------------------------ LEDs */
