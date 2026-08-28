@@ -5263,8 +5263,14 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
             ",\"mod\":{\"label\":\"Modulation\",\"params\":["), cap);
         {
             int first = 1;
-            static const char *const LF[] = { "dest", "spd", "mult", "wave",
-                                              "depth", "phase", "trig" };
+            /* Order matters to the knob grid: it draws the LFO graphic over a
+             * RUN of ADJACENT cells, and the roles it needs are spd (rate),
+             * wave (shape) and depth. With mult between spd and wave the run
+             * was broken and all four Modulation pages drew seven loose dials
+             * instead of an LFO. Moving mult ahead of spd puts the three
+             * together; mult keeps its own cell and reads exactly as before. */
+            static const char *const LF[] = { "spd", "wave", "depth", "phase",
+                                              "dest", "mult", "trig" };
             for (int l = 0; l < WORK_LFOS; ++l) {
                 char lk[8];
                 lfo_param_prefix(l, lk, sizeof lk);
