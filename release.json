@@ -2,6 +2,6 @@
   "version": "0.9.1",
   "download_url": "https://github.com/timncox/schwung-work/releases/download/v0.9.1/work-module.tar.gz",
   "name": "Work",
-  "description": "Eight tracks of twenty-six machines \u2014 a source stage and two insert FX \u2014 with four LFOs in two families, a modulation envelope, a step sequencer with parameter locks, and a browser editor",
+  "description": "Eight tracks of twenty-six machines \u2014 a source stage and two insert FX \u2014 with four LFOs in two families, a modulation envelope, and a step sequencer with parameter locks",
   "repo_url": "https://github.com/timncox/schwung-work"
 }
