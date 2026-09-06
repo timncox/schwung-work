@@ -136,6 +136,18 @@ function makeHost() {
             const known = settable.has(key)
                 || [...settable].some((s) => s.replace(/\d+/g, '#') === fam);
             if (!known) unknownWrites.add(key);
+            /* Selecting a machine installs THAT machine's defaults in the
+             * engine, so the stage's eight values change underneath the UI.
+             * The mock has to do it too: with a store that answers the same
+             * numbers whatever machine is loaded, a UI that never invalidates
+             * its mirror looks correct here and shows the previous machine's
+             * values on hardware. That is the bug this models. */
+            const stage = STAGE_KEY.indexOf(key);
+            if (stage >= 0) {
+                const dst = slotFor(curTrack());
+                for (let i = 1; i <= 8; i++)
+                    dst[`${key}_p${i}`] = `${(parseInt(val, 10) * 7 + i * 11) % 128}`;
+            }
             if (!isGlobal(key)) { slotFor(curTrack())[key] = `${val}`; return; }
             store[key] = `${val}`;
         },
@@ -492,6 +504,71 @@ async function testMachineChangeRefreshesLabels() {
           'the knob labels for the changed stage were never refreshed');
 }
 
+/* A machine change must drop that stage's mirrored VALUES, not just its labels.
+ *
+ * This is a TRANSIENT check, deliberately. Arriving at the stage page arms a
+ * burst that refills the mirror within a few hundred ms, so a settled page
+ * looks right either way — which is why the missing invalidation went unseen.
+ * What the player sees is the frames BEFORE that: without the drop, the
+ * previous machine's eight numbers are printed under the new machine's names,
+ * which is a lie nothing on screen marks as one. "--" is the honest state.
+ *
+ * The clean-up existed but sat behind the machine branch's own `return`,
+ * unreachable, from the commit that turned the FX pages into stages (it still
+ * addressed `PAGE_FX1`) until 2026-09-06.
+ */
+async function testMachineChangeDropsStaleValues() {
+    console.log('a machine change drops that stage\'s stale values, not just its labels');
+    const seed = {};
+    seed[STAGE_KEY[1]] = `${FX_FAMILY[0]}`;
+    const ctx = await loadUI(seed);
+    ctx.host.init();
+
+    const toFx1 = () => {                     /* page 2: machines, then a page per stage */
+        ctx.host.onMidiMessageInternal(cc(JOG, 1));
+        ctx.host.onMidiMessageInternal(cc(JOG, 1));
+    };
+    const toMachines = () => {
+        ctx.host.onMidiMessageInternal(cc(JOG, 127));
+        ctx.host.onMidiMessageInternal(cc(JOG, 127));
+    };
+    const defaults = (code) => {
+        const out = [];
+        for (let i = 1; i <= 8; i++) out.push(`${(code * 7 + i * 11) % 128}`);
+        return out;
+    };
+
+    /* Select the first machine THROUGH the surface, so the mock installs its
+     * defaults exactly as the engine would. A seeded store would answer the
+     * contract's values for every machine and the check below could not fail. */
+    settle(ctx, 40);
+    ctx.host.onMidiMessageInternal(cc(KNOB1 + 1, 1));
+    const oldCode = parseInt(ctx.store[STAGE_KEY[1]], 10);
+    toFx1();
+    settle(ctx, 80);
+    check(ctx.screen.some((p) => defaults(oldCode).includes(`${p.text}`)),
+          'the first machine\'s values never reached the screen — the test proves nothing');
+
+    toMachines();
+    settle(ctx, 20);
+    ctx.host.onMidiMessageInternal(cc(KNOB1 + 1, 1));
+    const newCode = parseInt(ctx.store[STAGE_KEY[1]], 10);
+    check(newCode !== oldCode, 'the machine select did not move');
+
+    /* Back to the stage page, and ONE frame — what the player actually sees
+     * first, before the burst has refilled anything. */
+    toFx1();
+    ctx.host.tick();
+
+    const shown = ctx.screen.map((p) => `${p.text}`);
+    const fresh = defaults(newCode);
+    const stale = defaults(oldCode).filter((v) => !fresh.includes(v));
+    const survived = stale.filter((v) => shown.includes(v));
+    check(survived.length === 0,
+          `the previous machine's values are still on screen under the new ` +
+          `machine's labels: ${survived.join(',')} in ${shown.join('|')}`);
+}
+
 /* Turn the jog with SHIFT held — the chain editor's track control. */
 const SHIFT = 49;
 function jogTrack(ctx, dir) {
@@ -666,6 +743,7 @@ const TESTS = [
     testLayoutNeverCollides,
     testMachineNamesAreNotTruncatedToSixChars,
     testMachineChangeRefreshesLabels,
+    testMachineChangeDropsStaleValues,
     testTrackJogFollowsTheEngine,
     testTrackChangeInvalidatesTheWholeMirror,
     testEveryWrittenKeyIsAccepted

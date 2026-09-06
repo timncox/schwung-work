@@ -526,7 +526,25 @@ function adjustKnob(i, delta) {
         if (code === cur) return;
         values[k.key] = code;
         host_module_set_param(k.key, `${code}`);
+
+        /* The new machine installs ITS defaults in the DSP, so this stage's
+         * eight knob labels AND its eight values are now the previous
+         * machine's. Both are dropped and a burst is armed rather than read
+         * here — reading on the detent is what made scrolling the machine
+         * list unusable.
+         *
+         * Dropping the values matters as much as the labels: left in the
+         * mirror they render as real numbers under the new machine's names,
+         * which is a lie the player cannot see through. "--" until the read
+         * lands is honest. This clean-up used to live in a block below,
+         * unreachable behind this branch's own `return` ever since the FX
+         * pages became stages (`PAGE_FX1` had not existed since), so a machine
+         * change quietly kept the old values until the trickle replaced them
+         * one key per eight ticks. */
         labelsDirty[machineStage] = true;
+        for (const p of PAGES[PAGE_STAGE1 + machineStage]) delete values[p.key];
+        burst = BURST_READS;
+
         syncMachineNames();
         needsRedraw = true;
         return;
@@ -539,18 +557,6 @@ function adjustKnob(i, delta) {
 
     values[k.key] = v;
     host_module_set_param(k.key, `${v}`);
-
-    /* Selecting a machine installs that machine's defaults in the DSP, so the
-     * slot's eight parameters and its knob labels are now stale. Mark them for
-     * the background refresh — reading them HERE is what made scrolling the
-     * machine list unusable. */
-    if (isMachineKey(k.key)) {
-        const s = parseInt(k.key.slice(7), 10) - 1;
-        labelsDirty[s] = true;
-        for (const p of PAGES[PAGE_FX1 + s]) delete values[p.key];
-        syncMachineNames();
-        burst = BURST_READS;
-    }
 
     announceParameter(knobLabel(i) || k.label, knobValue(i));
     needsRedraw = true;

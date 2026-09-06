@@ -5166,125 +5166,45 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
         return n;
     }
 
-    /* ui_hierarchy, marked remote_only.
+    /* ui_hierarchy is deliberately NOT ANSWERED, and that silence is
+     * load-bearing. Read this before adding it back.
      *
-     * This key used to go unanswered on purpose, and the reason still holds
-     * for the DEVICE. shadow_ui.js enterComponentEdit():
+     * shadow_ui.js enterComponentEdit():
      *
      *     const hierarchy = getComponentHierarchy(slotIndex, componentKey);
      *     if (hierarchy) { enterHierarchyEditor(...); return; }
-     *     enterComponentEditFallback(...);        // -> loadModuleUi -> ui_chain.js
+     *     enterComponentEditFallback(...);       // -> loadModuleUi -> ui_chain.js
      *
-     * so answering it REPLACED our own chain UI with the generic hierarchy
-     * editor — which captures the hierarchy once and re-reads chain_params
-     * only on preset change or for keys ending "_rate_mode". A machine change
-     * is neither, so the settings page sat on the previous machine's labels
-     * until you backed out and re-entered. ui_chain.js re-reads labels_src /
-     * labels1 / labels2 on every machine change, so it is strictly better
-     * here, and staying quiet was what let the host reach it.
+     * Answering this key at all hands the screen to schwung's generic
+     * hierarchy editor, and our own ui_chain.js never loads. That editor
+     * caches the hierarchy at entry and re-reads chain_params only on a preset
+     * change or for keys ending "_rate_mode" -- a machine change is neither --
+     * so every stage sits on the previous machine's knob names. ui_chain.js
+     * re-reads labels_src / labels1 / labels2 on every machine change, so
+     * staying quiet here is what buys the better editor.
      *
-     * But schwung-manager builds the BROWSER's control list from this same key
-     * and has no other source: chain_params only annotates keys a hierarchy
-     * already lists, so silence meant "No parameters available" in the Remote
-     * UI, permanently. One key, two surfaces, opposite needs.
+     * v0.5.3 removed this key for exactly that reason. v0.9.0 put it back
+     * behind "remote_only": true so schwung-manager could build a browser
+     * control list (it has no other source) while the device still fell
+     * through. THAT FLAG EXISTS ONLY IN TIM'S FORK: it landed as
+     * timncox/schwung#5, and the upstream PR (charlesvestal/schwung#193) was
+     * closed and never reopened. Upstream v1.2.0's getComponentHierarchy still
+     * parses the JSON and diverts with no check for the field -- upstream's own
+     * tests/fixtures/module-contracts.json captures Work 0.9.0's
+     * "remote_only":true and diverts regardless.
      *
-     * "remote_only": true is the split (schwung's hierarchyDrivesDeviceEditor,
-     * docs/MODULES.md). The browser gets its hierarchy; the device falls
-     * through to ui_chain.js exactly as it did when this key was silent. A
-     * host too old to know the flag ignores it and diverts as before — which
-     * is the old behaviour, not a new break, and the labels follow the loaded
-     * machine either way because they are built here, now.
+     * So v0.9.0 shipped, to everyone running stock schwung, a chain slot whose
+     * machine controls never appeared at all. Reported by kortiss in
+     * #bug-reports, 2026-09-06; diagnosed as ui_chain.js never being loaded,
+     * not as the background refresh failing.
      *
-     * Compact on purpose: only the three LOADED machines' labels, not
-     * twenty-six machines' worth. */
-    if (strcmp(key, "ui_hierarchy") == 0) {
-        int n = nclamp(snprintf(buf, buf_len,
-            "{\"remote_only\":true,\"levels\":{\"root\":{\"label\":\"Work\","
-            "\"params\":["
-            "{\"key\":\"track\",\"label\":\"Track\"},"
-            "{\"key\":\"mix\",\"label\":\"Dry/Wet\"},"
-            "{\"key\":\"level\",\"label\":\"Level\"},"
-            "{\"key\":\"pan\",\"label\":\"Pan\"},"
-            "{\"key\":\"seq_on\",\"label\":\"Sequencer\"},"
-            "{\"key\":\"seq_len\",\"label\":\"Length\"},"
-            "{\"key\":\"pattern\",\"label\":\"Pattern\"}"), cap);
-
-        for (int sl = 0; sl < WORK_STAGES; ++sl)
-            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                    ",{\"level\":\"s%d\",\"label\":\"%s: %s\"}",
-                                    sl, STAGE_TAG[sl],
-                                    MACHINE_NAME[TRK(w)->cfg[sl].machine]), cap);
-
-        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-            ",{\"level\":\"vf\",\"label\":\"Voice Filter\"},"
-            "{\"level\":\"mod\",\"label\":\"Modulation\"}],"
-            "\"knobs\":[\"mix\",\"level\",\"pan\",\"track\"]}"), cap);
-
-        /* One level per stage: the machine select, then that machine's own
-         * eight knobs under their real names. */
-        for (int sl = 0; sl < WORK_STAGES; ++sl) {
-            const int m = TRK(w)->cfg[sl].machine;
-            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                    ",\"s%d\":{\"label\":\"%s\",\"params\":["
-                                    "{\"key\":\"%s\",\"label\":\"Machine\"}",
-                                    sl, MACHINE_NAME[m], MACHINE_KEY[sl]), cap);
-            for (int i = 0; i < WORK_PARAMS; ++i) {
-                if (!PARAM_NAME[m][i][0]) continue;
-                n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                        ",{\"key\":\"%s_p%d\",\"label\":\"%s\"}",
-                                        STAGE_KEY[sl], i + 1, PARAM_NAME[m][i]), cap);
-            }
-            /* Knobs list exactly the parameters above and no more. A machine
-             * with fewer than eight — and several have — would otherwise map
-             * physical knobs to keys the level does not carry, which reads to
-             * a client as a control with no metadata rather than as absent.
-             * Bypass has none at all, and its level is legitimately just the
-             * machine select. */
-            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                    "],\"knobs\":["), cap);
-            for (int i = 0, k = 0; i < WORK_PARAMS; ++i) {
-                if (!PARAM_NAME[m][i][0]) continue;
-                n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                        "%s\"%s_p%d\"", k++ ? "," : "",
-                                        STAGE_KEY[sl], i + 1), cap);
-            }
-            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "]}"), cap);
-        }
-
-        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-            ",\"vf\":{\"label\":\"Voice Filter\",\"params\":["), cap);
-        for (int i = 0; i < WORK_VFILT_FIELDS; ++i)
-            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                    "%s{\"key\":\"%s\",\"label\":\"%s\"}",
-                                    i ? "," : "", VFILT_KEY[i], VFILT_NAME[i]), cap);
-        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "]}"), cap);
-
-        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-            ",\"mod\":{\"label\":\"Modulation\",\"params\":["), cap);
-        {
-            int first = 1;
-            static const char *const LF[] = { "dest", "spd", "mult", "wave",
-                                              "depth", "phase", "trig" };
-            for (int l = 0; l < WORK_LFOS; ++l) {
-                char lk[8];
-                lfo_param_prefix(l, lk, sizeof lk);
-                for (size_t f = 0; f < sizeof LF / sizeof *LF; ++f) {
-                    n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                            "%s{\"key\":\"%s_%s\",\"label\":\"%s %s\"}",
-                                            first ? "" : ",", lk, LF[f],
-                                            lk, LF[f]), cap);
-                    first = 0;
-                }
-            }
-            static const char *const ME[] = { "dest", "atk", "hold", "dec", "depth" };
-            for (size_t f = 0; f < sizeof ME / sizeof *ME; ++f)
-                n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                                        ",{\"key\":\"menv_%s\",\"label\":\"Env %s\"}",
-                                        ME[f], ME[f]), cap);
-        }
-        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "]}}}"), cap);
-        return n;
-    }
+     * Do not reintroduce this key until the flag is merged UPSTREAM. A
+     * fork-only host feature is not a shipping contract -- the module is
+     * installed on other people's Moves, which run Charles's releases.
+     *
+     * The browser's route back is web_ui.html, which upstream v1.2.0 serves
+     * for ANY chain component (docs/MODULES.md, "Remote UI Custom HTML"), not
+     * this key. chain_params below stays: it diverts nothing. */
 
     /* chain_params — the metadata the hierarchy's keys need to become
      * controls: ranges, steps, and the enum members.
