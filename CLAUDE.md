@@ -544,6 +544,16 @@ he develops the host, not what anyone else runs. Verify with
 `git grep remote_only v1.2.0` in `~/tim-os/schwung` before reaching for the
 flag again.
 
+**The cost, stated plainly: a Master FX position loses its parameter menu.**
+`shadow_ui.js` tries `getMasterFxHierarchy()` and, finding nothing, opens the
+module-swap list instead — so Work on the master bus can be loaded and heard
+but not edited from the device. That is not new (it was the state from v0.5.3
+through v0.8.x); v0.9.0 briefly gave it the generic editor, with the same
+stale-labels flaw as everywhere else. The engine cannot tell a master-bus read
+from a chain-slot read — both arrive as a bare `ui_hierarchy` — so there is no
+way to serve one and not the other. The chain slot is the surface people use
+and the one that was reported broken; it wins.
+
 `chain_params` is still served. It diverts nothing — it only annotates keys a
 hierarchy already lists — so on its own it renders no browser controls, but it
 also costs nothing and the host's co-run fallback consumes it. Machine options
