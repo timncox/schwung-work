@@ -3462,6 +3462,85 @@ static void test_recorded_audio_plays_from_a_source(void) {
     work_destroy(w);
 }
 
+/* passthru: the input is a bus, never a microphone.
+ *
+ * Two rules zero in_gain — `monitor 0` and a source machine in slot 1 — and
+ * both are about a MICROPHONE. In the end-of-chain build the input is the
+ * Move's own playback, so either rule firing would silence the Move; the
+ * source-machine one fires the instant a sampler is loaded, which is the
+ * first thing anyone does. passthru makes both inert. */
+static long peak_of(const int16_t *b, int n) {
+    long p = 0;
+    for (int i = 0; i < n; ++i) { long a = b[i] < 0 ? -b[i] : b[i]; if (a > p) p = a; }
+    return p;
+}
+static long max_diff(const int16_t *a, const int16_t *b, int n) {
+    long d = 0;
+    for (int i = 0; i < n; ++i) { long x = (long)a[i] - b[i]; if (x < 0) x = -x; if (x > d) d = x; }
+    return d;
+}
+static void test_passthru_keeps_the_input_audible(void) {
+    printf("passthru keeps the input audible under a sampler and with monitoring off\n");
+    work_t *w = work_create(&host);
+    assert(w);
+    static int16_t src[BLOCK * 2], io[BLOCK * 2];
+    make_ramp(src, BLOCK);
+
+    /* A sampler in the source stage: the rule that zeroes the input. */
+    set_stage(w, WORK_STAGE_SRC, WORK_FX_ONESHOT);
+    work_set_param(w, "mix", "0");            /* dry only: the output IS the input */
+    work_set_param(w, "passthru", "1");
+
+    memcpy(io, src, sizeof io);
+    work_process(w, io, io, BLOCK);
+    CHECK(peak_of(io, BLOCK * 2) > 8000, "with passthru the Move went quiet under a "
+          "sampler (peak %ld)", peak_of(io, BLOCK * 2));
+    CHECK(max_diff(io, src, BLOCK * 2) <= 2, "passthru changed the dry signal by up to "
+          "%ld — it must pass the bus through untouched", max_diff(io, src, BLOCK * 2));
+
+    /* Monitoring off — the feedback rule — is a no-op here too. */
+    work_set_param(w, "monitor", "0");
+    memcpy(io, src, sizeof io);
+    work_process(w, io, io, BLOCK);
+    CHECK(peak_of(io, BLOCK * 2) > 8000, "with passthru, monitor 0 silenced the Move "
+          "(peak %ld)", peak_of(io, BLOCK * 2));
+    work_destroy(w);
+}
+
+/* The same two rules must still hold in every other build. */
+static void test_passthru_off_keeps_the_zeroing(void) {
+    printf("without passthru a source machine still keeps the input out\n");
+    work_t *w = work_create(&host);
+    assert(w);
+    static int16_t src[BLOCK * 2], io[BLOCK * 2];
+    make_ramp(src, BLOCK);
+    set_stage(w, WORK_STAGE_SRC, WORK_FX_ONESHOT);
+    work_set_param(w, "mix", "0");
+    memcpy(io, src, sizeof io);
+    work_process(w, io, io, BLOCK);
+    CHECK(peak_of(io, BLOCK * 2) < 4, "a source machine no longer keeps the live input "
+          "out of the signal path (peak %ld) — passthru leaked into the default", peak_of(io, BLOCK * 2));
+    work_destroy(w);
+}
+
+/* A build property, not a patch setting: a preset saved in the bus build
+ * must reload in jack-Overwork with the feedback rules back in force. */
+static void test_passthru_is_not_in_state(void) {
+    printf("passthru is served but is not in the state blob\n");
+    work_t *w = work_create(&host);
+    assert(w);
+    work_set_param(w, "passthru", "1");
+    char v[16];
+    work_get_param(w, "passthru", v, sizeof v);
+    CHECK(atoi(v) == 1, "passthru reads back %s after being set", v);
+    static char st[65536];
+    int n = work_get_param(w, "state", st, sizeof st);
+    CHECK(n > 0, "no state blob");
+    CHECK(strstr(st, "passthru") == NULL, "passthru is in the state blob — a bus preset "
+          "would carry the no-zeroing rule into the jack build");
+    work_destroy(w);
+}
+
 static void test_sample_bounds(void) {
     printf("an oversized or malformed transfer cannot run past the buffer\n");
     work_t *w = work_create(&host);
@@ -4128,6 +4207,9 @@ int main(void) {
     test_trig_survives_a_machine_change();
     test_sample_transfer();
     test_sample_bounds();
+    test_passthru_keeps_the_input_audible();
+    test_passthru_off_keeps_the_zeroing();
+    test_passthru_is_not_in_state();
     test_sample_record();
     test_sample_record_ignores_monitor();
     test_sample_record_ceiling();
