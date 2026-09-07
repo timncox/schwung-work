@@ -3541,6 +3541,66 @@ static void test_passthru_is_not_in_state(void) {
     work_destroy(w);
 }
 
+/* master: the global output gain, last of all.
+ *
+ * On the bus the module's output lands AFTER the Move's volume stage, so a
+ * sampler playing a loud take ignores the Move's knob — this is the one gain
+ * that scales everything this build puts out, dry included. */
+static void test_master_scales_everything(void) {
+    printf("master scales the whole output, dry included, and defaults to unity\n");
+    work_t *w = work_create(&host);
+    assert(w);
+    static int16_t src[BLOCK * 2], io[BLOCK * 2];
+    make_ramp(src, BLOCK);
+    work_set_param(w, "passthru", "1");     /* the bus build: dry passes raw */
+    work_set_param(w, "mix", "0");
+
+    char v[16];
+    work_get_param(w, "master", v, sizeof v);
+    CHECK(atoi(v) == 127, "master defaults to %s, expected unity (127)", v);
+
+    memcpy(io, src, sizeof io); work_process(w, io, io, BLOCK);
+    CHECK(max_diff(io, src, BLOCK * 2) <= 2, "at unity the output differs from the input by %ld", max_diff(io, src, BLOCK * 2));
+
+    work_set_param(w, "master", "0");
+    memcpy(io, src, sizeof io); work_process(w, io, io, BLOCK);
+    CHECK(peak_of(io, BLOCK * 2) == 0, "master 0 still passed audio (peak %ld) — the gain is not last", peak_of(io, BLOCK * 2));
+
+    work_set_param(w, "master", "64");
+    memcpy(io, src, sizeof io); work_process(w, io, io, BLOCK);
+    long worst = 0;
+    for (int i = 0; i < BLOCK * 2; ++i) {
+        long want = (long)((float)src[i] * (64.0f / 127.0f));
+        long d = (long)io[i] - want; if (d < 0) d = -d; if (d > worst) worst = d;
+    }
+    CHECK(worst <= 3, "master 64 is not half gain (worst error %ld LSB)", worst);
+    work_destroy(w);
+}
+
+/* Saved with the patch, and reachable from a controller. */
+static void test_master_persists_and_takes_cc(void) {
+    printf("master is in the state blob and answers CC 29\n");
+    work_t *w = work_create(&host);
+    assert(w);
+    work_set_param(w, "master", "40");
+    static char st[65536];
+    int n = work_get_param(w, "state", st, sizeof st);
+    CHECK(n > 0 && strstr(st, "\"master\":40") != NULL, "master 40 is not in the state blob");
+
+    work_t *w2 = work_create(&host);
+    assert(w2);
+    work_set_param(w2, "state", st);
+    char v[16];
+    work_get_param(w2, "master", v, sizeof v);
+    CHECK(atoi(v) == 40, "master reloaded as %s, saved as 40", v);
+
+    uint8_t cc[3] = { 0xB0, 29, 100 };
+    work_on_midi(w2, cc, 3, 2);            /* external */
+    work_get_param(w2, "master", v, sizeof v);
+    CHECK(atoi(v) == 100, "external CC 29 did not reach master (%s)", v);
+    work_destroy(w); work_destroy(w2);
+}
+
 static void test_sample_bounds(void) {
     printf("an oversized or malformed transfer cannot run past the buffer\n");
     work_t *w = work_create(&host);
@@ -4210,6 +4270,8 @@ int main(void) {
     test_passthru_keeps_the_input_audible();
     test_passthru_off_keeps_the_zeroing();
     test_passthru_is_not_in_state();
+    test_master_scales_everything();
+    test_master_persists_and_takes_cc();
     test_sample_record();
     test_sample_record_ignores_monitor();
     test_sample_record_ceiling();

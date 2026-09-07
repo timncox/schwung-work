@@ -428,6 +428,14 @@ struct work {
      * the state blob so a preset made here reloads in jack-Overwork with the
      * feedback rules back in force. */
     uint8_t              passthru;
+    /* Global output gain, applied last of all. Exists for the end-of-chain
+     * build: its output lands AFTER the Move's volume stage, so a sampler
+     * playing a loud take ignores the Move's knob entirely and the only
+     * remedy was a menu dive to LVL. Shift + the volume knob turns this. In
+     * the jack build the render already follows the Move's knob through the
+     * ME bus, so there it is simply a second gain. Saved with the patch: a
+     * preset turned down should reload turned down. */
+    uint8_t              master;
 
     /* MIDI CC duplicate guard. A channel-matched chain slot can deliver one
      * external CC twice (channel dispatch + FX broadcast), so identical
@@ -3032,6 +3040,7 @@ work_t *work_create(const host_api_v1_t *host) {
     w->host = host;
     w->bpm  = 120.0f;
     w->mix  = 127;
+    w->master = 127;
     w->monitor = 1;              /* input passes until a guard says otherwise */
 
     /* Sequencer starts off, so the audio_fx build behaves as a plain static
@@ -3362,6 +3371,12 @@ void work_process(work_t *w, const int16_t *in, int16_t *out, int frames) {
         float l = dry_l * (1.0f - gmix) + wet_l * gmix;
         float r = dry_r * (1.0f - gmix) + wet_r * gmix;
 
+        /* Master, last of all — after the dry/wet blend, before the clamp, so
+         * it scales everything this build puts on the bus, dry included. */
+        const float gm = p01(w->master);
+        l *= gm;
+        r *= gm;
+
         int vl = (int)lrintf(fclampf(l, -1.0f, 1.0f) * 32767.0f);
         int vr = (int)lrintf(fclampf(r, -1.0f, 1.0f) * 32767.0f);
         out[f * 2]     = (int16_t)iclamp(vl, -32768, 32767);
@@ -3472,6 +3487,7 @@ static void cc_apply(work_t *w, int cc, int v) {
      * 27..31 is not eight controls wide, which leaves room for exactly two. */
     if (cc == 27) { work_set_param(w, "level", val); return; }
     if (cc == 28) { work_set_param(w, "pan",   val); return; }
+    if (cc == 29) { work_set_param(w, "master", val); return; }
 
     /* The SOURCE stage, on the free block at 80. It does not continue at 27
      * because 27-31 is not eight controls wide, and because 8..26 was published
@@ -4163,6 +4179,7 @@ static void apply_state(work_t *w, const char *json) {
     int lfo_dropped = 0;
 
     if ((q = strstr(json, "\"mix\":")) != NULL) w->mix = (uint8_t)iclamp(atoi(q + 6), 0, 127);
+    if ((q = strstr(json, "\"master\":")) != NULL) w->master = (uint8_t)iclamp(atoi(q + 9), 0, 127);
 
     if (version >= 3) {
         /* Every track the blob names, and a reset for every track it does not.
@@ -4508,6 +4525,7 @@ void work_set_param(work_t *w, const char *key, const char *val) {
     if (strcmp(key, "level") == 0) { TRK(w)->level = (uint8_t)iclamp(atoi(val), 0, 127); return; }
     if (strcmp(key, "pan")   == 0) { TRK(w)->pan   = (uint8_t)iclamp(atoi(val), 0, 127); return; }
     if (strcmp(key, "mix") == 0) { w->mix = (uint8_t)iclamp(atoi(val), 0, 127); return; }
+    if (strcmp(key, "master") == 0) { w->master = (uint8_t)iclamp(atoi(val), 0, 127); return; }
     if (strcmp(key, "state") == 0) { if (val[0] == '{') apply_state(w, val); return; }
 
     /* ------------------------------------------------------- sequencer */
@@ -4769,8 +4787,8 @@ static int state_build(work_t *w) {
     int       n       = 0;
 
     n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
-                            "{\"v\":4,\"mix\":%d,\"sel\":%d",
-                            w->mix, w->sel_track), cap);
+                            "{\"v\":4,\"mix\":%d,\"master\":%d,\"sel\":%d",
+                            w->mix, w->master, w->sel_track), cap);
 
     for (int t = 0; t < WORK_TRACKS; ++t) {
         if (t != 0 && track_is_inaudible(w, t)) continue;
@@ -5022,6 +5040,8 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
     if (strcmp(key, "mix") == 0)
         return nclamp(snprintf(buf, buf_len, "%d", w->mix), cap);
     /* What the last preset load had to translate, if anything. */
+    if (strcmp(key, "master") == 0)
+        return nclamp(snprintf(buf, buf_len, "%d", w->master), cap);
     if (strcmp(key, "load_note") == 0)
         return nclamp(snprintf(buf, buf_len, "%s", w->load_note), cap);
     if (strcmp(key, "track") == 0)

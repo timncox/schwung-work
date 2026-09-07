@@ -134,6 +134,7 @@ function makeHost() {
         store.rui_poll = parts.join(':');
     };
     const writes = [];
+    const suppress = [];        /* calls to shadow_set_overtake_suppress_master_volume */
     const reads = [];
     const unknownReads = new Set();
     const unknownWrites = new Set();
@@ -220,6 +221,7 @@ function makeHost() {
          * response is the same shape carrying values, and a key the DSP does
          * not answer comes back as a zero-length record rather than being
          * omitted. The shim refuses more than 64 items outright. */
+        shadow_set_overtake_suppress_master_volume(f) { suppress.push(f); },
         host_module_get_params(blob) {
             const s = `${blob}`;
             let p = 0;
@@ -346,7 +348,7 @@ function makeHost() {
     const spoken = [];
     host.__spoken = spoken;
     return { host, vfs, writes, reads, roundTrips, unknownReads, unknownWrites,
-             leds, screen, store, spoken, bumpRev };
+             leds, screen, store, spoken, bumpRev, suppress };
 }
 
 /* Stub the three schwung shared modules the UI imports. */
@@ -362,6 +364,7 @@ const STUBS = {
         /* The Move's Sample button. 118 with an RGB LED, aliased in schwung
          * as MoveRecord/MoveSample — transcribed, not invented. */
         export const MoveSample = 118;
+        export const MoveMaster = 79;
         export const Black=0, White=120, LightGrey=118, DarkGrey=124, Red=127, BrightRed=1;
         export const Blue=125, Green=126, BrightGreen=8, Cyan=14, Purple=22, SkyBlue=47;
         export const Lime=31, OrangeRed=2, BurntOrange=28, YellowGreen=30, TealGreen=12, Rose=24;
@@ -935,6 +938,53 @@ async function testMonitorPadIsInertWithoutHardwareInput() {
     holdShift(ctx, false);
     check(ctx.writes.some((w) => w.key === 'monitor'),
           'with hardware input the monitor pad no longer toggles monitor');
+}
+
+/* Shift + the volume knob turns master, and claims the knob from Move only
+ * for the duration. Both halves matter: without the claim a Shift + turn
+ * also moves the Move's own volume; without the release the Move's knob is
+ * dead until exit. */
+async function testShiftVolumeTurnsMaster() {
+    console.log('shift + the volume knob turns master, and claims the knob only while shift is held');
+    const ctx = await loadUI();
+    ctx.store.master = '100';
+    ctx.host.init();
+    for (let i = 0; i < 14; i++) ctx.host.tick();
+
+    /* Plain turn: Move's knob. Nothing written, nothing claimed. */
+    ctx.writes.length = 0; ctx.suppress.length = 0;
+    ctx.host.onMidiMessageInternal(cc(79, 1));
+    check(!ctx.writes.some((w) => w.key === 'master'), 'an unshifted volume turn wrote master');
+    check(!ctx.suppress.includes(1), 'an unshifted volume turn claimed the knob');
+
+    /* Shift down claims it, and re-reads master so the first step starts
+     * from the ENGINE — the mirror is planted wrong here on purpose. */
+    ctx.writes.length = 0; ctx.suppress.length = 0; ctx.reads.length = 0;
+    ctx.store.master = '100';
+    holdShift(ctx, true);
+    check(ctx.suppress[ctx.suppress.length - 1] === 1, 'shift down did not claim the volume knob');
+    check(ctx.reads.includes('master'), 'shift down did not re-read master from the engine');
+    ctx.host.onMidiMessageInternal(cc(79, 127));          /* -1 */
+    ctx.host.onMidiMessageInternal(cc(79, 127));          /* -1 */
+    const w = ctx.writes.filter((x) => x.key === 'master');
+    check(w.length === 2 && `${w[1].val}` === '98',
+          `shift + two detents down wrote ${w.map((x) => x.val)}, expected 99 then 98 from 100`);
+
+    /* Shift up releases it. */
+    ctx.suppress.length = 0;
+    holdShift(ctx, false);
+    check(ctx.suppress[ctx.suppress.length - 1] === 0, 'shift up did not release the volume knob');
+
+    /* A latched Shift with the flag up is healed by the next plain turn. */
+    ctx.host.onMidiMessageInternal(cc(49, 127));          /* shift down ... */
+    ctx.suppress.length = 0;
+    ctx.host.onMidiMessageInternal(cc(49, 0));            /* ... release SEEN, then pretend it was missed: */
+    ctx.host.onMidiMessageInternal(cc(49, 127));
+    ctx.suppress.length = 0;
+    /* force the UI's view of shift to "released" without the CC, as a settle would */
+    ctx.host.onMidiMessageInternal(cc(49, 0));
+    ctx.host.onMidiMessageInternal(cc(79, 1));
+    check(!ctx.suppress.includes(1), 'a plain turn after a release re-claimed the knob');
 }
 
 async function testProbabilityMode() {
@@ -2339,6 +2389,7 @@ const tests = [
     testLiveRecordToggle,
     testSampleButtonRecords,
     testMonitorPadIsInertWithoutHardwareInput,
+    testShiftVolumeTurnsMaster,
     testProbabilityMode,
     testEveryModulatorHasAPage,
     testVoiceFilterPageIsReachable,

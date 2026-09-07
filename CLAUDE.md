@@ -683,6 +683,18 @@ the Move's own playback. Three facts, each of which has already cost time:
   `hw_input` is what keeps the feedback guard off; the Monitor pad goes dark
   when `!hwInput`.
 
+**Shift + the volume knob = `master`**, a global output gain applied last
+(after the dry/wet blend, before the clamp). Needed because the eoc output
+lands AFTER the Move's volume stage, so a loud take ignored the Move's knob.
+The gesture claims CC 79 from Move via `shadow_set_overtake_suppress_master_volume(1)`
+on Shift press — schwung otherwise passes CC 79 to Move even in overtake —
+and releases on Shift up AND on any plain turn (heals a latched Shift); the
+shim clears the flag on every overtake-mode change (shim 7142), so the exit
+chord cannot strand it. Read before wiring: a plain Shift + volume triggers
+NOTHING in overtake — schwung's Shift+Vol sites are chords (Track / Menu / Jog).
+Master-knob turn encoding is not decoded anywhere in schwung (Move does it);
+assumed relative like knobs 71-78 — feel-check on hardware.
+
 Caveats users see: the eoc signal is post-volume-knob; `end_of_chain` had no
 shipped consumer in schwung before this. Verify hands-free: `set_open_tool`
 then `get_param('meter')` while a Set plays with nothing in the jack.
