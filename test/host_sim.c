@@ -1162,20 +1162,22 @@ static void test_transport_restarts_pattern(void) {
 /* The Shadow UI and the Master FX knob pages get their labels from here.
  * module.json can only ever say "A".."H"; this must say TUNE, WIN, FDBK... and
  * must change when the machine changes. */
-/* ui_hierarchy serves the BROWSER and must not claim the device.
+/* ui_hierarchy must go UNANSWERED, and this is the check that keeps it that way.
  *
- * Answering this key at all used to divert the host away from ui_chain.js:
- * enterComponentEdit() tries getComponentHierarchy() first and only falls
- * through to loadModuleUi() when it returns nothing, and the generic editor
- * caches the hierarchy at entry, which left the settings page stuck on the
- * previous machine. So the engine stayed silent — and the Remote UI, which
- * builds its whole control list from this key and has no other source, showed
- * "No parameters available" forever.
+ * Answering it hands shadow_ui.js's enterComponentEdit() to the generic
+ * hierarchy editor, and Work's own ui_chain.js never loads -- the machine
+ * controls simply are not on the screen. v0.5.3 found that the hard way;
+ * v0.9.0 reintroduced the key behind "remote_only": true, a flag that exists
+ * only in timncox/schwung (upstream PR #193 was closed), so every user on
+ * stock schwung lost the chain editor entirely.
  *
- * "remote_only": true is the split. Losing that flag would silently cost the
- * on-device chain UI, so it is checked as hard as the content. */
-static void test_ui_hierarchy_is_remote_only(void) {
-    printf("ui_hierarchy serves the browser and releases the device editor\n");
+ * The previous version of this test asserted the OPPOSITE -- that the key is
+ * answered and carries remote_only -- and passed green through the whole
+ * regression, because it checked that the flag was present rather than that
+ * any host honoured it. A test can only pin a contract the other side actually
+ * keeps. */
+static void test_ui_hierarchy_is_unanswered(void) {
+    printf("ui_hierarchy goes unanswered, so the device reaches ui_chain.js\n");
     work_t *w = work_create(&host);
     assert(w);
     /* Every stage holds a real machine: a Bypass stage has no parameters to
@@ -1188,79 +1190,68 @@ static void test_ui_hierarchy_is_remote_only(void) {
     char buf[65536];
     memset(buf, 0x5A, sizeof(buf));
     int n = work_get_param(w, "ui_hierarchy", buf, sizeof(buf));
-    CHECK(n > 0, "ui_hierarchy answered %d — the Remote UI has no other source "
-                 "for its control list", n);
-    CHECK(strstr(buf, "\"remote_only\":true") != NULL,
-          "the hierarchy does not carry remote_only, so it takes the device's "
-          "component editor away from ui_chain.js");
-    CHECK((int)strlen(buf) == n, "ui_hierarchy length %d disagrees with the string", n);
+    CHECK(n < 0, "ui_hierarchy answered %d bytes -- ANY answer diverts the host "
+                 "into the generic hierarchy editor and ui_chain.js never loads", n);
 
-    /* Labels follow the LOADED machine — the whole reason this is built here
-     * rather than declared in module.json, which can only say "A".."H". */
-    CHECK(strstr(buf, "\"label\":\"TUNE\"") != NULL,
-          "the hierarchy does not carry the loaded machine's knob names");
-    CHECK(strstr(buf, "Clock Pitch") != NULL,
-          "the hierarchy does not name the loaded machine");
-    set_stage(w, WORK_STAGE_FX1, WORK_FX_FBANK);
-    work_get_param(w, "ui_hierarchy", buf, sizeof(buf));
-    CHECK(strstr(buf, "\"label\":\"90Hz\"") != NULL,
-          "the hierarchy did not follow the machine change");
-    CHECK(strstr(buf, "Clock Pitch") == NULL,
-          "the hierarchy still names the machine that was replaced");
-
-    /* Every stage reachable, spelled the way the setters read. */
-    CHECK(strstr(buf, "\"key\":\"src_p1\"") != NULL, "no source stage knobs");
-    CHECK(strstr(buf, "\"key\":\"fx2_p8\"") != NULL, "no second insert knobs");
-    CHECK(strstr(buf, "\"key\":\"machine1\"") != NULL, "insert 1's machine select is unreachable");
-    CHECK(strstr(buf, "\"key\":\"vf_width\"") != NULL, "the voice filter is unreachable");
-    CHECK(strstr(buf, "\"key\":\"vlfo1_dest\"") != NULL, "voice LFO 1 is unreachable");
-    CHECK(strstr(buf, "\"key\":\"flfo2_trig\"") != NULL, "FX LFO 2 is unreachable");
-    CHECK(strstr(buf, "\"key\":\"menv_hold\"") != NULL, "the mod envelope is unreachable");
-
-    /* The labels the chain UI actually uses must still be there. */
+    /* The labels the chain UI actually uses must still be served -- that is the
+     * surface the silence exists to protect, and it must follow the machine. */
     char lab[256];
     int ln = work_get_param(w, "labels1", lab, sizeof(lab));
+    CHECK(ln > 0 && strstr(lab, "TUNE") != NULL,
+          "labels1 must serve the loaded machine's labels (%s)", lab);
+    set_stage(w, WORK_STAGE_FX1, WORK_FX_FBANK);
+    ln = work_get_param(w, "labels1", lab, sizeof(lab));
     CHECK(ln > 0 && strstr(lab, "90Hz") != NULL,
-          "labels1 must still serve the loaded machine's labels (%s)", lab);
+          "labels1 did not follow the machine change (%s)", lab);
     work_destroy(w);
 }
 
-/* ui_hierarchy lists the controls; chain_params says what each one IS. A key
- * in one and not the other is a control the browser draws with no range, or a
- * range for something nothing shows — so check them against each other rather
- * than each against a hand-written list, which is a third copy to drift. */
-static void test_chain_params_annotates_the_hierarchy(void) {
-    printf("chain_params covers every key the hierarchy lists\n");
+/* chain_params describes the controls a remote client can drive. It used to be
+ * checked against ui_hierarchy -- every key one listed, the other had to
+ * describe. That pairing is gone with the hierarchy, so the counterpart is now
+ * the engine itself: a key the browser is told about that the engine will not
+ * answer is a control drawn over nothing.
+ *
+ * Checking it against a hand-written list here would be a third copy to drift,
+ * which is the mistake the original comment was right about. */
+static void test_chain_params_describes_only_real_keys(void) {
+    printf("chain_params names only keys the engine actually answers\n");
     work_t *w = work_create(&host);
     assert(w);
     set_stage(w, WORK_STAGE_SRC, WORK_FX_SLICER);
     set_stage(w, WORK_STAGE_FX1, WORK_FX_FBANK);
     set_stage(w, WORK_STAGE_FX1 + 1, WORK_FX_DRIVEDELAY);
 
-    static char hier[65536], cp[65536];
-    int hn = work_get_param(w, "ui_hierarchy", hier, sizeof hier);
+    static char cp[65536];
     int cn = work_get_param(w, "chain_params", cp, sizeof cp);
-    CHECK(hn > 0 && cn > 0, "hierarchy %d / chain_params %d", hn, cn);
+    CHECK(cn > 0, "chain_params answered %d", cn);
     CHECK(cp[0] == '[' && cp[cn - 1] == ']',
           "chain_params is not a whole array: starts '%c' ends '%c'", cp[0], cp[cn - 1]);
 
-    /* Every "key":"X" in the hierarchy must appear as a chain_params key. */
-    int missing = 0;
-    for (const char *p = hier; (p = strstr(p, "\"key\":\"")) != NULL; ) {
+    /* Serving ui_hierarchy is what took the device's component editor away
+     * from ui_chain.js. chain_params is the safe half of that pair and must
+     * stay that way -- it annotates, it does not claim a screen. */
+    char hier[256];
+    CHECK(work_get_param(w, "ui_hierarchy", hier, sizeof hier) < 0,
+          "chain_params must not come back paired with a hierarchy");
+
+    int described = 0, missing = 0;
+    for (const char *p = cp; (p = strstr(p, "\"key\":\"")) != NULL; ) {
         p += 7;
         const char *end = strchr(p, '"');
         if (!end || end - p > 30) break;
-        char k[48], needle[64];
+        char k[48], val[512];
         int len = (int)(end - p);
         memcpy(k, p, (size_t)len); k[len] = '\0';
-        snprintf(needle, sizeof needle, "{\"key\":\"%s\",", k);
-        if (!strstr(cp, needle)) {
-            CHECK(0, "hierarchy lists \"%s\" but chain_params does not describe it", k);
+        described++;
+        if (work_get_param(w, k, val, sizeof val) <= 0) {
+            CHECK(0, "chain_params describes \"%s\" but the engine does not answer it", k);
             missing++;
         }
         p = end;
     }
-    CHECK(missing == 0, "%d hierarchy keys have no metadata", missing);
+    CHECK(described > 40, "chain_params described only %d keys", described);
+    CHECK(missing == 0, "%d described keys are unreadable", missing);
 
     /* The family gate, as the client sees it: a source machine list that
      * offered a reverb would have the browser write something the engine then
@@ -3815,8 +3806,8 @@ int main(void) {
     test_machine_load_installs_defaults();
     test_midi_clock();
     test_param_name_table();
-    test_ui_hierarchy_is_remote_only();
-    test_chain_params_annotates_the_hierarchy();
+    test_ui_hierarchy_is_unanswered();
+    test_chain_params_describes_only_real_keys();
     test_reverbs_are_distinct();
     test_granulator();
 

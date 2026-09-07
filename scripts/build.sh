@@ -39,10 +39,14 @@ cp src/help_overwork.json                build/modules/overtake/overwork/help.js
 # sniffs its own parameter prefix at runtime ("overtake_dsp:" as the tool,
 # "synth:" in a slot) rather than being built twice.
 #
-# The audio_fx build deliberately does NOT get one: remote_ui.go only looks for
-# web_ui.html on a slot's "synth" component, so a chain slot could never load
-# it. That build's Remote UI comes from the engine's ui_hierarchy +
-# chain_params instead.
+# The audio_fx build does NOT get one yet, and it is NOT because the host
+# refuses: upstream v1.2.0 serves web_ui.html for any chain component, audio FX
+# included (docs/MODULES.md, "Remote UI Custom HTML"). The page itself is the
+# gap — it sniffs its prefix from the first update burst and only recognises
+# "overtake_dsp:" and "synth:", so in an fx1/fx2 section it would never latch a
+# prefix and would sit inert. Teach it those two prefixes and this copy can be
+# added. Serving ui_hierarchy is NOT the alternative: see CLAUDE.md, "The chain
+# slot has no Remote UI" -- it takes the on-device editor away.
 cp src/web_ui.html build/modules/sound_generators/work-in/web_ui.html
 cp src/web_ui.html build/modules/overtake/overwork/web_ui.html
 

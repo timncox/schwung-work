@@ -1,6 +1,6 @@
 ---
 status: active
-last_touched: 2026-07-30
+last_touched: 2026-09-06
 ---
 
 # Work
@@ -458,10 +458,15 @@ skips with a clear message rather than failing.
 parameter prefix at runtime (`overtake_dsp:` as the tool, `synth:` in a slot)
 rather than being built twice.
 
-**The audio_fx build does not get one and cannot.** `remote_ui.go` only looks
-for `web_ui.html` on a slot's `synth` component, so a chain slot could never
-load it. That build's Remote UI is the auto-generated controls, which is what
-`ui_hierarchy` and `chain_params` are for — see below.
+**The audio_fx build does not get one yet — but the old reason is obsolete.**
+The note here used to say `remote_ui.go` looks for `web_ui.html` only on a
+slot's `synth` component. Upstream lifted that: v1.2.0 serves one for *any*
+chain component, audio FX included (`docs/MODULES.md`, "Remote UI Custom
+HTML"). What blocks it now is this page, which latches its prefix from the
+first update burst and recognises only `overtake_dsp:` and `synth:` — in an
+`fx1`/`fx2` section it would latch nothing and sit inert. Teaching it those
+prefixes is the open work. Serving `ui_hierarchy` instead is **not** the
+alternative — see below.
 
 Three constraints shaped the whole page, and none of them are obvious:
 
@@ -497,30 +502,72 @@ entire page and showed none of it. Reading the code would not have found it.
 `test/site_matches_engine.mjs` guards the seam: every mirror key the page
 names must exist in a real blob, and a hardcoded machine name fails the suite.
 
-### The chain slot's Remote UI
+### The chain slot has no Remote UI, and `ui_hierarchy` stays unanswered
 
-`ui_hierarchy` and `chain_params` are both served, and the hierarchy carries
-**`"remote_only": true`**.
+**Do not serve `ui_hierarchy` from the DSP.** This is the single most
+regression-prone decision in the project — it has now been made three times and
+reversed twice.
 
-That flag is the whole reason the chain slot can have a Remote UI at all.
-schwung-manager builds the browser's control list from `ui_hierarchy` and has
-no other source, but on the device answering that key hands
-`enterComponentEdit()` to the generic hierarchy editor and `ui_chain.js` never
-loads — and that editor re-reads `chain_params` only on preset change or for
-keys matching `/_rate_mode$/`, so Work's labels would sit on the previous
-machine. One key, two surfaces, opposite needs. `remote_only` splits them
-(timncox/schwung#5; schwung's `hierarchyDrivesDeviceEditor`, documented in its
-`docs/MODULES.md`).
+`shadow_ui.js` `enterComponentEdit()`:
 
-**This needs a schwung host that knows the flag.** An older host ignores it and
-diverts as it always did — the old behaviour, not a new break, and the labels
-are correct either way now because the hierarchy is built from the loaded
-machine rather than declared statically.
+```js
+const hierarchy = getComponentHierarchy(slotIndex, componentKey);
+if (hierarchy) { enterHierarchyEditor(...); return; }
+enterComponentEditFallback(...);        // -> loadModuleUi -> ui_chain.js
+```
 
-Machine options in `chain_params` come from `work_machine_fits_stage`, the same
-gate `set_param` enforces, so a client cannot offer a machine the write would
-then refuse. LFO destination ranges follow the family, because both count from
-zero and `dest` 8 otherwise names two different things.
+Answering the key is a *claim*, not a description: the host hands the screen to
+its generic hierarchy editor and `ui_chain.js` never loads. That editor caches
+the hierarchy at entry and re-reads `chain_params` only on a preset change or
+for keys ending `_rate_mode`, so a machine change leaves every stage on the
+previous machine's knob names. `ui_chain.js` re-reads `labels_src` / `labels1` /
+`labels2` on every machine change, so silence is what buys the better editor.
+
+**The history, because the reasoning keeps looking wrong from the outside:**
+
+| | |
+|---|---|
+| v0.5.1–v0.5.2 | Tried to make the *generic* editor behave (`visible_if`, a namespace rename). Both were fixes to the wrong editor. |
+| v0.5.3 | Stopped serving the key. On-device editor restored; browser Remote UI permanently "No parameters available". |
+| v0.9.0 (`17dff6b`) | Served it again behind `"remote_only": true`, so the browser got a control list and the device still fell through. |
+| **v0.9.1** | **Stopped serving it again.** `remote_only` exists only in `timncox/schwung` (fork PR #5). The upstream PR, `charlesvestal/schwung#193`, was **closed and never reopened**. Upstream v1.2.0's `getComponentHierarchy` parses the JSON and diverts with no check for the field — its own `tests/fixtures/module-contracts.json` captures Work 0.9.0's `"remote_only":true` and diverts anyway. |
+
+So v0.9.0 shipped, to everyone running stock schwung, a chain slot whose
+machine controls never appeared. Reported by kortiss in `#bug-reports`
+2026-09-06 as "machines not displaying machine controls"; the first hypothesis
+in the thread was that the background refresh had broken, when in fact
+`ui_chain.js` was never being loaded at all.
+
+**The rule this leaves:** a module installed on other people's Moves may only
+depend on host behaviour that is in *Charles's* releases. Tim's fork is where
+he develops the host, not what anyone else runs. Verify with
+`git grep remote_only v1.2.0` in `~/tim-os/schwung` before reaching for the
+flag again.
+
+**The cost, stated plainly: a Master FX position loses its parameter menu.**
+`shadow_ui.js` tries `getMasterFxHierarchy()` and, finding nothing, opens the
+module-swap list instead — so Work on the master bus can be loaded and heard
+but not edited from the device. That is not new (it was the state from v0.5.3
+through v0.8.x); v0.9.0 briefly gave it the generic editor, with the same
+stale-labels flaw as everywhere else. The engine cannot tell a master-bus read
+from a chain-slot read — both arrive as a bare `ui_hierarchy` — so there is no
+way to serve one and not the other. The chain slot is the surface people use
+and the one that was reported broken; it wins.
+
+`chain_params` is still served. It diverts nothing — it only annotates keys a
+hierarchy already lists — so on its own it renders no browser controls, but it
+also costs nothing and the host's co-run fallback consumes it. Machine options
+come from `work_machine_fits_stage`, the same gate `set_param` enforces, so a
+client cannot offer a machine the write would then refuse. LFO destination
+ranges follow the family, because both count from zero and `dest` 8 otherwise
+names two different things.
+
+**If the chain slot wants a browser UI**, the route is `web_ui.html`, not this
+key: upstream v1.2.0 serves one for *any* chain component — synth, audio FX or
+MIDI FX (`docs/MODULES.md`, "Remote UI Custom HTML"). The page would need to
+learn the `fx1:` / `fx2:` prefixes; today `src/web_ui.html` only recognises
+`overtake_dsp:` and `synth:`, so it is shipped with `work-in` and `overwork`
+only. That is unfinished work, not a constraint.
 
 ## Verification
 
