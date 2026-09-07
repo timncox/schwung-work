@@ -41,9 +41,14 @@ const codes = (t) => (t || '').split(',').map(Number).filter(Number.isFinite);
 const SRC_FAMILY = codes(contract.get.src_codes);
 const FX_FAMILY  = codes(contract.get.fx_codes);
 const STAGE_KEY  = ['src', 'fx1', 'fx2'];
-/* Pages: machines, one per stage, then the two LFOs. Derived, because a page
- * walk that stops one page short passes without ever seeing the last page. */
-const PAGE_COUNT = 1 + STAGE_KEY.length + 2;
+/* Pages: machines, one per stage, four LFOs, then SAMPLE. This must match the
+ * UI's ring or the page-walk guards (layout collisions, unaccepted writes)
+ * silently stop short — which is exactly what happened: it said "+ 2" while
+ * the UI had four LFO pages, so those guards never saw pages 7-8, and then
+ * not the SAMPLE page either. The count is asserted against the drawn "n/N"
+ * header in testPageCountMatchesTheUI so it cannot drift again. */
+const N_LFO_PAGES = 4;
+const PAGE_COUNT = 1 + STAGE_KEY.length + N_LFO_PAGES + 1;
 
 /* The longest machine name in a family — the case that catches truncation and
  * layout collisions. Named by length rather than by name, so a rename cannot
@@ -716,6 +721,20 @@ async function testSamplePageLoadsAFileFromTheDevice() {
     check(shown().some((t) => t.includes('snare')), `the cursor did not move to the next file: ${shown()}`);
 }
 
+/* The harness's page count versus the UI's: the header prints "n/N" on every
+ * page, so N is observable and this pins it. */
+async function testPageCountMatchesTheUI() {
+    console.log('the harness walks every page the UI has');
+    const ctx = await loadUI();
+    ctx.host.init();
+    settle(ctx, 10);
+    const hdr = ctx.screen.map((p) => `${p.text}`).find((t) => /^\d+\/\d+$/.test(t));
+    check(!!hdr, 'no n/N page header on screen');
+    const n = hdr ? parseInt(hdr.split('/')[1], 10) : -1;
+    check(n === PAGE_COUNT, `the UI has ${n} pages; the harness walks ${PAGE_COUNT} — ` +
+          'the page-walk guards are skipping pages');
+}
+
 /* Turn the jog with SHIFT held — the chain editor's track control. */
 const SHIFT = 49;
 function jogTrack(ctx, dir) {
@@ -878,6 +897,7 @@ async function testGarbageMidiIsIgnored() {
 /* ---------------------------------------------------------------- runner */
 
 const TESTS = [
+    testPageCountMatchesTheUI,
     testInitIsCheapAndHonest,
     testGarbageMidiIsIgnored,
     testKnobHandlerNeverReads,
