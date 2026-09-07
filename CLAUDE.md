@@ -368,6 +368,14 @@ tool. It was recorded as working earlier the same day, against whichever host
 happened to be installed then — so read that as describing one build, not the
 contract. Open Overwork by hand (Shift+Vol+Jog Click -> Tools) before the suite.
 
+**Corrected 2026-09-06: on stock schwung 1.2.0 `set_open_tool` WORKS.** Upstream
+#190 (merged 2026-08-18) is what fixed it, so the note above described a
+pre-#190 build. Verified on Tim's Move: `bus.set_open_tool('overwork')` took
+`overtake_mode` 0 -> 2 and Overwork drew, with no hands on the device. That is
+also how the relative `./sample_io.mjs` import was proven to resolve on the
+device, and how the Sample button and the browser were driven end to end
+(injected CC 118; injected Shift + note 70 listed 102 real WAVs).
+
 Two ways to misread the daemon's state, both of which cost time today:
 
 - `pgrep -f schwung-testd` **over SSH matches its own command line** and
