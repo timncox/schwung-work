@@ -1601,7 +1601,9 @@ function paintTransport(force) {
         setLED(PAD_LOCK_CLEAR,  heldStep >= 0 ? OrangeRed : 0x08, force);
         setLED(PAD_MODE_PROB,   attrMode === MODE_PROB ? YellowGreen : 0x0A, force);
         setLED(PAD_LIVE_REC,    liveRec ? Red : 0x0A, force);
-        setLED(PAD_MONITOR,     monitor ? (atRisk ? BrightRed : BrightGreen) : DarkGrey, force);
+        /* No hardware input (the end-of-chain build): nothing to monitor, and
+         * `monitor` is a no-op there, so the pad goes dark rather than lying. */
+        setLED(PAD_MONITOR,     !hwInput ? Black : monitor ? (atRisk ? BrightRed : BrightGreen) : DarkGrey, force);
     } else {
         setLED(PAD_EPAGE, EDIT_COLOR[editPage] !== undefined
                           ? EDIT_COLOR[editPage] : LightGrey, force);
@@ -1680,6 +1682,7 @@ function handlePadPress(note) {
                 else openSampleBrowser();
                 return;
             case PAD_MONITOR:
+                if (!hwInput) { announce('No input to monitor on this build'); return; }
                 toggleMonitor();
                 return;
             case PAD_LIVE_REC:

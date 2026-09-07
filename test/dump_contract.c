@@ -99,7 +99,7 @@ int main(void) {
         "menv_dest", "menv_atk", "menv_hold", "menv_dec", "menv_depth",
         "pattern", "page_mask", "song_on", "song_len", "song_pos", "undo_state",
         "vf_base", "vf_width", "vf_reso", "vf_env", "vf_atk", "vf_dec", "vf_track",
-        "monitor", "hw_input", "rui_poll",
+        "monitor", "hw_input", "passthru", "rui_poll",
         /* Live recording. sample_rec is the arm state; fill/max/frames are the
          * progress, capacity and committed length a UI needs to draw a take. */
         "sample_rec", "sample_fill", "sample_max", "sample_frames", "sample_name"
@@ -200,7 +200,7 @@ int main(void) {
         {"live_rec", "1"}, {"sample_rec", "1"}, {"menv_dest", "3"}, {"menv_atk", "20"}, {"menv_hold", "30"},
         {"menv_dec", "40"}, {"menv_depth", "90"}, {"prob5", "37"}, {"pattern", "3"}, {"page_mask", "7"}, {"song_on", "1"},
         {"song_len", "8"}, {"song_row2", "5:3:0"}, {"trigtype4", "1"},
-        {"transform", "reverse"}, {"quantize", "127"}, {"monitor", "0"}, {"hw_input", "1"},
+        {"transform", "reverse"}, {"quantize", "127"}, {"monitor", "0"}, {"hw_input", "1"}, {"passthru", "1"},
         {"step5", "1:2:3:1"}, {"locks5", "1=64"}, {"lock5_2", "31"},
         {"state", "{\"v\":1,\"mix\":64}"},
         /* The path a preset records so the UI can reload the audio. The

@@ -655,6 +655,38 @@ as `<path>#N` and QuickJS's default normaliser resolves `./x` against
 everything before the last `/`. Both harnesses link the REAL file — the codec
 is what a load exercises, and a mock of it passes with the real one broken.
 
+### Overwork Mix — the end-of-chain build
+
+`modules/overtake/overwork-mix` + `src/work_overtake_fx.c`. Same engine, fed by
+the Move's own playback. Three facts, each of which has already cost time:
+
+- **Role is decided by the .so's exports, not by `component_type`.** The shim
+  `dlsym`s `move_audio_fx_init_v2`; present → `overtake_dsp_fx`, absent →
+  generator. With `capabilities.end_of_chain` the FX role runs `process_block`
+  IN PLACE on the final Move+ME mix, after the ME sum (`schwung_shim.c` ~2943).
+  The generator role gets the jack, the FX role the bus — one .so cannot be
+  both, hence two modules. A five-line shim change (restore the hardware
+  audio_in for both roles) would let them merge; drafted for upstream in
+  `~/tim-os/scratch/2026-09-07-schwung-pr-audio-in-restore.md`. **Do not
+  ship a one-module Overwork that depends on that change until it is in
+  Charles's release** — that is the v0.9.0 `remote_only` mistake exactly.
+- **`.on_midi` must be set in the struct.** `work_fx.c` leaves it unset because
+  the chain host dlsyms the symbol; the overtake shim reads the FIELD
+  (`overtake_dsp_fx->on_midi`) and never dlsyms it. A wrapper copied from
+  work_fx.c gives a UI that draws with every pad, step and CC dead — and the
+  harness cannot see it, because the mock delivers MIDI to JS, not through
+  the shim's struct.
+- **`passthru 1` at create, `hw_input` NOT set.** Both in_gain zeroings are
+  about a microphone; on a bus they mute the Move (the source-machine one the
+  moment a sampler is loaded). `passthru` is a build property, absent from the
+  state blob, so presets cross between the two Overworks safely. Not setting
+  `hw_input` is what keeps the feedback guard off; the Monitor pad goes dark
+  when `!hwInput`.
+
+Caveats users see: the eoc signal is post-volume-knob; `end_of_chain` had no
+shipped consumer in schwung before this. Verify hands-free: `set_open_tool`
+then `get_param('meter')` while a Set plays with nothing in the jack.
+
 ## Verification
 
 ```bash

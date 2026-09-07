@@ -419,6 +419,15 @@ struct work {
      * guard at all. */
     uint8_t              monitor;
     uint8_t              hw_input;
+    /* 1 = the input is a BUS, not a microphone: never zero it. Set by the
+     * end-of-chain overtake build, where `in` is the Move's own playback and
+     * both reasons for zeroing in_gain are void — there is no feedback path
+     * to break, and "a source machine has nothing to blend with" is false.
+     * Without this, loading a sampler into the source stage would mute the
+     * Move. A build property, not a patch setting: deliberately absent from
+     * the state blob so a preset made here reloads in jack-Overwork with the
+     * feedback rules back in force. */
+    uint8_t              passthru;
 
     /* MIDI CC duplicate guard. A channel-matched chain slot can deliver one
      * external CC twice (channel dispatch + FX broadcast), so identical
@@ -3303,6 +3312,13 @@ void work_process(work_t *w, const int16_t *in, int16_t *out, int frames) {
      * input matters. */
     if (machine_is_source(TRK(w)->eff_machine[0])) in_gain = 0.0f;
 
+    /* On a bus, neither zeroing applies. `monitor` breaks a mic feedback loop
+     * and the source rule keeps a mic out of a generating chain; when the
+     * input is the Move's own playback there is no loop and nothing to keep
+     * out, and zeroing here would silence the Move the moment a sampler was
+     * loaded. Both feed and dry stay raw; `monitor` is a no-op in that build. */
+    if (w->passthru) in_gain = 1.0f;
+
     /* The track being rendered. Named here rather than reached for through
      * TRK() so a machine cannot reach the wrong one. */
     for (int f = 0; f < frames; ++f) {
@@ -4513,6 +4529,7 @@ void work_set_param(work_t *w, const char *key, const char *val) {
     if (strcmp(key, "fill") == 0) { w->fill = (uint8_t)(atoi(val) ? 1 : 0); return; }
     if (strcmp(key, "live_rec") == 0) { w->live_rec = (uint8_t)(atoi(val) ? 1 : 0); return; }
     if (strcmp(key, "monitor") == 0)  { w->monitor  = (uint8_t)(atoi(val) ? 1 : 0); return; }
+    if (strcmp(key, "passthru") == 0) { w->passthru = (uint8_t)(atoi(val) ? 1 : 0); return; }
     if (strcmp(key, "hw_input") == 0) { w->hw_input = (uint8_t)(atoi(val) ? 1 : 0); return; }
 
     /* ------------------------------------------------- bank, song, history */
@@ -5069,6 +5086,7 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
     if (strcmp(key, "seq_pos") == 0)  return nclamp(snprintf(buf, buf_len, "%d", w->seq_pos), cap);
     if (strcmp(key, "live_rec") == 0) return nclamp(snprintf(buf, buf_len, "%d", w->live_rec), cap);
     if (strcmp(key, "monitor") == 0)  return nclamp(snprintf(buf, buf_len, "%d", w->monitor), cap);
+    if (strcmp(key, "passthru") == 0) return nclamp(snprintf(buf, buf_len, "%d", w->passthru), cap);
     if (strcmp(key, "hw_input") == 0) return nclamp(snprintf(buf, buf_len, "%d", w->hw_input), cap);
     if (strcmp(key, "pattern") == 0)   return nclamp(snprintf(buf, buf_len, "%d", w->cur_pattern), cap);
     if (strcmp(key, "page_mask") == 0) return nclamp(snprintf(buf, buf_len, "%d", CURPAT(w)->page_mask), cap);
