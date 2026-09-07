@@ -346,7 +346,7 @@ function makeHost() {
     const spoken = [];
     host.__spoken = spoken;
     return { host, vfs, writes, reads, roundTrips, unknownReads, unknownWrites,
-             leds, screen, store, spoken };
+             leds, screen, store, spoken, bumpRev };
 }
 
 /* Stub the three schwung shared modules the UI imports. */
@@ -359,6 +359,9 @@ const STUBS = {
          * then the harness proves the UI navigates correctly while the device
          * navigates the other way. */
         export const MoveMenu = 50, MoveDown = 54, MoveUp = 55;
+        /* The Move's Sample button. 118 with an RGB LED, aliased in schwung
+         * as MoveRecord/MoveSample — transcribed, not invented. */
+        export const MoveSample = 118;
         export const Black=0, White=120, LightGrey=118, DarkGrey=124, Red=127, BrightRed=1;
         export const Blue=125, Green=126, BrightGreen=8, Cyan=14, Purple=22, SkyBlue=47;
         export const Lime=31, OrangeRed=2, BurntOrange=28, YellowGreen=30, TealGreen=12, Rose=24;
@@ -831,6 +834,58 @@ async function testLiveRecordToggle() {
     ctx.host.onMidiMessageInternal(noteOn(68));
     ctx.host.onMidiMessageInternal(noteOff(68));
     check(ctx.writes.some((x) => x.key === 'seq_on'), 'plain play stopped writing seq_on');
+}
+
+/* The Move's SAMPLE button records the live input. Distinct from live record
+ * (shift + play), which records KNOB MOVES onto steps — the two are the reason
+ * CC 67 sits next to CC 66 in the engine, and the reason this test exists
+ * beside testLiveRecordToggle rather than inside it. */
+async function testSampleButtonRecords() {
+    console.log("the Move's sample button records the live input");
+    const ctx = await loadUI();
+    ctx.host.init();
+    /* Let the revision poll ADOPT first. The first poll after init takes
+     * whatever it finds as the baseline, so a write made before any tick is
+     * invisible — which is a property of the UI, not of this test, and one
+     * every test here has to respect. */
+    for (let i = 0; i < 6; i++) ctx.host.tick();
+
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(118, 127));      /* MoveSample press */
+    let w = ctx.writes.find((x) => x.key === 'sample_rec');
+    check(!!w && `${w.val}` === '1',
+          `the sample button did not arm sample_rec (${w && w.val})`);
+    check(!ctx.writes.some((x) => x.key === 'live_rec'),
+          'the sample button also wrote live_rec — those are different records');
+
+    /* Press again commits. */
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(118, 127));
+    w = ctx.writes.find((x) => x.key === 'sample_rec');
+    check(!!w && `${w.val}` === '0',
+          `a second press did not commit the take (${w && w.val})`);
+    for (let i = 0; i < 6; i++) ctx.host.tick();
+
+    /* The engine committing at the buffer ceiling: it clears sample_rec AND
+     * bumps rui_rev, because that is the one state change no write caused and
+     * so the only one an editor cannot infer from its own edits. Modelled
+     * exactly, or this asserts against a mock the engine does not match.
+     *
+     * Armed externally here, so a UI that trusted its own flag would think it
+     * is idle and send "1" — arming a take that is already running. */
+    ctx.store.sample_rec = '1';
+    ctx.bumpRev();
+    /* The revision poll runs on tickCount % 12, so a short settle can miss it
+     * entirely — 30 ticks guarantees crossing a boundary whatever the count
+     * was on entry. */
+    for (let i = 0; i < 30; i++) ctx.host.tick();
+
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(118, 127));
+    w = ctx.writes.find((x) => x.key === 'sample_rec');
+    check(!!w && `${w.val}` === '0',
+          'the UI did not follow the engine arming sample_rec elsewhere ' +
+          `(wrote ${w && w.val}) — the button would fight the engine`);
 }
 
 async function testProbabilityMode() {
@@ -2233,6 +2288,7 @@ const tests = [
     testGuardSilentForChainBuild,
     testMonitorManualOverride,
     testLiveRecordToggle,
+    testSampleButtonRecords,
     testProbabilityMode,
     testEveryModulatorHasAPage,
     testVoiceFilterPageIsReachable,

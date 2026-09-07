@@ -604,7 +604,7 @@ footer a{color:var(--rust)}
 
   <h3>Sampling the input</h3>
 
-  <p>The source machines play a sample, and one way to get a sample into them is to <strong>record it where you are</strong> rather than load a file. <code>sample_rec</code> &mdash; MIDI CC <code>67</code> &mdash; starts writing the incoming audio into the track&rsquo;s buffer; releasing it commits the take, and the source machines can play it immediately. Eight seconds, and it stops and commits itself at the ceiling rather than wrapping.</p>
+  <p>The source machines play a sample, and one way to get a sample into them is to <strong>record it where you are</strong> rather than load a file. In Overwork the Move&rsquo;s own <strong>Sample</strong> button does it &mdash; press to start, press again to commit, and the button lights red while it runs. In a Signal Chain slot the button belongs to Move&rsquo;s firmware, so there it is MIDI CC <code>67</code>. Either way it starts writing the incoming audio into the track&rsquo;s buffer; releasing it commits the take, and the source machines can play it immediately. Eight seconds, and it stops and commits itself at the ceiling rather than wrapping.</p>
 
   <p>Two things follow from where the recorder taps, and both are deliberate. It reads the input <em>before</em> the module touches it, so <strong>recording works with monitoring off</strong> &mdash; which is how you sample a microphone without putting it into a feedback loop. And it works with a source machine already loaded, even though that machine removes the live input from the signal path: recording and hearing are different questions.</p>
 

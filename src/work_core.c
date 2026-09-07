@@ -3184,10 +3184,20 @@ static void sample_record_block(work_t *w, const int16_t *in, int frames) {
         tr->sample_fill += n;
 
         /* Full: commit and disarm, so the take is playable without the UI
-         * having to notice the ceiling. sample_end's exact move. */
+         * having to notice the ceiling. sample_end's exact move.
+         *
+         * Bump rui_rev with it. This is the ONE state change in the module
+         * that no write caused, so it is the one an editor cannot learn about
+         * by watching its own edits — every other path through
+         * work_set_param bumps the revision on the way in. Without this the
+         * SAMPLE button stays lit over a take that stopped seconds ago and the
+         * next press reads as "stop" instead of "start". Same shape as Mono's
+         * cc_revision: the surface has to follow the engine, not its own
+         * optimistic copy. */
         if (tr->sample_fill >= WORK_SAMPLE_FRAMES) {
             tr->sample_frames = tr->sample_fill;
             tr->sample_rec = 0;
+            w->rui_rev++;
         }
     }
 }

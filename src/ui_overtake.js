@@ -46,7 +46,7 @@
 
 import {
     MoveKnob1, MoveShift, MoveMainButton, MoveMainKnob,
-    MoveMenu, MoveUp, MoveDown,
+    MoveMenu, MoveUp, MoveDown, MoveSample,
     Black, White, LightGrey, DarkGrey, Red, BrightRed, Blue, Green, BrightGreen,
     Cyan, Purple, SkyBlue, Lime, OrangeRed, BurntOrange, YellowGreen, TealGreen, Rose,
     ElectricViolet, VividYellow, AzureBlue
@@ -330,6 +330,7 @@ let clearAt    = 0;          /* PAD_CLEAR press time, for the hold gesture  */
 let fillAt     = 0;
 let fillLatched = false;
 let liveRec     = 0;
+let sampleRec   = 0;         /* 1 = capturing the input into the sample */
 let songOn      = 0;
 let curPattern  = 0;
 let memoAt      = 0;
@@ -634,7 +635,11 @@ function pageKnobs() {
  * cannot drift apart. */
 const SCALAR_KEYS = [
     'mix', 'level', 'pan', 'seq_len', 'seq_on', 'fill', 'live_rec', 'song_on',
-    'pattern', 'monitor', 'hw_input', 'track', 'focus'
+    'pattern', 'monitor', 'hw_input', 'track', 'focus',
+    /* Polled rather than assumed: the engine disarms itself when the buffer
+     * fills, so a local flag would leave the button lit over a take that had
+     * already stopped. */
+    'sample_rec'
 ];
 
 /* Everything the screen and LEDs show, pulled in one pass — two bulk
@@ -696,6 +701,7 @@ function fetchAll() {
     seqOn  = num('seq_on');
     fillLatched = num('fill') !== 0;
     liveRec = num('live_rec');
+    sampleRec = num('sample_rec');
     songOn = num('song_on');
     curPattern = num('pattern');
     monitor = num('monitor');
@@ -2075,6 +2081,29 @@ function onMidiMessageInternal(data) {
         if (d1 === MoveMenu) {
             menuHeld = d2 >= 64;
             paintSteps(false);          /* the steps become a track picker */
+            return;
+        }
+        /* The Move's own SAMPLE button records the live input into this
+         * track's sample buffer, and its RGB LED goes red while it runs.
+         *
+         * This button rather than a pad: it is the one the hardware already
+         * labels for exactly this, so the gesture needs no learning, and in
+         * overtake the module owns the whole surface so it is ours to take.
+         * schwung only claims SHIFT + Capture (skipback), which is a different
+         * button and a different modifier — nothing here collides.
+         *
+         * Press to start, press again to commit. Not hold-to-record: a take
+         * can run to eight seconds and holding a button that long to sample a
+         * phrase is the wrong ergonomics. The engine disarms itself at the
+         * ceiling, and the polled `sample_rec` above is what puts the light
+         * back out when it does. */
+        if (d1 === MoveSample && d2 > 0) {
+            const arm = sampleRec ? 0 : 1;
+            setParam('sample_rec', `${arm}`);
+            sampleRec = arm;
+            setLED(MoveSample, arm ? Red : Black, true);
+            announce(arm ? 'Recording' : 'Recorded');
+            needsRedraw = true;
             return;
         }
         if (d1 === MoveUp && d2 > 0)   { selectTrack(selTrack + 1); return; }

@@ -3363,6 +3363,14 @@ static void test_sample_record_ceiling(void) {
     work_get_param(w, "sample_max", probe, sizeof probe);
     const int cap = atoi(probe);
 
+    /* The revision BEFORE the ceiling. Committing there is the one state
+     * change in the module that no write caused, so it is the only one an
+     * editor cannot infer from watching its own edits — it has to be
+     * published, or the surface sits lit over a take that already stopped. */
+    char rev0[64];
+    work_get_param(w, "rui_poll", rev0, sizeof rev0);
+    unsigned before = (unsigned)strtoul(rev0, NULL, 10);
+
     /* Deliberately overrun: enough blocks for the whole buffer plus 50 more. */
     for (int b = 0; b < cap / BLOCK + 50; ++b) work_process(w, io, io, BLOCK);
 
@@ -3374,6 +3382,13 @@ static void test_sample_record_ceiling(void) {
     work_get_param(w, "sample_fill", probe, sizeof probe);
     CHECK(atoi(probe) == cap, "sample_fill ran to %s past a capacity of %d",
           probe, cap);
+
+    char rev1[64];
+    work_get_param(w, "rui_poll", rev1, sizeof rev1);
+    unsigned after = (unsigned)strtoul(rev1, NULL, 10);
+    CHECK(after != before, "rui_poll did not move when the recorder committed "
+          "at the ceiling (%u both times) — an editor polling the revision "
+          "would never learn the take had stopped", before);
 
     work_destroy(w);
 }

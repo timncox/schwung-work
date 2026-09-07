@@ -605,9 +605,32 @@ preset comes back empty. Persisting one means WAV export, which needs chunked
 readback through the 16 KB `get_param` ceiling — real work, deliberately not
 folded in here.
 
-**No surface yet beyond CC.** `ui_chain.js` has no sample code and no pads;
-Overwork has both. The gesture is an open design question — see the Smack
-(`arm`/`capture`) and Mark (`rec_*`) vocabularies before inventing a third.
+**The gesture is the Move's own SAMPLE button (CC 118), in Overwork.** Press
+to start, press again to commit; its RGB LED goes red while running. That
+button rather than a pad because the hardware already labels it for this, and
+in overtake the module owns the whole surface. schwung claims only SHIFT +
+Capture (skipback) — a different button and a different modifier, so nothing
+collides. Not hold-to-record: a take runs to eight seconds and holding a button
+that long is the wrong ergonomics.
+
+The UI FOLLOWS the engine rather than its own flag, because the engine disarms
+itself at the ceiling. `sample_rec` is in `SCALAR_KEYS` and the commit bumps
+`rui_rev`, which is what makes `fetchAll` notice. Without that the button stays
+lit over a take that stopped and the next press reads as "stop" — the Mono
+v0.4.3 shape exactly. Both halves are tested: `host_sim` asserts `rui_poll`
+moves at the ceiling, and the overtake harness asserts the button follows an
+arm it did not make.
+
+**The chain slot has CC only.** In a slot editor Move firmware keeps the pad
+grid AND the Sample/Capture buttons, so `ui_chain.js` gets screen, knobs, jog
+and Back. CC 67 works there today via an external controller; a native gesture
+would need a SAMPLE page, since the MACHINES scalar row is full.
+
+**Browsing device samples is Overwork-only.** It scans
+`UserLibrary/Samples` and `/Recordings` to depth 4. `ui_chain.js` has none of
+that machinery, and duplicating the WAV parse and base64 into it would be the
+second copy this codebase keeps getting burned by — extract to a shared module
+first.
 
 ## Verification
 
