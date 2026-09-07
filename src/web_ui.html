@@ -364,6 +364,55 @@ function slider(host, id, label, value, min, max, onset, effective) {
   return r;
 }
 
+/* A two-state parameter. Same row and the same both-values readout as slider —
+   a switch can be an LFO destination like any other knob, so it still has to
+   show what the DSP resolved to — but the control is a checkbox. A 0-127 track
+   for two states is exactly the confusion this replaces. Writes the ENDS, 0 and
+   127, rather than 63/64, leaving the modulation path a margin either side of
+   the engine's `>= 64`. */
+function toggle(host, id, label, value, onset, effective) {
+  const row = document.createElement("div");
+  row.className = "row";
+
+  const lab = document.createElement("span");
+  lab.className = "lab";
+  lab.textContent = label;
+  lab.title = label;
+
+  const c = document.createElement("input");
+  c.type = "checkbox"; c.id = id; c.checked = value >= 64;
+  c.style.flex = "1 1 auto";
+
+  const v = document.createElement("span");
+  v.className = "val";
+
+  const name = (n) => (n >= 64 ? "On" : "Off");
+  const paint = (base) => {
+    v.textContent = "";
+    if (effective !== undefined && effective !== null && effective !== base) {
+      const e = document.createElement("i");
+      e.textContent = name(effective);
+      const b = document.createElement("u");
+      b.textContent = " " + name(base);
+      v.appendChild(e); v.appendChild(b);
+    } else {
+      v.textContent = name(base);
+    }
+  };
+  paint(value);
+
+  c.onchange = () => {
+    touched[id] = Date.now();
+    const n = c.checked ? 127 : 0;
+    paint(n);
+    onset(n);
+  };
+
+  row.appendChild(lab); row.appendChild(c); row.appendChild(v);
+  host.appendChild(row);
+  return c;
+}
+
 function chooser(host, label, options, index, onset) {
   const row = document.createElement("div");
   row.className = "row";
@@ -521,12 +570,20 @@ function renderChain() {
     const base = csv("fp" + STAGE_SFX[si]);
     const eff  = csv("fe" + STAGE_SFX[si]);
     const labs = (M["flab" + STAGE_SFX[si]] || "").split(",");
+    /* Which of them are switches. Absent on an engine that predates the key,
+       in which case every knob renders as a slider exactly as it used to. */
+    const kinds = M["fkind" + STAGE_SFX[si]] || "";
 
     for (let i = 0; i < PARAMS; i++) {
       const name = labs[i] || "";
       if (!name) continue;                   /* Bypass has no knobs at all  */
-      slider(box, sk + "_p" + (i + 1), name, base[i] || 0, 0, 127,
-             (v) => send(sk + "_p" + (i + 1), v), eff[i]);
+      const key = sk + "_p" + (i + 1);
+      if (kinds[i] === "1") {
+        toggle(box, key, name, +(base[i] || 0), (v) => send(key, v), eff[i]);
+      } else {
+        slider(box, key, name, base[i] || 0, 0, 127,
+               (v) => send(key, v), eff[i]);
+      }
     }
     host.appendChild(box);
   });

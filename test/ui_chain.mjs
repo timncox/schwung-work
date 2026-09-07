@@ -340,6 +340,41 @@ async function testPageFillsInPromptly() {
  * the acceleration is the family's length, not the whole machine list's. The
  * FX 1 knob is used here because its family is the long one — the source
  * family is six machines and would reach an end stop before the cap bit. */
+/* The chain slot renders the same switches as the full surface. Its own test
+ * because it is a SEPARATE UI with its own descriptor table and its own
+ * refresh: a fix applied to one and not the other is how this project has
+ * shipped a gesture that worked on the pads and was dead in a slot. */
+async function testSwitchKnobIsTwoState() {
+    console.log('a switch parameter reads Off/On in a chain slot too');
+
+    const LOOP = 3;
+    const ctx = await loadUI({
+        labels_src: 'TUNE,STRT,LEN,LOOP,ATK,DEC,LEV,PAN',
+        kinds_src:  '00010000',
+        src_p4:     '0'
+    });
+    ctx.host.init();
+    ctx.host.onMidiMessageInternal(cc(JOG, 1));    /* MACHINES -> the SRC page */
+    settle(ctx, 100);                              /* labels and kinds land    */
+
+    const shown = ctx.screen.map((x) => x.text).join(' ');
+    check(/(^| )Off( |$)/.test(shown),
+          `LOOP at 0 should read Off in the slot editor; screen was ${JSON.stringify(shown)}`);
+
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(KNOB1 + LOOP, 1));
+    const w = ctx.writes.filter((x) => x.key === 'src_p4');
+    check(w.length === 1 && `${w[0].val}` === '127',
+          `one detent should write 127, got ${JSON.stringify(w)}`);
+
+    /* and the continuous knob beside it is untouched by the switch branch */
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(KNOB1 + LOOP + 1, 1));
+    const atk = ctx.writes.filter((x) => x.key === 'src_p5');
+    check(atk.length === 1 && `${atk[0].val}` !== '127',
+          `ATK must still step rather than snap, got ${JSON.stringify(atk)}`);
+}
+
 async function testKnobResponseCurve() {
     console.log('knob response: one detent moves one, a fast spin moves a quarter of the range');
     const cap = Math.ceil((FX_FAMILY.length - 1) / 4);
@@ -904,6 +939,7 @@ const TESTS = [
     testSteadyStateIsQuiet,
     testPageFillsInPromptly,
     testKnobResponseCurve,
+    testSwitchKnobIsTwoState,
     testMachineRangeFollowsTheEngine,
     testFailedReadNeverBecomesZero,
     testNoWriteBeforeFirstRead,

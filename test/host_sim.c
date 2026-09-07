@@ -4186,6 +4186,43 @@ static void test_surface_control_notes_do_not_fire_voices(void) {
     work_destroy(w);
 }
 
+/* A switch bit must line up with the knob it names. param_switch_mask lives
+ * beside PARAM_NAME and nothing but this stops the two drifting apart the next
+ * time a machine's knobs are reordered. Asserting the mask alone would pass
+ * happily while pointing at the wrong knob. */
+static void test_switch_params(void) {
+    printf("switch knobs are declared, and each bit lines up with its label\n");
+    work_t *w = work_create(&host);
+    assert(w);
+
+    char k[32], l[192];
+
+    set_stage(w, WORK_STAGE_SRC, WORK_FX_ONESHOT);
+    work_get_param(w, "kinds_src", k, sizeof(k));
+    CHECK(strcmp(k, "00010000") == 0,
+          "One Shot kinds_src is \"%s\", expected \"00010000\" (LOOP is knob 4)", k);
+    work_get_param(w, "labels_src", l, sizeof(l));
+    CHECK(strncmp(l, "TUNE,STRT,LEN,LOOP,", 19) == 0,
+          "One Shot's fourth knob is no longer LOOP, so the mask points at the "
+          "wrong one: %s", l);
+
+    set_stage(w, WORK_STAGE_FX1, WORK_FX_DRIVEDELAY);
+    work_get_param(w, "kinds1", k, sizeof(k));
+    CHECK(strcmp(k, "01000000") == 0,
+          "Drive Delay kinds1 is \"%s\", expected \"01000000\" (PPONG is knob 2)", k);
+    work_get_param(w, "labels1", l, sizeof(l));
+    CHECK(strncmp(l, "TIME,PPONG,", 11) == 0,
+          "Drive Delay's second knob is no longer PPONG: %s", l);
+
+    /* A machine with no switches must SAY so — eight zeros, not an empty
+     * string, or a UI cannot tell "no switches" from "engine too old". */
+    set_stage(w, WORK_STAGE_SRC, WORK_FX_POLYSAMPLE);
+    work_get_param(w, "kinds_src", k, sizeof(k));
+    CHECK(strcmp(k, "00000000") == 0, "Polysample declares a switch: \"%s\"", k);
+
+    work_destroy(w);
+}
+
 int main(void) {
     printf("Work engine — host simulator\n\n");
 
@@ -4288,6 +4325,7 @@ int main(void) {
     test_shape_shelves();
 
     test_source_machine_ignores_the_input();
+    test_switch_params();
 
     test_surface_control_notes_do_not_fire_voices();
 

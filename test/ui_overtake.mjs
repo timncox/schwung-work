@@ -2339,6 +2339,130 @@ async function testShiftDoesNotLatchFromTheLaunchGesture() {
 
 /* ------------------------------------------------------------------ run */
 
+/* A switch parameter is two-state on the SURFACE. The DSP has always read these
+ * as `>= 64`, so before this the knob swept 128 values of which only the
+ * crossing of 64 did anything: it read as a broken control rather than a binary
+ * one. The kinds string is seeded directly rather than by loading One Shot, so
+ * the test says what the UI does with a switch and not which machine has one —
+ * host_sim owns the question of which knobs are switches. */
+async function testSwitchKnobIsTwoState() {
+    console.log('a switch parameter reads Off/On, and its knob jumps between them');
+
+    const LOOP = 3;                     /* One Shot's fourth knob */
+    /* Base AND effective are seeded, and equal: the screen shows the effective
+     * value with a trailing ~ whenever they differ, so leaving eff at the
+     * contract's default would test the modulated form by accident. That form
+     * gets its own case below. */
+    const base = (v) => [64, 0, 40, v, 0, 127, 100, 64];
+    const seed = (v, eff) => {
+        const o = {
+            labels_src: 'TUNE,STRT,LEN,LOOP,ATK,DEC,LEV,PAN',
+            kinds_src:  '00010000',
+            eff_src:    (eff === undefined ? base(v) : eff).join(',')
+        };
+        base(v).forEach((x, i) => { o[`src_p${i + 1}`] = `${x}`; });
+        return o;
+    };
+    const at = async (v, eff) => {
+        const ctx = await loadUI();
+        Object.assign(ctx.store, seed(v, eff));
+        ctx.host.init();
+        ctx.writes.length = 0;
+        return ctx;
+    };
+    const shown = (ctx) => ctx.screen.map((x) => x.text).join(' ');
+    const wrote = (ctx, key) => ctx.writes.filter((x) => x.key === key);
+
+    /* Off, and one detent takes it all the way on rather than to 1 */
+    let ctx = await at(0);
+    check(/(^| )Off( |$)/.test(shown(ctx)),
+          `LOOP at 0 should read Off; screen was ${JSON.stringify(shown(ctx))}`);
+
+    ctx.host.onMidiMessageInternal(cc(KNOB1 + LOOP, 1));
+    let w = wrote(ctx, 'src_p4');
+    check(w.length === 1 && `${w[0].val}` === '127',
+          `one detent on a switch should write 127, got ${JSON.stringify(w)}`);
+
+    /* A fast spin is the same switch, not an overshoot into some other value */
+    ctx = await at(0);
+    ctx.host.onMidiMessageInternal(cc(KNOB1 + LOOP, 25));
+    w = wrote(ctx, 'src_p4');
+    check(w.length === 1 && `${w[0].val}` === '127',
+          `a fast spin on a switch should still write 127, got ${JSON.stringify(w)}`);
+
+    /* On, and one detent back turns it off */
+    ctx = await at(127);
+    check(/(^| )On( |$)/.test(shown(ctx)),
+          `LOOP at 127 should read On; screen was ${JSON.stringify(shown(ctx))}`);
+
+    ctx.host.onMidiMessageInternal(cc(KNOB1 + LOOP, 127));   /* -1 detent */
+    w = wrote(ctx, 'src_p4');
+    check(w.length === 1 && `${w[0].val}` === '0',
+          `one detent back should write 0, got ${JSON.stringify(w)}`);
+
+    /* A neighbouring knob on the same machine is continuous and still steps */
+    ctx = await at(0);
+    ctx.host.onMidiMessageInternal(cc(KNOB1 + LOOP + 1, 1));
+    w = wrote(ctx, 'src_p5');
+    check(w.length === 1 && `${w[0].val}` === '1',
+          `ATK is continuous and must step by one, got ${JSON.stringify(w)}`);
+}
+
+/* A switch that something has MOVED still reads as a switch. The screen shows
+ * the effective value with a trailing ~ when a lock or an LFO has taken the
+ * parameter away from its knob; rendering that as a bare 127 is the same
+ * confusion in the one place a player is most likely to be reading closely. */
+async function testModulatedSwitchStillReadsOnOff() {
+    console.log('a switch moved by a lock or an LFO still reads On/Off, not 127');
+
+    const ctx = await loadUI();
+    Object.assign(ctx.store, {
+        labels_src: 'TUNE,STRT,LEN,LOOP,ATK,DEC,LEV,PAN',
+        kinds_src:  '00010000',
+        src_p4:     '0',                                  /* knob says off  */
+        eff_src:    [64, 0, 40, 127, 0, 127, 100, 64].join(',')  /* DSP: on */
+    });
+    ctx.host.init();
+
+    const shown = ctx.screen.map((x) => x.text).join(' ');
+    check(/On~/.test(shown),
+          `a modulated switch should read On~; screen was ${JSON.stringify(shown)}`);
+    check(!/127~/.test(shown),
+          `a modulated switch must not read 127~; screen was ${JSON.stringify(shown)}`);
+}
+
+/* A locked switch is still a switch: the lock editor must write the same two
+ * values, or the base snaps while a step's lock sweeps a range it does not
+ * have. */
+async function testSwitchLockIsTwoState() {
+    console.log('a parameter lock on a switch writes the same two values');
+
+    const ctx = await loadUI();
+    Object.assign(ctx.store, {
+        labels_src: 'TUNE,STRT,LEN,LOOP,ATK,DEC,LEV,PAN',
+        kinds_src:  '00010000',
+        src_p4:     '0'
+    });
+    ctx.host.init();
+    ctx.writes.length = 0;
+
+    ctx.host.onMidiMessageInternal(stepDown(2));            /* hold step 3 */
+    ctx.host.onMidiMessageInternal(cc(KNOB1 + 3, 1));       /* LOOP, +1    */
+
+    const locks = ctx.writes.filter((x) => /^lock\d+_\d+$/.test(x.key));
+    check(locks.length === 1,
+          `expected one lock write, got ${JSON.stringify(ctx.writes)}`);
+    if (locks.length) {
+        check(locks[0].key === 'lock2_3',
+              `expected lock2_3 (step 3, SRC knob D), got ${locks[0].key}`);
+        check(`${locks[0].val}` === '127',
+              `a locked switch should store 127, not a stepped value: ${locks[0].val}`);
+    }
+    const base = ctx.writes.filter((x) => /^(src|fx\d)_p\d$/.test(x.key));
+    check(base.length === 0,
+          `the base must not move while locking, got ${JSON.stringify(base)}`);
+}
+
 const tests = [
     testInitReadsOnlyServedKeys,
     testShiftDoesNotLatchFromTheLaunchGesture,
@@ -2400,7 +2524,10 @@ const tests = [
     testPresetLoadRestoresState,
     testPresetDelete,
     testPresetSurvivesRenameFailure,
-    testPresetEmptyDirIsSafe
+    testPresetEmptyDirIsSafe,
+    testSwitchKnobIsTwoState,
+    testModulatedSwitchStillReadsOnOff,
+    testSwitchLockIsTwoState
 ];
 
 console.log('Overwork UI harness (mocked against the real engine contract)\n');

@@ -551,6 +551,34 @@ static const char *PARAM_NAME[WORK_FX_COUNT][WORK_PARAMS] = {
 /* Tilt       */ {"LO.G","LO.F","HI.F","HI.G","WDTH","DRV","LEV","MIX"},
 };
 
+/* Which of a machine's eight knobs are two-state SWITCHES rather than
+ * continuous controls. Bit i set = knob i is a switch.
+ *
+ * The DSP has always read these as `>= 64`, so the knob swept 128 values while
+ * only the midpoint crossing did anything. On the surface that reads as a
+ * broken control rather than a binary one: turn it a third of the way and
+ * nothing happens. The UIs ask the engine which knobs these are rather than
+ * keeping their own list, the same rule the labels and the machine families
+ * already follow — a second copy in JS is a copy that drifts.
+ *
+ * The stored range stays 0..127 and the threshold stays `>= 64`. Narrowing it
+ * to 0/1 would be wrong in two ways that both lose user data: a parameter LOCK
+ * stores a value, so an existing lock of 90 would clamp to 1 and read as OFF,
+ * and MIDI CC 80-87 write these knobs straight from an external controller,
+ * where every value from 1 upwards would suddenly mean ON. The switch is a
+ * SURFACE behaviour — snap the encoder, name the two states — not a new range.
+ *
+ * A switch statement rather than a third table parallel to PARAM_NAME: two of
+ * twenty-seven machines have one, and a table would be twenty-five rows of
+ * zero for a reader to check against the labels by eye. */
+static uint8_t param_switch_mask(int machine) {
+    switch (machine) {
+    case WORK_FX_ONESHOT:    return 1u << 3;   /* LOOP  — hold the window   */
+    case WORK_FX_DRIVEDELAY: return 1u << 1;   /* PPONG — ping-pong the taps */
+    default:                 return 0;
+    }
+}
+
 const char *work_machine_name(int code) {
     if (code < 0 || code >= WORK_FX_COUNT) return "?";
     return MACHINE_NAME[code];
@@ -4969,6 +4997,19 @@ static int state_build(work_t *w) {
                                     i ? "," : "",
                                     PARAM_NAME[TRK(w)->cfg[sl].machine][i]), cap);
         n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "\""), cap);
+
+        /* And which of them are switches, for the same reason the labels are
+         * here: the page cannot ask for "kinds_src" either, and a switch drawn
+         * as a 0-127 slider is the exact confusion this change removes. */
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n),
+                                ",\"fkind%s\":\"", STAGE_SFX[sl]), cap);
+        {
+            uint8_t sw = param_switch_mask(TRK(w)->cfg[sl].machine);
+            for (int i = 0; i < WORK_PARAMS; ++i)
+                n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%c",
+                                        (sw >> i) & 1 ? '1' : '0'), cap);
+        }
+        n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "\""), cap);
     }
     n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), ",\"fmach\":\""), cap);
     for (int mc = 0; mc < WORK_FX_COUNT; ++mc)
@@ -5240,6 +5281,19 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
         for (int i = 0; i < WORK_PARAMS; ++i)
             n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%s%s",
                                     i ? "," : "", PARAM_NAME[mc][i]), cap);
+        return n;
+    }
+
+    /* Which of those eight knobs are switches, as WORK_PARAMS characters of
+     * '0' or '1'. Served beside the labels because it changes with exactly the
+     * same thing they do — the machine the slot holds. */
+    if (strncmp(key, "kinds", 5) == 0 && parse_stage_suffix(key + 5) >= 0) {
+        int mc = TRK(w)->cfg[parse_stage_suffix(key + 5)].machine;
+        uint8_t sw = param_switch_mask(mc);
+        int n = 0;
+        for (int i = 0; i < WORK_PARAMS; ++i)
+            n = nclamp(n + snprintf(buf + n, (size_t)(buf_len - n), "%c",
+                                    (sw >> i) & 1 ? '1' : '0'), cap);
         return n;
     }
 

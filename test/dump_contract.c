@@ -121,6 +121,7 @@ int main(void) {
         snprintf(key, sizeof(key), "%s", STAGE[s]);        emit(w, key);
         snprintf(key, sizeof(key), "labels%s", s ? STAGE[s] + 2 : "_src"); emit(w, key);
         snprintf(key, sizeof(key), "eff%s",    s ? STAGE[s] + 2 : "_src"); emit(w, key);
+        snprintf(key, sizeof(key), "kinds%s",  s ? STAGE[s] + 2 : "_src"); emit(w, key);
         if (s) { snprintf(key, sizeof(key), "machine%d", s); emit(w, key); }
         for (int p = 1; p <= 8; ++p) {
             snprintf(key, sizeof(key), "%s_p%d", STAGE[s], p);

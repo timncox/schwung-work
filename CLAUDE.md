@@ -202,6 +202,26 @@ The same goes for the FAMILIES: the engine serves them at `src_codes` and
 `fx_codes`, and both UIs and the manual site read them rather than listing
 membership locally.
 
+**Two knobs are SWITCHES, not ranges.** One Shot's `LOOP` and Drive Delay's
+`PPONG` have always been read by the DSP as `>= 64`, so the knob swept 128
+values of which only the midpoint crossing did anything — on the surface that
+reads as a broken control rather than a binary one. `param_switch_mask()` in
+`work_core.c` declares them as a bitmask per machine, served at
+`kinds_src`/`kinds1`/`kinds2` beside the labels (and mirrored into the state
+blob as `fkind*` for the browser page, which cannot reach a key of its own).
+All three UIs render `Off`/`On` and snap the encoder between the two.
+
+**The stored range stays 0..127 and the threshold stays `>= 64`** — narrowing it
+to 0/1 would lose data twice over: a parameter LOCK stores a value, so an
+existing lock of 90 would clamp to 1 and read as OFF, and MIDI CC 80-87 write
+these knobs straight from an external controller, where every value from 1
+upwards would suddenly mean ON. The switch is a SURFACE behaviour, not a new
+range, and the knob writes the ENDS (0 and 127) so the value has margin either
+side of the threshold on its way through locks and modulation.
+`test_switch_params` in `host_sim.c` asserts the bit lines up with the LABEL,
+not just with the mask — a mask alone passes happily while pointing at the
+wrong knob.
+
 ## Conventions inherited from the sibling modules
 
 These are all lessons other Schwung modules paid for. Do not relearn them.

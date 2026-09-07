@@ -376,6 +376,7 @@ let machineName = ['Bypass', 'Bypass', 'Bypass'];
 let machineList = [];
 let condList    = [];
 let fxLabels    = [[], [], []];
+let fxKinds     = [[], [], []];
 let effVals     = [[], [], []];
 
 /* Which machines each stage accepts, asked of the ENGINE rather than derived
@@ -516,6 +517,24 @@ const STAGE_LABEL   = ['SRC', 'FX 1', 'FX 2'];
 function paramKey(stage, knob) { return `${STAGE_KEY[stage]}_p${knob + 1}`; }
 function labelsKey(stage) { return stage === STAGE_SRC ? 'labels_src' : `labels${stage}`; }
 function effKey(stage)    { return stage === STAGE_SRC ? 'eff_src'    : `eff${stage}`; }
+function kindsKey(stage)  { return stage === STAGE_SRC ? 'kinds_src'  : `kinds${stage}`; }
+
+/* The value at which a switch parameter reads as ON. This MIRRORS the DSP —
+ * param_switch_mask's machines test `>= 64` — and the two must not drift, which
+ * is why the knob writes 0 or 127 rather than anything nearer the boundary. */
+const SWITCH_ON = 64;
+
+function isSwitchKnob(stage, knob) {
+    return fxKinds[stage] ? fxKinds[stage][knob] === '1' : false;
+}
+
+/* A switch reads as its two states everywhere a value is shown: the base, a
+ * step's lock, and the modulated value the DSP reports back. A raw 0-127 in any
+ * one of those is exactly the confusion this replaces. */
+function fmtKnobValue(k, v) {
+    if (k && k.sw) return v >= SWITCH_ON ? 'On' : 'Off';
+    return `${v}`;
+}
 
 /* Lock indices, mirroring the map in work_core.h — which is PER TRACK, and was
  * rebuilt once in v0.9.0 so the stage parameters are contiguous. That is why
@@ -569,6 +588,11 @@ function pageKnobs() {
                 key: paramKey(focusStage, i),
                 label: lab && lab.length ? lab : '',
                 lock: lockForParam(focusStage, i),
+                sw: isSwitchKnob(focusStage, i),
+                /* min/max stay the full range even for a switch: a lock stores a
+                 * VALUE and clamping to 0/1 would make an existing lock of 90
+                 * read as OFF. The two-statedness lives in the encoder and the
+                 * label, not in the range. */
                 min: 0, max: 127
             });
         }
@@ -668,7 +692,7 @@ function fetchAll() {
     keys.push('track_map');
 
     for (let s = 0; s < N_STAGES; s++) {
-        keys.push(STAGE_KEY[s], labelsKey(s), effKey(s));
+        keys.push(STAGE_KEY[s], labelsKey(s), effKey(s), kindsKey(s));
         for (let i = 0; i < 8; i++) keys.push(paramKey(s, i));
     }
     for (const k of pageKnobs()) if (k.key && keys.indexOf(k.key) < 0) keys.push(k.key);
@@ -697,6 +721,10 @@ function fetchAll() {
         machineName[s] = machineList[code] || `#${code}`;
         const lab = v[labelsKey(s)];
         fxLabels[s] = lab ? lab.split(',') : [];
+        const kd = v[kindsKey(s)];
+        /* Absent rather than empty on an engine that predates the key: every
+         * knob is then continuous, which is the behaviour before this change. */
+        fxKinds[s] = kd ? kd.split('') : [];
         const ev = v[effKey(s)];
         effVals[s] = ev ? ev.split(',').map((x) => parseInt(x, 10)) : [];
         for (let i = 0; i < 8; i++) cfg[paramKey(s, i)] = num(paramKey(s, i));
@@ -1010,6 +1038,11 @@ function lockKnob(idx, knob, delta) {
          * would show a lock that does nothing on playback. */
         const stage = STAGE_KEY.indexOf(k.key);
         v = posToCode(stage, codeToPos(stage, base) + familyMove(stage, delta));
+    } else if (k.sw) {
+        /* A locked switch is still a switch: the same two values, so a step can
+         * turn LOOP on for one trig without the lock editor sweeping a range
+         * the parameter does not have. */
+        v = delta > 0 ? 127 : 0;
     } else {
         v = base + scaledMove(k, delta);
         if (v < k.min) v = k.min;
@@ -1019,7 +1052,7 @@ function lockKnob(idx, knob, delta) {
 
     heldUsed = true;
     fetchSteps();
-    announceParameter(`${k.label} step ${idx + 1}`, `${v}`);
+    announceParameter(`${k.label} step ${idx + 1}`, fmtKnobValue(k, v));
     needsRedraw = true;
 }
 
@@ -1079,7 +1112,13 @@ function adjustKnob(knob, delta) {
         return;
     }
 
-    let v = (cfg[k.key] | 0) + scaledMove(k, delta);
+    /* A switch has two positions, so the encoder JUMPS between them rather than
+     * sweeping 128 values of which only the crossing of 64 does anything. It
+     * writes the ends, 0 and 127, rather than 63/64: the stored value still
+     * travels through locks, MIDI and modulation, and the ends leave that
+     * journey a margin either side of the threshold. */
+    let v = k.sw ? (delta > 0 ? 127 : 0)
+                 : (cfg[k.key] | 0) + scaledMove(k, delta);
     if (v < k.min) v = k.min;
     if (v > k.max) v = k.max;
     if (v === cfg[k.key]) return;
@@ -1405,7 +1444,7 @@ function knobText(i) {
         const tag = STAGE_LABEL[stage] || `?${stage}`;
         return `${tag}${String.fromCharCode(97 + (v & 7))}`;
     }
-    return `${v}`;
+    return fmtKnobValue(k, v);
 }
 
 /* The eight tracks, drawn INTO the header rule.
@@ -1491,11 +1530,13 @@ function drawUI() {
         let val = knobText(i);
         if (heldStep >= 0 && knobs[i].lock >= 0) {
             const lv = getParam(`lock${heldStep}_${knobs[i].lock}`);
-            if (lv !== '' && parseInt(lv, 10) >= 0) val = `*${lv}`;
+            if (lv !== '' && parseInt(lv, 10) >= 0)
+                val = `*${fmtKnobValue(knobs[i], parseInt(lv, 10))}`;
         } else if (editPage === EDIT_FX && effVals[focusStage].length === 8) {
             /* show the value actually reaching the DSP when it differs */
             const e = effVals[focusStage][i];
-            if (Number.isFinite(e) && e !== (cfg[knobs[i].key] | 0)) val = `${e}~`;
+            if (Number.isFinite(e) && e !== (cfg[knobs[i].key] | 0))
+                val = `${fmtKnobValue(knobs[i], e)}~`;
         }
         print(x, y + 9, clip(val, COL_W), 1);
     }

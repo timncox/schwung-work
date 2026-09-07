@@ -186,8 +186,10 @@ let tickCount   = 0;
 let values      = {};           /* key -> number, mirrored from the DSP    */
 let machineName = ['--', '--', '--'];
 let fxLabels    = [[], [], []];
+let fxKinds     = [[], [], []];
 let machineList = [];
 let labelsDirty = [true, true, true];
+let kindsDirty  = [true, true, true];
 
 /* Background-refresh budget. BURST covers a full page plus both label strings
  * so a page or machine change fills in within a few hundred ms; the steady
@@ -327,6 +329,30 @@ function readLabels(s) {
     return true;
 }
 
+/* Which of the slot's eight knobs are two-state switches, as eight characters
+ * of '0' or '1'. Its own refresh step rather than a second read inside
+ * readLabels: each of these is a blocking ~23 ms round-trip, and refreshStep's
+ * whole shape is one read per call. Changes only when the machine does. */
+function readKinds(s) {
+    const kd = readRaw(`kinds${s === STAGE_SRC ? '_src' : s}`);
+    if (kd === null) return false;
+    fxKinds[s] = kd.split('');
+    kindsDirty[s] = false;
+    return true;
+}
+
+/* The value at which a switch reads as ON. MIRRORS the DSP, whose machines test
+ * `>= 64`; the knob writes 0 or 127 so the two cannot drift into each other. */
+const SWITCH_ON = 64;
+
+/* Only the FX pages carry switches, and which knobs they are depends on the
+ * machine the slot holds — so it is asked of the engine, as the labels are. */
+function isSwitchKnob(i) {
+    const slot = pageSlot(page);
+    if (slot < 0) return false;
+    return fxKinds[slot] ? fxKinds[slot][i] === '1' : false;
+}
+
 /* One unit of background refresh, cheapest-useful-first: the machine list
  * (nothing can be named without it), then labels for a slot whose machine just
  * changed, then one numeric key of the VISIBLE page in round-robin. Keys on
@@ -349,6 +375,10 @@ function refreshStep() {
     for (let s = 0; s < N_STAGES; s++) {
         if (labelsDirty[s]) {
             if (readLabels(s)) needsRedraw = true;
+            return;
+        }
+        if (kindsDirty[s]) {
+            if (readKinds(s)) needsRedraw = true;
             return;
         }
     }
@@ -413,6 +443,7 @@ function knobValue(i) {
     const v = values[k.key];
     if (v === undefined) return '--';
 
+    if (isSwitchKnob(i)) return v >= SWITCH_ON ? 'On' : 'Off';
     if (isMachineKey(k.key)) return machineList[v] || `#${v}`;
     if (k.key === 'sample_rec') return v ? 'Rec' : 'Off';
     if (k.key.endsWith('_wave')) return WAVE_NAME[v % 7];
@@ -643,6 +674,7 @@ function adjustKnob(i, delta) {
          * change quietly kept the old values until the trickle replaced them
          * one key per eight ticks. */
         labelsDirty[machineStage] = true;
+        kindsDirty[machineStage] = true;
         for (const p of PAGES[PAGE_STAGE1 + machineStage]) delete values[p.key];
         burst = BURST_READS;
 
@@ -651,7 +683,11 @@ function adjustKnob(i, delta) {
         return;
     }
 
-    let v = cur + scaledMove(k, delta);
+    /* A switch jumps between its two positions instead of sweeping a range it
+     * does not have. It writes the ENDS, 0 and 127, not 63/64: the value still
+     * travels through MIDI and modulation before the DSP's `>= 64` sees it. */
+    let v = isSwitchKnob(i) ? (delta > 0 ? 127 : 0)
+                            : cur + scaledMove(k, delta);
     if (v < k.min) v = k.min;
     if (v > k.max) v = k.max;
     if (v === cur) return;
@@ -749,6 +785,7 @@ function setTrack(t) {
     for (const key of Object.keys(values)) delete values[key];
     for (let s = 0; s < N_STAGES; s++) {
         labelsDirty[s] = true;
+        kindsDirty[s] = true;
         machineName[s] = '--';
     }
     refreshCursor = 0;
@@ -831,6 +868,7 @@ globalThis.init = function () {
     machineName = ['--', '--', '--'];
     fxLabels = [[], [], []];
     labelsDirty = [true, true, true];
+    kindsDirty = [true, true, true];
     refreshCursor = 0;
     tickCount = 0;
     sampleFiles = [];
