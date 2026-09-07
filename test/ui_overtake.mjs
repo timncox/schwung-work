@@ -957,10 +957,13 @@ async function testShiftVolumeTurnsMaster() {
     check(!ctx.writes.some((w) => w.key === 'master'), 'an unshifted volume turn wrote master');
     check(!ctx.suppress.includes(1), 'an unshifted volume turn claimed the knob');
 
-    /* Shift down claims it; a turn steps master from the ENGINE's value. */
-    ctx.writes.length = 0; ctx.suppress.length = 0;
+    /* Shift down claims it, and re-reads master so the first step starts
+     * from the ENGINE — the mirror is planted wrong here on purpose. */
+    ctx.writes.length = 0; ctx.suppress.length = 0; ctx.reads.length = 0;
+    ctx.store.master = '100';
     holdShift(ctx, true);
     check(ctx.suppress[ctx.suppress.length - 1] === 1, 'shift down did not claim the volume knob');
+    check(ctx.reads.includes('master'), 'shift down did not re-read master from the engine');
     ctx.host.onMidiMessageInternal(cc(79, 127));          /* -1 */
     ctx.host.onMidiMessageInternal(cc(79, 127));          /* -1 */
     const w = ctx.writes.filter((x) => x.key === 'master');

@@ -1913,6 +1913,16 @@ function onMidiMessageInternal(data) {
              * release, and the shim clears it on every overtake-mode change,
              * so the exit chord (which is held Shift) cannot strand it. */
             setMasterSuppress(shiftHeld);
+            /* The first step of the gesture must start from the ENGINE's value,
+             * not this file's mirror: after a write the revision poll treats
+             * the change as our own and skips the refresh, so a write that was
+             * dropped on the way (the launch settle window forces Shift
+             * released for a second) leaves the mirror ahead of the engine, and
+             * the next turn lands somewhere else. One read on a button press. */
+            if (shiftHeld) {
+                const m = parseInt(getParam('master'), 10);
+                if (Number.isFinite(m)) cfg.master = m;
+            }
             return;
         }
 
