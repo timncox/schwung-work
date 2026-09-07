@@ -569,6 +569,46 @@ learn the `fx1:` / `fx2:` prefixes; today `src/web_ui.html` only recognises
 `overtake_dsp:` and `synth:`, so it is shipped with `work-in` and `overwork`
 only. That is unfinished work, not a constraint.
 
+### Recording the live input into a source
+
+`sample_rec` (MIDI CC 67) writes the hardware input into the track's sample
+buffer; releasing it commits the take, exactly as `sample_end` does for an
+upload. Two decisions are load-bearing:
+
+**The tap is the FIRST thing in `work_process`, before the render loop.** It
+has to be. `work_fx.c` passes ONE buffer as both `in` and `out`, so anything
+read from `in` after the loop has begun writing is this module's own output.
+That bug is invisible under the default all-Bypass chain, where `out == in` —
+which is why `test_sample_record_ignores_monitor` exists rather than only the
+byte-alignment test. It records with `monitor 0`, where the output is silent
+and the raw input is not, and fails if the tap has drifted downstream. It was
+verified red against a tap moved to the end of `work_process`.
+
+**It reads `in` RAW, before `in_gain`.** Both things that zero `in_gain` are
+about the SIGNAL PATH, not about what may be sampled: `monitor` 0 breaks a
+feedback loop while tails ring out, and a source machine in slot 1 removes the
+input structurally. Recording through either is the point — sampling a mic
+without monitoring it is how you avoid the feedback, and a sampler in slot 1 is
+exactly when you want to record. Note this differs from Smack, whose `monitor`
+mutes at the OUTPUT.
+
+`sample_rec` is per TRACK, beside `sample_fill`, so changing the selected track
+mid-take cannot redirect the recording into another track's buffer. Arming
+zeroes `sample_frames` (an upload deliberately does not — it is UI-paced and
+its old sample stays playable until the new one is whole; a recording
+overwrites at audio rate under a voice that may be reading). `sample_clear`
+mid-take stops it.
+
+**A take is transient.** It is absent from the `state` blob on purpose: presets
+remember a sample by `sample_path` and a recording has no file, so a reloaded
+preset comes back empty. Persisting one means WAV export, which needs chunked
+readback through the 16 KB `get_param` ceiling — real work, deliberately not
+folded in here.
+
+**No surface yet beyond CC.** `ui_chain.js` has no sample code and no pads;
+Overwork has both. The gesture is an open design question — see the Smack
+(`arm`/`capture`) and Mark (`rec_*`) vocabularies before inventing a third.
+
 ## Verification
 
 ```bash

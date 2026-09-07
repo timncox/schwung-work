@@ -3190,6 +3190,263 @@ static void test_sample_transfer(void) {
     work_destroy(w);
 }
 
+/* Live recording: the hardware input lands in the sample buffer byte-exact.
+ *
+ * The counterpart to test_sample_transfer. That one proves an UPLOAD arrives
+ * intact; this proves a RECORDING does, through a completely different path —
+ * the audio thread rather than the param channel. */
+static void test_sample_record(void) {
+    printf("live input records into the sample buffer and plays back aligned\n");
+    work_t *w = work_create(&host);
+
+    const int frames = BLOCK * 5;
+    static int16_t pcm[BLOCK * 5 * 2];
+    make_ramp(pcm, frames);
+
+    char probe[64];
+    work_get_param(w, "sample_rec", probe, sizeof probe);
+    CHECK(atoi(probe) == 0, "sample_rec was %s before arming", probe);
+
+    work_set_param(w, "sample_rec", "1");
+    work_get_param(w, "sample_rec", probe, sizeof probe);
+    CHECK(atoi(probe) == 1, "sample_rec did not arm");
+
+    /* Nothing is committed while the take is running — same contract as a
+     * partial upload, so a voice cannot read a half-recorded buffer. */
+    static int16_t io[BLOCK * 2];
+    memcpy(io, pcm, BLOCK * 2 * sizeof(int16_t));
+    work_process(w, io, io, BLOCK);
+    work_get_param(w, "sample_frames", probe, sizeof probe);
+    CHECK(atoi(probe) == 0, "sample_frames was %s mid-take — a partial "
+          "recording must never be audible", probe);
+
+    for (int b = 1; b < 5; ++b) {
+        memcpy(io, pcm + b * BLOCK * 2, BLOCK * 2 * sizeof(int16_t));
+        work_process(w, io, io, BLOCK);
+    }
+    work_set_param(w, "sample_rec", "0");
+
+    work_get_param(w, "sample_frames", probe, sizeof probe);
+    CHECK(atoi(probe) == frames, "committed %s frames, played %d", probe, frames);
+    work_get_param(w, "sample_name", probe, sizeof probe);
+    CHECK(strcmp(probe, "LIVE") == 0, "recording named \"%s\"", probe);
+
+    /* Play it back and compare SHAPE against the ramp that went in, the same
+     * way test_sample_transfer checks an upload — the engine exposes no
+     * pointer to the buffer and this file has never added one.
+     *
+     * What this really guards: work_fx.c passes ONE buffer as both in and out,
+     * so a tap taken after the render loop began writing would record this
+     * module's own output instead of the signal that arrived. That reads as a
+     * recording which is silent, or which is the previous take. */
+    set_stage(w, WORK_STAGE_SRC, WORK_FX_ONESHOT);
+    work_set_param(w, "src_p1", "64");   /* TUNE unity */
+    work_set_param(w, "src_p2", "0");    /* START      */
+    work_set_param(w, "src_p3", "127");  /* LENGTH     */
+    work_set_param(w, "src_p4", "0");    /* LOOP off   */
+    work_set_param(w, "src_p5", "0");    /* ATK        */
+    work_set_param(w, "src_p6", "127");  /* DEC        */
+    work_set_param(w, "src_p7", "127");  /* LEV        */
+    work_set_param(w, "src_p8", "64");   /* PAN centre */
+    work_set_param(w, "mix", "127");
+    work_set_param(w, "fx2", "0");
+
+    uint8_t note_on[3] = { 0x90, 60, 100 };
+    work_on_midi(w, note_on, 3, 2);
+
+    int16_t silent[BLOCK * 2] = {0}, out[BLOCK * 2];
+    work_process(w, silent, out, BLOCK);
+
+    /* Start at 33 for the same reason as the upload test: even at ATK 0 the
+     * attack lasts ~22 frames and a rising envelope over a falling sample
+     * inverts the comparison while it runs. */
+    int matched = 0, tested = 0;
+    for (int i = 33; i < 96; ++i) {
+        int src_up = pcm[i * 2] > pcm[(i - 1) * 2];
+        int out_up = out[i * 2] > out[(i - 1) * 2];
+        if (src_up == out_up) matched++;
+        tested++;
+    }
+    CHECK(matched >= tested - 2, "the recording followed the input ramp in only "
+          "%d of %d steps — the tap is misaligned or reading the output buffer",
+          matched, tested);
+
+    work_destroy(w);
+}
+
+/* Recording is independent of `monitor`, and this is the test that pins the
+ * TAP PLACEMENT.
+ *
+ * `monitor` 0 zeroes in_gain, which in Work mutes at the INPUT — so the output
+ * is silence while the raw hardware input still carries signal. A tap taken
+ * from the output buffer, or from anywhere after the render loop has begun
+ * (work_fx.c passes ONE buffer as both in and out), therefore records silence
+ * here while recording perfectly under the default all-Bypass chain, where
+ * out == in and the bug is invisible.
+ *
+ * It is also the behaviour users want: sampling the mic WITHOUT monitoring it
+ * is how you avoid the feedback loop in the first place. */
+static void test_sample_record_ignores_monitor(void) {
+    printf("recording captures the raw input even with monitoring off\n");
+    work_t *w = work_create(&host);
+
+    work_set_param(w, "monitor", "0");
+
+    const int frames = BLOCK * 4;
+    static int16_t pcm[BLOCK * 4 * 2];
+    make_ramp(pcm, frames);
+
+    static int16_t io[BLOCK * 2];
+    work_set_param(w, "sample_rec", "1");
+    for (int b = 0; b < 4; ++b) {
+        memcpy(io, pcm + b * BLOCK * 2, BLOCK * 2 * sizeof(int16_t));
+        work_process(w, io, io, BLOCK);
+        /* With monitoring off the OUTPUT is silent — that is the point. */
+        if (b == 0) {
+            long opeak = 0;
+            for (int i = 0; i < BLOCK * 2; ++i) {
+                long a = io[i] < 0 ? -io[i] : io[i];
+                if (a > opeak) opeak = a;
+            }
+            CHECK(opeak == 0, "monitor 0 still passed audio to the output "
+                  "(peak %ld) — this test proves nothing if it does", opeak);
+        }
+    }
+    work_set_param(w, "sample_rec", "0");
+
+    char probe[64];
+    work_get_param(w, "sample_frames", probe, sizeof probe);
+    CHECK(atoi(probe) == frames, "committed %s frames with monitoring off, "
+          "played %d", probe, frames);
+
+    /* Play it back with monitoring restored: silence here means the tap read
+     * the muted OUTPUT rather than the live input. */
+    work_set_param(w, "monitor", "1");
+    set_stage(w, WORK_STAGE_SRC, WORK_FX_ONESHOT);
+    work_set_param(w, "src_p1", "64");
+    work_set_param(w, "src_p2", "0");
+    work_set_param(w, "src_p3", "127");
+    work_set_param(w, "src_p5", "0");
+    work_set_param(w, "src_p7", "127");
+    work_set_param(w, "src_p8", "64");
+    work_set_param(w, "mix", "127");
+
+    uint8_t on[3] = { 0x90, 60, 100 };
+    work_on_midi(w, on, 3, 2);
+
+    long peak = 0;
+    for (int b = 0; b < 8; ++b) {
+        int16_t silent[BLOCK * 2] = {0}, out[BLOCK * 2];
+        work_process(w, silent, out, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) {
+            long a = out[i] < 0 ? -out[i] : out[i];
+            if (a > peak) peak = a;
+        }
+    }
+    CHECK(peak > 500, "the take recorded with monitoring off plays back silent "
+          "(peak %ld) — the tap is reading the output buffer, not the input",
+          peak);
+    work_destroy(w);
+}
+
+/* A take that runs past the buffer stops and commits at the ceiling rather
+ * than wrapping, and cannot write past it. ASan is the real assertion here. */
+static void test_sample_record_ceiling(void) {
+    printf("a recording stops at the buffer ceiling instead of wrapping\n");
+    work_t *w = work_create(&host);
+
+    static int16_t io[BLOCK * 2];
+    for (int i = 0; i < BLOCK * 2; ++i) io[i] = (int16_t)(i % 1000);
+
+    work_set_param(w, "sample_rec", "1");
+    char probe[64];
+    work_get_param(w, "sample_max", probe, sizeof probe);
+    const int cap = atoi(probe);
+
+    /* Deliberately overrun: enough blocks for the whole buffer plus 50 more. */
+    for (int b = 0; b < cap / BLOCK + 50; ++b) work_process(w, io, io, BLOCK);
+
+    work_get_param(w, "sample_rec", probe, sizeof probe);
+    CHECK(atoi(probe) == 0, "sample_rec is still %s after the buffer filled — "
+          "it must disarm itself", probe);
+    work_get_param(w, "sample_frames", probe, sizeof probe);
+    CHECK(atoi(probe) == cap, "committed %s frames, capacity is %d", probe, cap);
+    work_get_param(w, "sample_fill", probe, sizeof probe);
+    CHECK(atoi(probe) == cap, "sample_fill ran to %s past a capacity of %d",
+          probe, cap);
+
+    work_destroy(w);
+}
+
+/* Clearing mid-take stops it. Otherwise the recorder keeps filling a buffer
+ * the user just emptied and commits it on release. */
+static void test_sample_clear_stops_recording(void) {
+    printf("sample_clear mid-take stops the recording\n");
+    work_t *w = work_create(&host);
+    static int16_t io[BLOCK * 2];
+    for (int i = 0; i < BLOCK * 2; ++i) io[i] = 1000;
+
+    work_set_param(w, "sample_rec", "1");
+    work_process(w, io, io, BLOCK);
+    work_set_param(w, "sample_clear", "1");
+
+    char probe[64];
+    work_get_param(w, "sample_rec", probe, sizeof probe);
+    CHECK(atoi(probe) == 0, "sample_clear left sample_rec at %s", probe);
+
+    work_process(w, io, io, BLOCK);
+    work_get_param(w, "sample_fill", probe, sizeof probe);
+    CHECK(atoi(probe) == 0, "still recording after a clear: fill = %s", probe);
+    work_destroy(w);
+}
+
+/* The point of the feature: record the live input, then PLAY it from a source
+ * machine. Everything above proves bytes move; this proves you get an
+ * instrument out of it. */
+static void test_recorded_audio_plays_from_a_source(void) {
+    printf("a recorded take plays back from a source machine\n");
+    work_t *w = work_create(&host);
+
+    static int16_t io[BLOCK * 2];
+
+    /* Record a second of loud tone. */
+    work_set_param(w, "sample_rec", "1");
+    int phase = 0;
+    for (int b = 0; b < 100; ++b) {
+        for (int i = 0; i < BLOCK; ++i, ++phase) {
+            int16_t v = (int16_t)((phase % 64 < 32) ? 12000 : -12000);
+            io[i * 2] = v; io[i * 2 + 1] = v;
+        }
+        work_process(w, io, io, BLOCK);
+    }
+    work_set_param(w, "sample_rec", "0");
+
+    char probe[64];
+    work_get_param(w, "sample_frames", probe, sizeof probe);
+    CHECK(atoi(probe) > 0, "nothing was recorded");
+
+    /* One Shot on the source stage, fired by a trig. Silence here would mean
+     * the recording is committed but unreachable by the machines. */
+    set_stage(w, WORK_STAGE_SRC, WORK_FX_ONESHOT);
+    work_set_param(w, "src_p1", "64");    /* TUNE unity */
+    work_set_param(w, "src_p2", "0");     /* START      */
+    work_set_param(w, "src_p3", "127");   /* LENGTH     */
+
+    long peak = 0;
+    for (int b = 0; b < 40; ++b) {
+        memset(io, 0, sizeof io);          /* silent input: output is the sample */
+        if (b == 1) { uint8_t on[3] = { 0x90, 60, 100 }; work_on_midi(w, on, 3, 2); }
+        work_process(w, io, io, BLOCK);
+        for (int i = 0; i < BLOCK * 2; ++i) {
+            long a = io[i] < 0 ? -io[i] : io[i];
+            if (a > peak) peak = a;
+        }
+    }
+    CHECK(peak > 500, "a recorded take played back silent (peak %ld) — the "
+          "audio is in the buffer but the source machines cannot reach it", peak);
+    work_destroy(w);
+}
+
 static void test_sample_bounds(void) {
     printf("an oversized or malformed transfer cannot run past the buffer\n");
     work_t *w = work_create(&host);
@@ -3856,6 +4113,11 @@ int main(void) {
     test_trig_survives_a_machine_change();
     test_sample_transfer();
     test_sample_bounds();
+    test_sample_record();
+    test_sample_record_ignores_monitor();
+    test_sample_record_ceiling();
+    test_sample_clear_stops_recording();
+    test_recorded_audio_plays_from_a_source();
     test_one_shot();
 
     test_granulator_reads_the_sample();

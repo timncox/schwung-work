@@ -602,6 +602,14 @@ footer a{color:var(--rust)}
   <h3>Live recording</h3>
   <p><strong>Shift + Play</strong> arms it. With the sequencer running, turning a knob writes a parameter lock onto whichever step is playing and arms a trig there — the same path a MIDI CC takes, so an external controller records locks too. The play pad turns red while armed.</p>
 
+  <h3>Sampling the input</h3>
+
+  <p>The source machines play a sample, and one way to get a sample into them is to <strong>record it where you are</strong> rather than load a file. <code>sample_rec</code> &mdash; MIDI CC <code>67</code> &mdash; starts writing the incoming audio into the track&rsquo;s buffer; releasing it commits the take, and the source machines can play it immediately. Eight seconds, and it stops and commits itself at the ceiling rather than wrapping.</p>
+
+  <p>Two things follow from where the recorder taps, and both are deliberate. It reads the input <em>before</em> the module touches it, so <strong>recording works with monitoring off</strong> &mdash; which is how you sample a microphone without putting it into a feedback loop. And it works with a source machine already loaded, even though that machine removes the live input from the signal path: recording and hearing are different questions.</p>
+
+  <p class="note">A recorded take is <strong>not saved with a preset</strong>. Presets remember a sample by its file path so the editor can reload it, and a recording has no file. Reload a patch that used one and its source machines come back empty.</p>
+
   <h3>Probability</h3>
   <p>Every step carries its own probability, 1&ndash;100, <em>separate</em> from its trig condition &mdash; both gates must pass. Shift + the pattern-page pad selects probability mode, then hold a step and turn the jog.</p>
 
@@ -631,6 +639,7 @@ footer a{color:var(--rust)}
       <tr><td><code>48</code> / <code>96</code></td><td>FX LFO 1 / 2, seven fields each</td></tr>
       <tr><td><code>56&ndash;60</code></td><td>modulation envelope</td></tr>
       <tr><td><code>64</code> / <code>65</code> / <code>66</code></td><td>sequencer, fill, live record</td></tr>
+      <tr><td><code>67</code></td><td>sample record &mdash; &ge;64 starts capturing the input, &lt;64 commits the take</td></tr>
       <tr><td><code>80&ndash;87</code> / <code>88</code></td><td>source parameters A&ndash;H, source machine</td></tr>
     </tbody>
   </table>
