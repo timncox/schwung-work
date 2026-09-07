@@ -595,6 +595,94 @@ async function testMachineChangeDropsStaleValues() {
           `machine's labels: ${survived.join(',')} in ${shown.join('|')}`);
 }
 
+/* The SAMPLE page: lists the device's WAVs, loads the one under the cursor
+ * through the REAL codec and transfer, and then lets the ENGINE say what
+ * landed rather than trusting its own side of the send.
+ *
+ * The WAV is built by hand here — a 16-bit mono RIFF with a 100-frame data
+ * chunk — so this exercises parseWav's chunk walk and mono-to-stereo
+ * expansion on bytes that never touched a mock. */
+async function testSamplePageLoadsAFileFromTheDevice() {
+    console.log('the SAMPLE page lists device WAVs, loads one, and lets the engine report it');
+    const ctx = await loadUI();
+
+    /* A planted filesystem, answering the [names, errno] tuple like the real
+     * os.readdir — a directory lists, a file answers ENOTDIR (20). */
+    ctx.host.__vfs = { readdir(p) {
+        if (p === '/data/UserData/UserLibrary/Samples')     return [['.', '..', 'kick.wav', 'sub'], 0];
+        if (p === '/data/UserData/UserLibrary/Samples/sub') return [['snare.wav'], 0];
+        if (p === '/data/UserData/UserLibrary/Recordings')  return [[], 0];
+        return [[], 20];
+    } };
+
+    const frames = 100;
+    const le16 = (n) => [n & 255, (n >> 8) & 255];
+    const le32 = (n) => [n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >>> 24) & 255];
+    const tag  = (t) => [...t].map((c) => c.charCodeAt(0));
+    const data = [];
+    for (let i = 0; i < frames; i++) data.push(...le16((i * 300) & 0xFFFF));
+    const wav = [...tag('RIFF'), ...le32(36 + data.length), ...tag('WAVE'),
+                 ...tag('fmt '), ...le32(16), ...le16(1), ...le16(1), ...le32(44100),
+                 ...le32(88200), ...le16(2), ...le16(16),
+                 ...tag('data'), ...le32(data.length), ...data];
+    const b64 = Buffer.from(wav).toString('base64');
+    ctx.host.host_read_file_base64 = (p) => (/\.wav$/.test(p) ? b64 : null);
+
+    ctx.host.init();
+    settle(ctx, 40);
+
+    /* One jog backwards from MACHINES wraps to the last page: SAMPLE. */
+    ctx.host.onMidiMessageInternal(cc(JOG, 127));
+    settle(ctx, 40);
+    const shown = () => ctx.screen.map((p) => `${p.text}`);
+    check(shown().some((t) => t.includes('SAMPLE')), `not on the SAMPLE page: ${shown()}`);
+    check(shown().some((t) => t.includes('kick')),
+          `the first device WAV is not under the cursor: ${shown()}`);
+    check(shown().some((t) => t === '1/2'),
+          `the walk did not find both WAVs (kick at the top, snare one level down): ${shown()}`);
+
+    /* Click loads. The transfer must be begin -> chunks -> end, carry the
+     * frame count and name, and record the path for presets. */
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(3, 127));               /* jog click */
+    const keys = ctx.writes.map((w) => w.key);
+    check(keys[0] === 'sample_begin', `the transfer did not start with sample_begin: ${keys}`);
+    check(keys.includes('sample_chunk') && keys.includes('sample_end'),
+          `the transfer is missing chunk or end: ${keys}`);
+    check(keys.indexOf('sample_end') > keys.lastIndexOf('sample_chunk'),
+          'sample_end was written before the last chunk');
+    const begin = ctx.writes.find((w) => w.key === 'sample_begin');
+    check(begin && `${begin.val}`.startsWith(`${frames}:kick`),
+          `sample_begin carried "${begin && begin.val}", expected "${frames}:kick"`);
+    check(ctx.writes.some((w) => w.key === 'sample_path' && `${w.val}`.endsWith('/kick.wav')),
+          'the file path was not recorded for presets');
+
+    /* The ENGINE is the authority on what landed. After the send the UI must
+     * ask, not assume — the mock now answers as a real engine would. */
+    ctx.store.sample_frames = `${frames}`;
+    ctx.store.sample_name = 'kick';
+    ctx.reads.length = 0;
+    settle(ctx, 60);
+    check(ctx.reads.includes('sample_frames') && ctx.reads.includes('sample_name'),
+          'after a send the UI never asked the engine what it is holding');
+    check(shown().some((t) => t === 'kick'), `the engine's name is not on screen: ${shown()}`);
+    check(shown().some((t) => t === '0.0s'), `the engine's length is not on screen: ${shown()}`);
+
+    /* Knob 1 is REC and writes the real parameter; knob 2 is the cursor and
+     * writes nothing at all. */
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(KNOB1, 1));
+    const rec = ctx.writes.find((w) => w.key === 'sample_rec');
+    check(rec && `${rec.val}` === '1', `knob 1 did not arm sample_rec (${rec && rec.val})`);
+
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(KNOB1 + 1, 1));
+    check(ctx.writes.length === 0, `the file cursor wrote to the engine: ${ctx.writes.map((w) => w.key)}`);
+    /* The screen repaints on tick, not on the event. */
+    ctx.host.tick();
+    check(shown().some((t) => t.includes('snare')), `the cursor did not move to the next file: ${shown()}`);
+}
+
 /* Turn the jog with SHIFT held — the chain editor's track control. */
 const SHIFT = 49;
 function jogTrack(ctx, dir) {
@@ -770,6 +858,7 @@ const TESTS = [
     testMachineNamesAreNotTruncatedToSixChars,
     testMachineChangeRefreshesLabels,
     testMachineChangeDropsStaleValues,
+    testSamplePageLoadsAFileFromTheDevice,
     testTrackJogFollowsTheEngine,
     testTrackChangeInvalidatesTheWholeMirror,
     testEveryWrittenKeyIsAccepted

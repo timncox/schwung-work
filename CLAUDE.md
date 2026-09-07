@@ -621,16 +621,31 @@ v0.4.3 shape exactly. Both halves are tested: `host_sim` asserts `rui_poll`
 moves at the ceiling, and the overtake harness asserts the button follows an
 arm it did not make.
 
-**The chain slot has CC only.** In a slot editor Move firmware keeps the pad
-grid AND the Sample/Capture buttons, so `ui_chain.js` gets screen, knobs, jog
-and Back. CC 67 works there today via an external controller; a native gesture
-would need a SAMPLE page, since the MACHINES scalar row is full.
+**The chain slot has a SAMPLE page** — the ninth and last, one jog back from
+MACHINES. Knob 1 is REC (`sample_rec`, the same parameter CC 67 writes, so it
+earns a knob honestly: the knob mirrors engine state and the refresh brings it
+back to Off when the engine disarms at the ceiling). Knob 2 is the file cursor
+— LOCAL, it writes nothing, and it deliberately has no descriptor in `PAGES`
+because the round-robin refresh would otherwise ask the engine for a key it
+does not serve. Jog click on that page loads the file under the cursor; on
+every other page it still goes home. The file list is scanned on ENTERING the
+page (`listSamples()`, filesystem only), never per tick.
 
-**Browsing device samples is Overwork-only.** It scans
-`UserLibrary/Samples` and `/Recordings` to depth 4. `ui_chain.js` has none of
-that machinery, and duplicating the WAV parse and base64 into it would be the
-second copy this codebase keeps getting burned by — extract to a shared module
-first.
+The load is the one deliberately blocking gesture in `ui_chain.js`, and it
+still keeps the file's two rules: it does not READ from the engine on the way
+in (`sample_max` comes from the mirror), and it does not claim success from
+its own side — it drops its copies of name and length and arms a burst, so
+what the screen shows afterwards is what the engine actually holds. The
+harness test plants a hand-built 16-bit mono RIFF and asserts the UI re-reads
+`sample_frames`/`sample_name` after the send; it goes red if the re-read is
+removed.
+
+**Sample I/O is ONE module, `src/sample_io.mjs`,** imported relatively by both
+UIs and shipped beside each by `build.sh`. Relative because the two chain
+builds live in different directories; it works because schwung evaluates a UI
+as `<path>#N` and QuickJS's default normaliser resolves `./x` against
+everything before the last `/`. Both harnesses link the REAL file — the codec
+is what a load exercises, and a mock of it passes with the real one broken.
 
 ## Verification
 
