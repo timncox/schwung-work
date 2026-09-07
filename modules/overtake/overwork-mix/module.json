@@ -2,7 +2,7 @@
   "id": "overwork-mix",
   "name": "Overwork Mix",
   "abbrev": "OVMX",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Overwork fed by what the Move is playing: granulate, sample and sequence the mix itself",
   "dsp": "dsp.so",
   "ui": "ui.js",
