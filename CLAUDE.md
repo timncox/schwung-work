@@ -368,6 +368,14 @@ tool. It was recorded as working earlier the same day, against whichever host
 happened to be installed then — so read that as describing one build, not the
 contract. Open Overwork by hand (Shift+Vol+Jog Click -> Tools) before the suite.
 
+**Corrected 2026-09-06: on stock schwung 1.2.0 `set_open_tool` WORKS.** Upstream
+#190 (merged 2026-08-18) is what fixed it, so the note above described a
+pre-#190 build. Verified on Tim's Move: `bus.set_open_tool('overwork')` took
+`overtake_mode` 0 -> 2 and Overwork drew, with no hands on the device. That is
+also how the relative `./sample_io.mjs` import was proven to resolve on the
+device, and how the Sample button and the browser were driven end to end
+(injected CC 118; injected Shift + note 70 listed 102 real WAVs).
+
 Two ways to misread the daemon's state, both of which cost time today:
 
 - `pgrep -f schwung-testd` **over SSH matches its own command line** and
@@ -568,6 +576,84 @@ MIDI FX (`docs/MODULES.md`, "Remote UI Custom HTML"). The page would need to
 learn the `fx1:` / `fx2:` prefixes; today `src/web_ui.html` only recognises
 `overtake_dsp:` and `synth:`, so it is shipped with `work-in` and `overwork`
 only. That is unfinished work, not a constraint.
+
+### Recording the live input into a source
+
+`sample_rec` (MIDI CC 67) writes the hardware input into the track's sample
+buffer; releasing it commits the take, exactly as `sample_end` does for an
+upload. Two decisions are load-bearing:
+
+**The tap is the FIRST thing in `work_process`, before the render loop.** It
+has to be. `work_fx.c` passes ONE buffer as both `in` and `out`, so anything
+read from `in` after the loop has begun writing is this module's own output.
+That bug is invisible under the default all-Bypass chain, where `out == in` —
+which is why `test_sample_record_ignores_monitor` exists rather than only the
+byte-alignment test. It records with `monitor 0`, where the output is silent
+and the raw input is not, and fails if the tap has drifted downstream. It was
+verified red against a tap moved to the end of `work_process`.
+
+**It reads `in` RAW, before `in_gain`.** Both things that zero `in_gain` are
+about the SIGNAL PATH, not about what may be sampled: `monitor` 0 breaks a
+feedback loop while tails ring out, and a source machine in slot 1 removes the
+input structurally. Recording through either is the point — sampling a mic
+without monitoring it is how you avoid the feedback, and a sampler in slot 1 is
+exactly when you want to record. Note this differs from Smack, whose `monitor`
+mutes at the OUTPUT.
+
+`sample_rec` is per TRACK, beside `sample_fill`, so changing the selected track
+mid-take cannot redirect the recording into another track's buffer. Arming
+zeroes `sample_frames` (an upload deliberately does not — it is UI-paced and
+its old sample stays playable until the new one is whole; a recording
+overwrites at audio rate under a voice that may be reading). `sample_clear`
+mid-take stops it.
+
+**A take is transient.** It is absent from the `state` blob on purpose: presets
+remember a sample by `sample_path` and a recording has no file, so a reloaded
+preset comes back empty. Persisting one means WAV export, which needs chunked
+readback through the 16 KB `get_param` ceiling — real work, deliberately not
+folded in here.
+
+**The gesture is the Move's own SAMPLE button (CC 118), in Overwork.** Press
+to start, press again to commit; its RGB LED goes red while running. That
+button rather than a pad because the hardware already labels it for this, and
+in overtake the module owns the whole surface. schwung claims only SHIFT +
+Capture (skipback) — a different button and a different modifier, so nothing
+collides. Not hold-to-record: a take runs to eight seconds and holding a button
+that long is the wrong ergonomics.
+
+The UI FOLLOWS the engine rather than its own flag, because the engine disarms
+itself at the ceiling. `sample_rec` is in `SCALAR_KEYS` and the commit bumps
+`rui_rev`, which is what makes `fetchAll` notice. Without that the button stays
+lit over a take that stopped and the next press reads as "stop" — the Mono
+v0.4.3 shape exactly. Both halves are tested: `host_sim` asserts `rui_poll`
+moves at the ceiling, and the overtake harness asserts the button follows an
+arm it did not make.
+
+**The chain slot has a SAMPLE page** — the ninth and last, one jog back from
+MACHINES. Knob 1 is REC (`sample_rec`, the same parameter CC 67 writes, so it
+earns a knob honestly: the knob mirrors engine state and the refresh brings it
+back to Off when the engine disarms at the ceiling). Knob 2 is the file cursor
+— LOCAL, it writes nothing, and it deliberately has no descriptor in `PAGES`
+because the round-robin refresh would otherwise ask the engine for a key it
+does not serve. Jog click on that page loads the file under the cursor; on
+every other page it still goes home. The file list is scanned on ENTERING the
+page (`listSamples()`, filesystem only), never per tick.
+
+The load is the one deliberately blocking gesture in `ui_chain.js`, and it
+still keeps the file's two rules: it does not READ from the engine on the way
+in (`sample_max` comes from the mirror), and it does not claim success from
+its own side — it drops its copies of name and length and arms a burst, so
+what the screen shows afterwards is what the engine actually holds. The
+harness test plants a hand-built 16-bit mono RIFF and asserts the UI re-reads
+`sample_frames`/`sample_name` after the send; it goes red if the re-read is
+removed.
+
+**Sample I/O is ONE module, `src/sample_io.mjs`,** imported relatively by both
+UIs and shipped beside each by `build.sh`. Relative because the two chain
+builds live in different directories; it works because schwung evaluates a UI
+as `<path>#N` and QuickJS's default normaliser resolves `./x` against
+everything before the last `/`. Both harnesses link the REAL file — the codec
+is what a load exercises, and a mock of it passes with the real one broken.
 
 ## Verification
 

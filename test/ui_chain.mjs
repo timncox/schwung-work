@@ -41,9 +41,14 @@ const codes = (t) => (t || '').split(',').map(Number).filter(Number.isFinite);
 const SRC_FAMILY = codes(contract.get.src_codes);
 const FX_FAMILY  = codes(contract.get.fx_codes);
 const STAGE_KEY  = ['src', 'fx1', 'fx2'];
-/* Pages: machines, one per stage, then the two LFOs. Derived, because a page
- * walk that stops one page short passes without ever seeing the last page. */
-const PAGE_COUNT = 1 + STAGE_KEY.length + 2;
+/* Pages: machines, one per stage, four LFOs, then SAMPLE. This must match the
+ * UI's ring or the page-walk guards (layout collisions, unaccepted writes)
+ * silently stop short — which is exactly what happened: it said "+ 2" while
+ * the UI had four LFO pages, so those guards never saw pages 7-8, and then
+ * not the SAMPLE page either. The count is asserted against the drawn "n/N"
+ * header in testPageCountMatchesTheUI so it cannot drift again. */
+const N_LFO_PAGES = 4;
+const PAGE_COUNT = 1 + STAGE_KEY.length + N_LFO_PAGES + 1;
 
 /* The longest machine name in a family — the case that catches truncation and
  * layout collisions. Named by length rather than by name, so a rename cannot
@@ -142,6 +147,24 @@ function makeHost() {
              * numbers whatever machine is loaded, a UI that never invalidates
              * its mirror looks correct here and shows the previous machine's
              * values on hardware. That is the bug this models. */
+            /* A transfer commits on sample_end, as the engine does: the count
+             * and name declared by sample_begin become what the engine holds.
+             * Without this the mock keeps answering whatever was there before
+             * the load, and a UI that never re-reads looks identical to one
+             * that does. */
+            if (key === 'sample_begin') {
+                const m = /^(\d+)(?::(.*))?$/.exec(`${val}`);
+                store.__pending = m ? { frames: m[1], name: m[2] || '' } : null;
+                return;
+            }
+            if (key === 'sample_end') {
+                if (store.__pending) {
+                    store.sample_frames = store.__pending.frames;
+                    store.sample_name   = store.__pending.name;
+                }
+                return;
+            }
+            if (key === 'sample_chunk') return;
             const stage = STAGE_KEY.indexOf(key);
             if (stage >= 0) {
                 const dst = slotFor(curTrack());
@@ -190,6 +213,16 @@ const STUBS = {
         export function announce(){}
         export function announceParameter(){}
         export function announceView(){}
+    `,
+    /* The chain UI reaches the filesystem only through the shared sample
+     * module. Answers a [names, errno] TUPLE, like the real os.readdir, and
+     * defers to a test-installed vfs when one exists so a browsing test can
+     * plant files; with none, every path is an empty directory. */
+    'os': `
+        export function readdir(p){
+            const v = globalThis.__vfs;
+            return (v && v.readdir) ? v.readdir(p) : [[], 0];
+        }
     `
 };
 
@@ -200,10 +233,26 @@ async function loadUI(seed) {
     const src = fs.readFileSync(path.join(root, 'src/ui_chain.js'), 'utf8');
 
     const mod = new vm.SourceTextModule(src, { context, identifier: 'ui_chain.js' });
-    await mod.link(async (spec) => {
+    /* `./sample_io.mjs` is REAL source, not a stub — the codec and WAV parser
+     * are what a load exercises, and a mock of them passes with the real one
+     * broken. It imports 'os', the one nested import allowed. */
+    const stubModule = (spec) => {
         const code = STUBS[spec];
         if (!code) throw new Error(`unexpected import: ${spec}`);
-        const m = new vm.SourceTextModule(code, { context, identifier: spec });
+        return new vm.SourceTextModule(code, { context, identifier: spec });
+    };
+    await mod.link(async (spec) => {
+        if (spec === './sample_io.mjs') {
+            const shared = fs.readFileSync(path.join(root, 'src/sample_io.mjs'), 'utf8');
+            const m = new vm.SourceTextModule(shared, { context, identifier: spec });
+            await m.link(async (inner) => {
+                const im = stubModule(inner);
+                await im.link(() => { throw new Error('nested import'); });
+                return im;
+            });
+            return m;
+        }
+        const m = stubModule(spec);
         await m.link(() => { throw new Error('nested import'); });
         return m;
     });
@@ -569,6 +618,123 @@ async function testMachineChangeDropsStaleValues() {
           `machine's labels: ${survived.join(',')} in ${shown.join('|')}`);
 }
 
+/* The SAMPLE page: lists the device's WAVs, loads the one under the cursor
+ * through the REAL codec and transfer, and then lets the ENGINE say what
+ * landed rather than trusting its own side of the send.
+ *
+ * The WAV is built by hand here — a 16-bit mono RIFF with a 100-frame data
+ * chunk — so this exercises parseWav's chunk walk and mono-to-stereo
+ * expansion on bytes that never touched a mock. */
+async function testSamplePageLoadsAFileFromTheDevice() {
+    console.log('the SAMPLE page lists device WAVs, loads one, and lets the engine report it');
+    const ctx = await loadUI();
+
+    /* A planted filesystem, answering the [names, errno] tuple like the real
+     * os.readdir — a directory lists, a file answers ENOTDIR (20). */
+    ctx.host.__vfs = { readdir(p) {
+        if (p === '/data/UserData/UserLibrary/Samples')     return [['.', '..', 'kick.wav', 'sub'], 0];
+        if (p === '/data/UserData/UserLibrary/Samples/sub') return [['snare.wav'], 0];
+        if (p === '/data/UserData/UserLibrary/Recordings')  return [[], 0];
+        return [[], 20];
+    } };
+
+    const frames = 100;
+    const le16 = (n) => [n & 255, (n >> 8) & 255];
+    const le32 = (n) => [n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >>> 24) & 255];
+    const tag  = (t) => [...t].map((c) => c.charCodeAt(0));
+    const data = [];
+    for (let i = 0; i < frames; i++) data.push(...le16((i * 300) & 0xFFFF));
+    const wav = [...tag('RIFF'), ...le32(36 + data.length), ...tag('WAVE'),
+                 ...tag('fmt '), ...le32(16), ...le16(1), ...le16(1), ...le32(44100),
+                 ...le32(88200), ...le16(2), ...le16(16),
+                 ...tag('data'), ...le32(data.length), ...data];
+    const b64 = Buffer.from(wav).toString('base64');
+    ctx.host.host_read_file_base64 = (p) => (/\.wav$/.test(p) ? b64 : null);
+
+    /* A PREVIOUS sample is loaded before we start. The load's job is to stop
+     * showing this one the moment the send goes out — not to keep printing
+     * "old, 0.1s" under a file called kick until the trickle catches up. */
+    ctx.store.sample_frames = '5000';
+    ctx.store.sample_name = 'old';
+
+    ctx.host.init();
+    settle(ctx, 40);
+
+    /* One jog backwards from MACHINES wraps to the last page: SAMPLE. */
+    ctx.host.onMidiMessageInternal(cc(JOG, 127));
+    settle(ctx, 40);
+    const shown = () => ctx.screen.map((p) => `${p.text}`);
+    check(shown().some((t) => t.includes('SAMPLE')), `not on the SAMPLE page: ${shown()}`);
+    check(shown().some((t) => t === 'old') && shown().some((t) => t === '0.1s'),
+          `the previous sample is not on screen before the load — the test proves nothing: ${shown()}`);
+    check(shown().some((t) => t.includes('kick')),
+          `the first device WAV is not under the cursor: ${shown()}`);
+    check(shown().some((t) => t === '1/2'),
+          `the walk did not find both WAVs (kick at the top, snare one level down): ${shown()}`);
+
+    /* Click loads. The transfer must be begin -> chunks -> end, carry the
+     * frame count and name, and record the path for presets. */
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(3, 127));               /* jog click */
+    const keys = ctx.writes.map((w) => w.key);
+    check(keys[0] === 'sample_begin', `the transfer did not start with sample_begin: ${keys}`);
+    check(keys.includes('sample_chunk') && keys.includes('sample_end'),
+          `the transfer is missing chunk or end: ${keys}`);
+    check(keys.indexOf('sample_end') > keys.lastIndexOf('sample_chunk'),
+          'sample_end was written before the last chunk');
+    const begin = ctx.writes.find((w) => w.key === 'sample_begin');
+    check(begin && `${begin.val}`.startsWith(`${frames}:kick`),
+          `sample_begin carried "${begin && begin.val}", expected "${frames}:kick"`);
+    check(ctx.writes.some((w) => w.key === 'sample_path' && `${w.val}`.endsWith('/kick.wav')),
+          'the file path was not recorded for presets');
+
+    /* THE TRANSIENT. One frame after the send, the previous sample must be
+     * gone from the screen — "--" is honest, "old, 0.1s" under a file called
+     * kick is a lie. A load that keeps its own copies passes every other
+     * check here, because the trickle refresh replaces them within a few
+     * dozen ticks; this is the only assertion that sees the difference. */
+    ctx.host.tick();
+    check(!shown().some((t) => t === 'old') && !shown().some((t) => t === '0.1s'),
+          `one frame after the send the previous sample is still on screen: ${shown()}`);
+
+    /* And then the ENGINE's answer — which the mock committed on sample_end,
+     * as the engine does — is what appears, because the UI asked. */
+    ctx.reads.length = 0;
+    settle(ctx, 60);
+    check(ctx.reads.includes('sample_frames') && ctx.reads.includes('sample_name'),
+          'after a send the UI never asked the engine what it is holding');
+    check(shown().some((t) => t === 'kick'), `the engine's name is not on screen: ${shown()}`);
+    check(shown().some((t) => t === '0.0s'), `the engine's length is not on screen: ${shown()}`);
+
+    /* Knob 1 is REC and writes the real parameter; knob 2 is the cursor and
+     * writes nothing at all. */
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(KNOB1, 1));
+    const rec = ctx.writes.find((w) => w.key === 'sample_rec');
+    check(rec && `${rec.val}` === '1', `knob 1 did not arm sample_rec (${rec && rec.val})`);
+
+    ctx.writes.length = 0;
+    ctx.host.onMidiMessageInternal(cc(KNOB1 + 1, 1));
+    check(ctx.writes.length === 0, `the file cursor wrote to the engine: ${ctx.writes.map((w) => w.key)}`);
+    /* The screen repaints on tick, not on the event. */
+    ctx.host.tick();
+    check(shown().some((t) => t.includes('snare')), `the cursor did not move to the next file: ${shown()}`);
+}
+
+/* The harness's page count versus the UI's: the header prints "n/N" on every
+ * page, so N is observable and this pins it. */
+async function testPageCountMatchesTheUI() {
+    console.log('the harness walks every page the UI has');
+    const ctx = await loadUI();
+    ctx.host.init();
+    settle(ctx, 10);
+    const hdr = ctx.screen.map((p) => `${p.text}`).find((t) => /^\d+\/\d+$/.test(t));
+    check(!!hdr, 'no n/N page header on screen');
+    const n = hdr ? parseInt(hdr.split('/')[1], 10) : -1;
+    check(n === PAGE_COUNT, `the UI has ${n} pages; the harness walks ${PAGE_COUNT} — ` +
+          'the page-walk guards are skipping pages');
+}
+
 /* Turn the jog with SHIFT held — the chain editor's track control. */
 const SHIFT = 49;
 function jogTrack(ctx, dir) {
@@ -731,6 +897,7 @@ async function testGarbageMidiIsIgnored() {
 /* ---------------------------------------------------------------- runner */
 
 const TESTS = [
+    testPageCountMatchesTheUI,
     testInitIsCheapAndHonest,
     testGarbageMidiIsIgnored,
     testKnobHandlerNeverReads,
@@ -744,6 +911,7 @@ const TESTS = [
     testMachineNamesAreNotTruncatedToSixChars,
     testMachineChangeRefreshesLabels,
     testMachineChangeDropsStaleValues,
+    testSamplePageLoadsAFileFromTheDevice,
     testTrackJogFollowsTheEngine,
     testTrackChangeInvalidatesTheWholeMirror,
     testEveryWrittenKeyIsAccepted

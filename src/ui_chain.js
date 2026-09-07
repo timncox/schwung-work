@@ -55,6 +55,12 @@ import {
     announce, announceParameter, announceView
 } from '/data/UserData/schwung/shared/screen_reader.mjs';
 
+/* ONE copy of the codec, RIFF walker, browser walk and transfer, shared with
+ * the overtake UI. Relative on purpose: this file ships into two module
+ * directories and an absolute path could only serve one. */
+import { b64ToBytes, parseWav, sendSample, listSamples, sampleDisplayName }
+    from './sample_io.mjs';
+
 /* ------------------------------------------------------------------ pages */
 
 /* Stages, mirroring work_core.h: stage 0 is SRC, then the inserts. The engine
@@ -71,10 +77,14 @@ const PAGE_STAGE1   = 1;          /* stage N's page is PAGE_STAGE1 + N */
  * nothing branches on them; PAGES and PAGE_NAME carry their layout. Both are
  * derived from N_STAGES so a stage cannot be added without its page. */
 const N_LFOS        = 4;
-const PAGE_COUNT    = 1 + N_STAGES + N_LFOS;
+/* The sample page comes LAST, after the modulators, so the page ring reads
+ * machines -> stages -> modulation -> source material. From MACHINES one jog
+ * backwards lands on it, which is the short way there. */
+const PAGE_SAMPLE   = 1 + N_STAGES + N_LFOS;
+const PAGE_COUNT    = PAGE_SAMPLE + 1;
 
 const PAGE_NAME = ['MACHINES', ...STAGE_LABEL,
-                   'V.LFO 1', 'V.LFO 2', 'FX LFO 1', 'FX LFO 2'];
+                   'V.LFO 1', 'V.LFO 2', 'FX LFO 1', 'FX LFO 2', 'SAMPLE'];
 
 /* Which stage a page edits, or -1 for the machine and LFO pages. */
 function pageSlot(p) {
@@ -146,9 +156,21 @@ MACHINE_PAGE.push({ key: 'pan',   label: 'PAN', min: 0, max: 127, step: 1 });
  * track invalidates every value on screen, exactly as changing page does, so
  * it belongs with the navigation control rather than among the parameters. */
 
+/* The SAMPLE page has ONE engine knob. REC is a real parameter (sample_rec,
+ * the same thing CC 67 writes) so it earns a knob honestly: the knob mirrors
+ * engine state and the engine disarms itself at the buffer ceiling, and the
+ * background refresh is what brings the knob back to Off when it does. The
+ * file cursor is knob 2 but is NOT here — it is local, writes nothing, and a
+ * descriptor for it would have the refresh asking the engine for a key it
+ * does not serve. adjustKnob handles it before it reaches this table. */
+const SAMPLE_PAGE = [
+    { key: 'sample_rec', label: 'REC', min: 0, max: 1, step: 1 }
+];
+
 const PAGES = [MACHINE_PAGE];
 for (let s = 0; s < N_STAGES; s++) PAGES.push(FX_KNOBS(s));
 for (let i = 0; i < N_LFOS; i++) PAGES.push(LFO_KNOBS(i));
+PAGES.push(SAMPLE_PAGE);
 
 /* Is this key one of the machine selects? A chain of === comparisons is what
  * left slot 3 out of the label refresh when the slot was added. */
@@ -176,6 +198,19 @@ const REFRESH_PERIOD = 8;       /* ticks between trickle reads (~5.5/sec) */
 
 let refreshCursor = 0;
 let burst         = 0;
+
+/* The SAMPLE page. The file list is scanned on entering the page — filesystem
+ * work, not param round-trips, so it is cheap, but it happens on the gesture
+ * rather than every tick. Name and length come from the ENGINE, never from
+ * our own side of a transfer: the sample crosses shared memory to another
+ * process and only the far end knows whether it arrived. */
+let sampleFiles   = [];
+let fileIndex     = 0;
+let sampleName    = '';
+let sampleStatus  = '';
+/* One read per refresh step here too, rotated: the page's budget contract is
+ * the same as every other page's. */
+const SAMPLE_READS = ['sample_rec', 'sample_frames', 'sample_max', 'sample_name'];
 
 /* ------------------------------------------------------------- DSP access */
 
@@ -318,6 +353,19 @@ function refreshStep() {
         }
     }
 
+    if (page === PAGE_SAMPLE) {
+        const key = SAMPLE_READS[refreshCursor % SAMPLE_READS.length];
+        refreshCursor++;
+        if (key === 'sample_name') {
+            const s = readRaw(key);
+            const name = s === null ? '' : s;
+            if (name !== sampleName) { sampleName = name; needsRedraw = true; }
+        } else if (readNum(key)) {
+            needsRedraw = true;
+        }
+        return;
+    }
+
     const knobs = PAGES[page];
     if (knobs.length === 0) return;
     const k = knobs[refreshCursor % knobs.length];
@@ -366,6 +414,7 @@ function knobValue(i) {
     if (v === undefined) return '--';
 
     if (isMachineKey(k.key)) return machineList[v] || `#${v}`;
+    if (k.key === 'sample_rec') return v ? 'Rec' : 'Off';
     if (k.key.endsWith('_wave')) return WAVE_NAME[v % 7];
     if (k.key.endsWith('_trig')) return v ? 'Retrig' : 'Free';
     if (k.key.endsWith('_dest')) {
@@ -464,6 +513,36 @@ function drawGridPage() {
     }
 }
 
+/* The SAMPLE page. Three rows and a cursor: what is loaded, how long it is
+ * and whether it is recording, then the file under the cursor. All of the
+ * first two rows come from the engine's mirror; "--" is honest for unread. */
+function drawSamplePage() {
+    const frames = values.sample_frames;
+    const rec    = values.sample_rec;
+    const len    = frames === undefined ? '--'
+                 : frames > 0 ? `${(frames / 44100).toFixed(1)}s` : 'empty';
+    const recTxt = rec === undefined ? '--' : (rec ? 'REC' : 'off');
+
+    print(0, ROW_TOP, 'NAME', 1);
+    print(ROW_VALUE_X, ROW_TOP, fit(sampleName || '--', SCREEN_W - ROW_VALUE_X), 1);
+
+    print(0, ROW_TOP + ROW_STEP, 'LEN', 1);
+    print(ROW_VALUE_X, ROW_TOP + ROW_STEP, fit(len, 56), 1);
+    const rx = SCREEN_W - text_width(recTxt);
+    print(rx, ROW_TOP + ROW_STEP, recTxt, 1);
+
+    const y3 = ROW_TOP + 2 * ROW_STEP;
+    if (!sampleFiles.length) {
+        print(0, y3, fit('No WAVs on device', SCREEN_W), 1);
+    } else {
+        const cur = sampleDisplayName(sampleFiles[fileIndex]);
+        const pos = `${fileIndex + 1}/${sampleFiles.length}`;
+        print(0, y3, '>', 1);
+        print(8, y3, fit(cur, SCREEN_W - 8 - text_width(pos) - 4), 1);
+        print(SCREEN_W - text_width(pos), y3, pos, 1);
+    }
+}
+
 function drawUI() {
     clear_screen();
 
@@ -478,6 +557,13 @@ function drawUI() {
         drawHeader(`${trk}MACHINES`, `${page + 1}/${PAGE_COUNT}`);
         drawMachinePage();
         drawFooter(nTracks > 1 ? 'Jog:page  Shift+jog:track' : 'Jog: page');
+        return;
+    }
+
+    if (page === PAGE_SAMPLE) {
+        drawHeader(`${trk}SAMPLE`, `${page + 1}/${PAGE_COUNT}`);
+        drawSamplePage();
+        drawFooter(sampleStatus || 'K1:rec K2:file Click:load');
         return;
     }
 
@@ -506,6 +592,21 @@ function scaledMove(k, delta) {
 }
 
 function adjustKnob(i, delta) {
+    /* Knob 2 on the SAMPLE page moves the file cursor. Local, writes nothing,
+     * and handled before the table lookup because it has no descriptor —
+     * see SAMPLE_PAGE for why. */
+    if (page === PAGE_SAMPLE && i === 1) {
+        if (!sampleFiles.length) return;
+        let v = fileIndex + (delta > 0 ? 1 : -1);
+        if (v < 0) v = 0;
+        if (v >= sampleFiles.length) v = sampleFiles.length - 1;
+        if (v === fileIndex) return;
+        fileIndex = v;
+        announce(sampleDisplayName(sampleFiles[fileIndex]));
+        needsRedraw = true;
+        return;
+    }
+
     const k = PAGES[page][i];
     if (!k) return;
 
@@ -558,7 +659,55 @@ function adjustKnob(i, delta) {
     values[k.key] = v;
     host_module_set_param(k.key, `${v}`);
 
+    /* Arming a take zeroes the committed length in the engine, and
+     * committing one sets it. Either way what we hold is stale. */
+    if (k.key === 'sample_rec') {
+        delete values.sample_frames;
+        sampleName = '';
+        burst = BURST_READS;
+    }
+
     announceParameter(knobLabel(i) || k.label, knobValue(i));
+    needsRedraw = true;
+}
+
+/* Load the file under the cursor into the engine.
+ *
+ * This is the one deliberately blocking gesture in the file: reading and
+ * transferring a WAV takes a noticeable moment, and the jog click that asks
+ * for it is the right place to pay it. It still does not READ from the
+ * engine on the way in — sample_max comes from the mirror when the page has
+ * fetched it — and it does not claim success from our own side. The name and
+ * length on screen come from the engine after the transfer, or they do not,
+ * which is the truth. */
+function loadSelectedSample() {
+    const path = sampleFiles[fileIndex];
+    if (!path) { sampleStatus = 'No file selected'; needsRedraw = true; return; }
+    const name = sampleDisplayName(path);
+
+    sampleStatus = `Reading ${name}...`;
+    drawUI();
+    if (typeof host_flush_display === 'function') host_flush_display();
+
+    const b64 = typeof host_read_file_base64 === 'function'
+        ? host_read_file_base64(path) : null;
+    if (!b64) { sampleStatus = 'Could not read file'; announce(sampleStatus); needsRedraw = true; return; }
+
+    const wav = parseWav(b64ToBytes(`${b64}`));
+    if (!wav) { sampleStatus = 'Not a WAV this can read'; announce(sampleStatus); needsRedraw = true; return; }
+
+    const max = values.sample_max || 0;
+    sendSample(host_module_set_param, name, wav, max);
+    /* Where it came from, so a saved preset can find its audio again. */
+    host_module_set_param('sample_path', path);
+
+    /* The engine is the authority on what landed. Drop our copies and let
+     * the burst re-read them; the screen then shows what is really there. */
+    delete values.sample_frames;
+    sampleName = '';
+    burst = BURST_READS;
+    sampleStatus = `Sent ${name}`;
+    announce(sampleStatus);
     needsRedraw = true;
 }
 
@@ -572,6 +721,12 @@ function setPage(p) {
     let spoken = PAGE_NAME[page];
     const slot = pageSlot(page);
     if (slot >= 0) spoken = `FX ${slot + 1}, ${machineName[slot]}`;
+    if (page === PAGE_SAMPLE) {
+        sampleFiles = listSamples();
+        if (fileIndex >= sampleFiles.length) fileIndex = 0;
+        sampleStatus = '';
+        spoken = sampleFiles.length ? `Sample, ${sampleFiles.length} files` : 'Sample, no files';
+    }
     announceView(spoken);
     needsRedraw = true;
 }
@@ -645,6 +800,7 @@ function onMidiMessageInternal(data) {
             }
             return;
         }
+        if (page === PAGE_SAMPLE) { loadSelectedSample(); return; }
         setPage(PAGE_MACHINES);
         return;
     }
@@ -677,6 +833,10 @@ globalThis.init = function () {
     labelsDirty = [true, true, true];
     refreshCursor = 0;
     tickCount = 0;
+    sampleFiles = [];
+    fileIndex = 0;
+    sampleName = '';
+    sampleStatus = '';
 
     /* The machine list plus the three machine SELECTS — the values whose
      * absence would leave the first page reading "--" where a name belongs.

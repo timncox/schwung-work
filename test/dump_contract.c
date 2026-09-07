@@ -99,7 +99,10 @@ int main(void) {
         "menv_dest", "menv_atk", "menv_hold", "menv_dec", "menv_depth",
         "pattern", "page_mask", "song_on", "song_len", "song_pos", "undo_state",
         "vf_base", "vf_width", "vf_reso", "vf_env", "vf_atk", "vf_dec", "vf_track",
-        "monitor", "hw_input", "rui_poll"
+        "monitor", "hw_input", "rui_poll",
+        /* Live recording. sample_rec is the arm state; fill/max/frames are the
+         * progress, capacity and committed length a UI needs to draw a take. */
+        "sample_rec", "sample_fill", "sample_max", "sample_frames", "sample_name"
     };
     for (size_t i = 0; i < sizeof(simple) / sizeof(simple[0]); ++i) emit(w, simple[i]);
 
@@ -194,7 +197,7 @@ int main(void) {
         {"flfo2_mult", "8"}, {"flfo2_phase", "11"}, {"flfo2_depth", "40"}, {"flfo2_trig", "1"},
         {"vf_base", "40"}, {"vf_width", "50"}, {"vf_reso", "60"},
         {"vf_env", "70"}, {"vf_atk", "10"}, {"vf_dec", "20"}, {"vf_track", "80"},
-        {"live_rec", "1"}, {"menv_dest", "3"}, {"menv_atk", "20"}, {"menv_hold", "30"},
+        {"live_rec", "1"}, {"sample_rec", "1"}, {"menv_dest", "3"}, {"menv_atk", "20"}, {"menv_hold", "30"},
         {"menv_dec", "40"}, {"menv_depth", "90"}, {"prob5", "37"}, {"pattern", "3"}, {"page_mask", "7"}, {"song_on", "1"},
         {"song_len", "8"}, {"song_row2", "5:3:0"}, {"trigtype4", "1"},
         {"transform", "reverse"}, {"quantize", "127"}, {"monitor", "0"}, {"hw_input", "1"},

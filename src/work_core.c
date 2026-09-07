@@ -374,6 +374,11 @@ typedef struct {
     int                  sample_frames; /* committed length, 0 = empty       */
     int                  sample_fill;   /* frames written by the transfer    */
     int                  sample_declared; /* frames the transfer promised    */
+    /* Live recording. 1 = work_process is writing the hardware input into
+     * `sample` at `sample_fill`. Per TRACK, not global: the flag has to be
+     * bound to the buffer it fills, or changing the selected track mid-record
+     * would redirect the recording into another track's sample. */
+    uint8_t              sample_rec;
     char                 sample_name[32];
     /* Where the sample came from. The ENGINE never opens it — work_set_param
      * runs on the audio thread — it only carries the string so a preset can
@@ -3145,8 +3150,62 @@ static int machine_is_source(int machine) {
            machine == WORK_FX_SLICER || machine == WORK_FX_WAVESCAN;
 }
 
+/* Capture the hardware input into a recording track's sample buffer.
+ *
+ * FIRST thing in work_process, and that placement is load-bearing twice over:
+ *
+ *   1. `in` and `out` ALIAS in the audio_fx build — work_fx.c passes
+ *      `audio_inout` for both — so anything read from `in` after the render
+ *      loop has started writing is this module's own output, not the signal
+ *      that arrived.
+ *   2. It reads `in` RAW, before `in_gain`. Both of the things that zero
+ *      in_gain are about the SIGNAL PATH, not about what may be sampled:
+ *      `monitor` 0 breaks a feedback loop while tails ring out, and a source
+ *      machine in slot 1 removes the input structurally. Recording through
+ *      either is not a bug, it is the point — sampling the mic without
+ *      monitoring it is exactly how you avoid the feedback in the first
+ *      place, and a sampler in slot 1 is precisely when you want to record.
+ *
+ * A plain memcpy: same int16 interleaved layout at both ends, no conversion,
+ * and nothing here allocates or blocks. Stops and COMMITS itself at the buffer
+ * ceiling rather than wrapping — a recorder that silently overwrites its own
+ * start is a recorder you cannot trust the length of. */
+static void sample_record_block(work_t *w, const int16_t *in, int frames) {
+    for (int t = 0; t < WORK_TRACKS; ++t) {
+        work_track_t *tr = &w->trk[t];
+        if (!tr->sample_rec || !tr->sample) continue;
+
+        int room = WORK_SAMPLE_FRAMES - tr->sample_fill;
+        if (room <= 0) { tr->sample_rec = 0; continue; }
+
+        int n = frames < room ? frames : room;
+        memcpy(tr->sample + (size_t)tr->sample_fill * 2, in,
+               (size_t)n * 2 * sizeof(int16_t));
+        tr->sample_fill += n;
+
+        /* Full: commit and disarm, so the take is playable without the UI
+         * having to notice the ceiling. sample_end's exact move.
+         *
+         * Bump rui_rev with it. This is the ONE state change in the module
+         * that no write caused, so it is the one an editor cannot learn about
+         * by watching its own edits — every other path through
+         * work_set_param bumps the revision on the way in. Without this the
+         * SAMPLE button stays lit over a take that stopped seconds ago and the
+         * next press reads as "stop" instead of "start". Same shape as Mono's
+         * cc_revision: the surface has to follow the engine, not its own
+         * optimistic copy. */
+        if (tr->sample_fill >= WORK_SAMPLE_FRAMES) {
+            tr->sample_frames = tr->sample_fill;
+            tr->sample_rec = 0;
+            w->rui_rev++;
+        }
+    }
+}
+
 void work_process(work_t *w, const int16_t *in, int16_t *out, int frames) {
     if (!w || frames <= 0) return;
+
+    if (in) sample_record_block(w, in, frames);
 
     if (w->host && w->host->get_bpm && !w->clock_running) {
         float b = w->host->get_bpm();
@@ -3457,6 +3516,10 @@ static void cc_apply(work_t *w, int cc, int v) {
     if (cc == 64) { work_set_param(w, "seq_on",   v >= 64 ? "1" : "0"); return; }
     if (cc == 65) { work_set_param(w, "fill",     v >= 64 ? "1" : "0"); return; }
     if (cc == 66) { work_set_param(w, "live_rec", v >= 64 ? "1" : "0"); return; }
+    /* 67 sits next to 66 because they are the two "record" verbs and get
+     * confused otherwise: 66 records KNOB MOVES onto sequencer steps, 67
+     * records AUDIO into the sample buffer. */
+    if (cc == 67) { work_set_param(w, "sample_rec", v >= 64 ? "1" : "0"); return; }
 }
 
 /* Which note-ons may fire a voice.
@@ -4287,7 +4350,34 @@ void work_set_param(work_t *w, const char *key, const char *val) {
         TRK(w)->sample_path[n] = '\0';
         return;
     }
+    /* Live record: arm and commit, the same two moves as sample_begin and
+     * sample_end, so a recording and an upload leave the track in states that
+     * nothing downstream can tell apart.
+     *
+     * Arming zeroes sample_frames as well as sample_fill, which the UPLOAD
+     * path deliberately does not. An upload is UI-paced and its writes land
+     * between blocks, so leaving the old sample committed keeps it playable
+     * until the new one is whole. A recording writes from the audio thread
+     * into the same memory a voice may be reading this instant, so the old
+     * length has to stop being true the moment the overwrite begins. */
+    if (strcmp(key, "sample_rec") == 0) {
+        if (atoi(val)) {
+            TRK(w)->sample_frames   = 0;
+            TRK(w)->sample_fill     = 0;
+            TRK(w)->sample_declared = WORK_SAMPLE_FRAMES;
+            TRK(w)->sample_path[0]  = '\0';
+            snprintf(TRK(w)->sample_name, sizeof(TRK(w)->sample_name), "LIVE");
+            TRK(w)->sample_rec = 1;
+        } else if (TRK(w)->sample_rec) {
+            TRK(w)->sample_rec = 0;
+            TRK(w)->sample_frames = TRK(w)->sample_fill;
+        }
+        return;
+    }
     if (strcmp(key, "sample_clear") == 0) {
+        /* Clearing mid-take stops it. Otherwise the recorder would keep
+         * filling a buffer the user just emptied, and commit it on release. */
+        TRK(w)->sample_rec = 0;
         TRK(w)->sample_frames = 0;
         TRK(w)->sample_fill = 0;
         TRK(w)->sample_declared = 0;
@@ -5119,6 +5209,8 @@ int work_get_param(work_t *w, const char *key, char *buf, int buf_len) {
      * long it is, and how far a transfer has got. */
     if (strcmp(key, "sample_frames") == 0)
         return nclamp(snprintf(buf, buf_len, "%d", TRK(w)->sample_frames), cap);
+    if (strcmp(key, "sample_rec") == 0)
+        return nclamp(snprintf(buf, buf_len, "%d", TRK(w)->sample_rec), cap);
     if (strcmp(key, "sample_fill") == 0)
         return nclamp(snprintf(buf, buf_len, "%d", TRK(w)->sample_fill), cap);
     if (strcmp(key, "sample_max") == 0)
