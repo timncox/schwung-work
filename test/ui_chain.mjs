@@ -142,6 +142,24 @@ function makeHost() {
              * numbers whatever machine is loaded, a UI that never invalidates
              * its mirror looks correct here and shows the previous machine's
              * values on hardware. That is the bug this models. */
+            /* A transfer commits on sample_end, as the engine does: the count
+             * and name declared by sample_begin become what the engine holds.
+             * Without this the mock keeps answering whatever was there before
+             * the load, and a UI that never re-reads looks identical to one
+             * that does. */
+            if (key === 'sample_begin') {
+                const m = /^(\d+)(?::(.*))?$/.exec(`${val}`);
+                store.__pending = m ? { frames: m[1], name: m[2] || '' } : null;
+                return;
+            }
+            if (key === 'sample_end') {
+                if (store.__pending) {
+                    store.sample_frames = store.__pending.frames;
+                    store.sample_name   = store.__pending.name;
+                }
+                return;
+            }
+            if (key === 'sample_chunk') return;
             const stage = STAGE_KEY.indexOf(key);
             if (stage >= 0) {
                 const dst = slotFor(curTrack());
@@ -628,6 +646,12 @@ async function testSamplePageLoadsAFileFromTheDevice() {
     const b64 = Buffer.from(wav).toString('base64');
     ctx.host.host_read_file_base64 = (p) => (/\.wav$/.test(p) ? b64 : null);
 
+    /* A PREVIOUS sample is loaded before we start. The load's job is to stop
+     * showing this one the moment the send goes out — not to keep printing
+     * "old, 0.1s" under a file called kick until the trickle catches up. */
+    ctx.store.sample_frames = '5000';
+    ctx.store.sample_name = 'old';
+
     ctx.host.init();
     settle(ctx, 40);
 
@@ -636,6 +660,8 @@ async function testSamplePageLoadsAFileFromTheDevice() {
     settle(ctx, 40);
     const shown = () => ctx.screen.map((p) => `${p.text}`);
     check(shown().some((t) => t.includes('SAMPLE')), `not on the SAMPLE page: ${shown()}`);
+    check(shown().some((t) => t === 'old') && shown().some((t) => t === '0.1s'),
+          `the previous sample is not on screen before the load — the test proves nothing: ${shown()}`);
     check(shown().some((t) => t.includes('kick')),
           `the first device WAV is not under the cursor: ${shown()}`);
     check(shown().some((t) => t === '1/2'),
@@ -657,10 +683,17 @@ async function testSamplePageLoadsAFileFromTheDevice() {
     check(ctx.writes.some((w) => w.key === 'sample_path' && `${w.val}`.endsWith('/kick.wav')),
           'the file path was not recorded for presets');
 
-    /* The ENGINE is the authority on what landed. After the send the UI must
-     * ask, not assume — the mock now answers as a real engine would. */
-    ctx.store.sample_frames = `${frames}`;
-    ctx.store.sample_name = 'kick';
+    /* THE TRANSIENT. One frame after the send, the previous sample must be
+     * gone from the screen — "--" is honest, "old, 0.1s" under a file called
+     * kick is a lie. A load that keeps its own copies passes every other
+     * check here, because the trickle refresh replaces them within a few
+     * dozen ticks; this is the only assertion that sees the difference. */
+    ctx.host.tick();
+    check(!shown().some((t) => t === 'old') && !shown().some((t) => t === '0.1s'),
+          `one frame after the send the previous sample is still on screen: ${shown()}`);
+
+    /* And then the ENGINE's answer — which the mock committed on sample_end,
+     * as the engine does — is what appears, because the UI asked. */
     ctx.reads.length = 0;
     settle(ctx, 60);
     check(ctx.reads.includes('sample_frames') && ctx.reads.includes('sample_name'),
