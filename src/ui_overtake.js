@@ -46,7 +46,7 @@
 
 import {
     MoveKnob1, MoveShift, MoveMainButton, MoveMainKnob,
-    MoveMenu, MoveUp, MoveDown, MoveSample,
+    MoveMenu, MoveUp, MoveDown, MoveSample, MoveMaster,
     Black, White, LightGrey, DarkGrey, Red, BrightRed, Blue, Green, BrightGreen,
     Cyan, Purple, SkyBlue, Lime, OrangeRed, BurntOrange, YellowGreen, TealGreen, Rose,
     ElectricViolet, VividYellow, AzureBlue
@@ -633,6 +633,7 @@ function pageKnobs() {
     out.push({ key: 'level',   label: 'LVL', lock: LOCK_LEVEL, min: 0, max: 127 });
     out.push({ key: 'pan',     label: 'PAN', lock: LOCK_PAN,   min: 0, max: 127 });
     out.push({ key: 'seq_len', label: 'LEN', lock: -1, min: 1, max: MAX_STEPS });
+    out.push({ key: 'master',  label: 'MSTR', lock: -1, min: 0, max: 127 });
     while (out.length < 8) out.push({ key: '', label: '', lock: -1, min: 0, max: 0 });
     return out;
 }
@@ -645,7 +646,10 @@ const SCALAR_KEYS = [
     /* Polled rather than assumed: the engine disarms itself when the buffer
      * fills, so a local flag would leave the button lit over a take that had
      * already stopped. */
-    'sample_rec'
+    'sample_rec',
+    /* Mirrored always, not only on the GLOBAL page: the Shift + volume gesture
+     * needs a base to step from wherever the surface is. */
+    'master'
 ];
 
 /* Everything the screen and LEDs show, pulled in one pass — two bulk
@@ -1156,6 +1160,18 @@ function pollFeedbackGuard() {
         announce(risk ? 'Feedback risk, input muted' : 'Input restored');
         needsRedraw = true;
     }
+}
+
+/* Claim or release the volume knob from Move. The binding exists on
+ * schwung 1.x; older hosts simply keep the knob, which reads as "Shift + turn
+ * also moves the Move's volume" — degraded, not broken. */
+let masterSuppressed = false;
+function setMasterSuppress(on) {
+    on = !!on;
+    if (on === masterSuppressed) return;
+    masterSuppressed = on;
+    if (typeof shadow_set_overtake_suppress_master_volume === 'function')
+        shadow_set_overtake_suppress_master_volume(on ? 1 : 0);
 }
 
 function toggleMonitor() {
@@ -1890,6 +1906,34 @@ function onMidiMessageInternal(data) {
         if (d1 === MoveShift) {
             shiftHeld = d2 >= 64;
             paintTransport(false);      /* row 4 swaps to the mode layer */
+            /* While Shift is down the volume knob is OURS. schwung passes CC 79
+             * to Move even in overtake so its native overlay works; raising
+             * this flag filters it out for the duration, so a Shift + turn
+             * moves master here and not the Move's volume as well. Cleared on
+             * release, and the shim clears it on every overtake-mode change,
+             * so the exit chord (which is held Shift) cannot strand it. */
+            setMasterSuppress(shiftHeld);
+            return;
+        }
+
+        /* Shift + the volume knob turns master. Without Shift the knob is
+         * Move's, as always — but if a missed Shift release ever left the
+         * flag up (this file's Shift tracking is known to latch), the first
+         * plain turn heals it, so the worst case is one dead detent rather
+         * than a dead knob until exit. */
+        if (d1 === MoveMaster) {
+            if (!shiftHeld) { setMasterSuppress(false); return; }
+            const delta = decodeDelta(d2);
+            if (delta === 0) return;
+            const cur = cfg.master === undefined ? 127 : cfg.master;
+            let v = cur + delta;
+            if (v < 0) v = 0;
+            if (v > 127) v = 127;
+            if (v === cur) return;
+            cfg.master = v;
+            setParam('master', `${v}`);
+            announce(`Master ${v}`);
+            needsRedraw = true;
             return;
         }
 
