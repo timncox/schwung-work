@@ -1,0 +1,20 @@
+{
+  "id": "overwork-mix",
+  "name": "Overwork Mix",
+  "abbrev": "OVMX",
+  "version": "0.10.0",
+  "description": "Overwork fed by what the Move is playing: granulate, sample and sequence the mix itself",
+  "dsp": "dsp.so",
+  "ui": "ui.js",
+  "api_version": 2,
+  "component_type": "overtake",
+  "capabilities": {
+    "audio_in": false,
+    "suspend_keeps_js": true,
+    "button_passthrough": [
+      85
+    ],
+    "end_of_chain": true
+  },
+  "author": "timncox"
+}

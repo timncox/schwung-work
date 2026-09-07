@@ -905,6 +905,38 @@ async function testSampleButtonRecords() {
           `(wrote ${w && w.val}) — the button would fight the engine`);
 }
 
+/* The Monitor pad only means something when there is a microphone. The
+ * end-of-chain build has none (hw_input 0), and there `monitor` is a no-op in
+ * the engine — so the pad must write nothing and go dark, not sit there
+ * toggling a value that does nothing. */
+async function testMonitorPadIsInertWithoutHardwareInput() {
+    console.log('the monitor pad is inert when the build has no hardware input');
+    let ctx = await loadUI();
+    ctx.store.hw_input = '0';
+    ctx.host.init();
+    for (let i = 0; i < 14; i++) ctx.host.tick();
+    ctx.writes.length = 0;
+    holdShift(ctx, true);
+    ctx.host.onMidiMessageInternal(noteOn(69));
+    ctx.host.onMidiMessageInternal(noteOff(69));
+    holdShift(ctx, false);
+    check(!ctx.writes.some((w) => w.key === 'monitor'),
+          'with no hardware input the monitor pad still wrote monitor');
+
+    /* And with a microphone it still works — the gate must not leak. */
+    ctx = await loadUI();
+    ctx.store.hw_input = '1';
+    ctx.host.init();
+    for (let i = 0; i < 14; i++) ctx.host.tick();
+    ctx.writes.length = 0;
+    holdShift(ctx, true);
+    ctx.host.onMidiMessageInternal(noteOn(69));
+    ctx.host.onMidiMessageInternal(noteOff(69));
+    holdShift(ctx, false);
+    check(ctx.writes.some((w) => w.key === 'monitor'),
+          'with hardware input the monitor pad no longer toggles monitor');
+}
+
 async function testProbabilityMode() {
     console.log('shift + pattern-page selects probability mode, jog sets it');
     const ctx = await loadUI();
@@ -2306,6 +2338,7 @@ const tests = [
     testMonitorManualOverride,
     testLiveRecordToggle,
     testSampleButtonRecords,
+    testMonitorPadIsInertWithoutHardwareInput,
     testProbabilityMode,
     testEveryModulatorHasAPage,
     testVoiceFilterPageIsReachable,

@@ -612,6 +612,14 @@ footer a{color:var(--rust)}
 
   <p>The same page <strong>loads WAVs already on the Move</strong>: knob 2 walks every file under <code>UserLibrary/Samples</code> and <code>UserLibrary/Recordings</code>, four folders deep, and a jog click loads the one under the cursor. So a Signal Chain slot can now be given source material without leaving the device &mdash; record it, or pick something the Move&rsquo;s own sampler or skipback already put there. Overwork has the same browser on a pad.</p>
 
+  <h3>Overwork Mix &mdash; the Move as the input</h3>
+
+  <p><strong>Overwork Mix</strong> is Overwork fed by <em>what the Move is playing</em> instead of the jack. Granulator granulates the mix live, the Sample button records it, the samplers play it back, and the sequencer and parameter locks work on all of it. It sits in the Tools menu beside Overwork and shares its presets.</p>
+
+  <p>It is a second module rather than a setting because of how the host works: an overtake module is fed either the jack or the bus depending on which role the host loads it in, and one module cannot take both. A small change to schwung has been proposed that would let them merge; until it ships, they are two entries.</p>
+
+  <p class="note">Three things to know. It hears the mix <strong>after the volume knob</strong>, so turning the Move down feeds it less. The <strong>Monitor pad is dark</strong> here &mdash; there is no microphone to monitor, and the feedback guard does not arm. And a sampler in the source stage <strong>does not mute the Move</strong> the way it would keep a mic out of a chain; the input passes through untouched, with the global MIX blending it against the machines.</p>
+
   <p class="note">A recorded take is <strong>not saved with a preset</strong>. Presets remember a sample by its file path so the editor can reload it, and a recording has no file. Reload a patch that used one and its source machines come back empty.</p>
 
   <h3>Probability</h3>

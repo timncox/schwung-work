@@ -33,9 +33,14 @@ cp src/sample_io.mjs                            build/modules/sound_generators/w
 cp src/help_work.json                           build/modules/sound_generators/work-in/help.json
 
 cp modules/overtake/overwork/module.json build/modules/overtake/overwork/
+mkdir -p build/modules/overtake/overwork-mix
+cp modules/overtake/overwork-mix/module.json build/modules/overtake/overwork-mix/
 cp src/ui_overtake.js                    build/modules/overtake/overwork/ui.js
+cp src/ui_overtake.js                    build/modules/overtake/overwork-mix/ui.js
 cp src/sample_io.mjs                     build/modules/overtake/overwork/
+cp src/sample_io.mjs                     build/modules/overtake/overwork-mix/
 cp src/help_overwork.json                build/modules/overtake/overwork/help.json
+cp src/help_overwork_mix.json            build/modules/overtake/overwork-mix/help.json
 
 # Browser editor. schwung-manager auto-discovers web_ui.html per module and
 # serves it in a sandboxed iframe. ONE source file for both, because the page
@@ -52,6 +57,7 @@ cp src/help_overwork.json                build/modules/overtake/overwork/help.js
 # slot has no Remote UI" -- it takes the on-device editor away.
 cp src/web_ui.html build/modules/sound_generators/work-in/web_ui.html
 cp src/web_ui.html build/modules/overtake/overwork/web_ui.html
+cp src/web_ui.html build/modules/overtake/overwork-mix/web_ui.html
 
 # The chain host loads a slot's audio FX as modules/audio_fx/<id>/<id>.so and
 # never reads module.json's "dsp" field, so the FX build MUST be work.so.
@@ -67,16 +73,19 @@ docker run --rm -v "$PWD":/w -w /w "$IMAGE" bash -c "
         -o build/modules/sound_generators/work-in/dsp.so -lm
     aarch64-linux-gnu-gcc $CFLAGS src/work_core.c src/work_overtake.c \
         -o build/modules/overtake/overwork/dsp.so -lm
+    aarch64-linux-gnu-gcc $CFLAGS src/work_core.c src/work_overtake_fx.c \
+        -o build/modules/overtake/overwork-mix/dsp.so -lm
     file build/modules/audio_fx/work/work.so \
          build/modules/sound_generators/work-in/dsp.so \
          build/modules/overtake/overwork/dsp.so
     tar --owner=0 --group=0 -czf build/work-module.tar.gz -C build/modules/audio_fx work
     tar --owner=0 --group=0 -czf build/work-in-module.tar.gz -C build/modules/sound_generators work-in
     tar --owner=0 --group=0 -czf build/overwork-module.tar.gz -C build/modules/overtake overwork
+    tar --owner=0 --group=0 -czf build/overwork-mix-module.tar.gz -C build/modules/overtake overwork-mix
     echo 'tarball contents:'
     tar -tzf build/work-module.tar.gz
     tar -tzf build/work-in-module.tar.gz
     tar -tzf build/overwork-module.tar.gz
 "
 
-echo "Built: build/work-module.tar.gz, build/work-in-module.tar.gz, build/overwork-module.tar.gz"
+echo "Built: build/work-module.tar.gz, build/work-in-module.tar.gz, build/overwork-module.tar.gz, build/overwork-mix-module.tar.gz"
