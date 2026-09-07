@@ -24,14 +24,17 @@ mkdir -p build/modules/audio_fx/work build/modules/sound_generators/work-in buil
 
 cp modules/audio_fx/work/module.json build/modules/audio_fx/work/
 cp src/ui_chain.js                   build/modules/audio_fx/work/
+cp src/sample_io.mjs                 build/modules/audio_fx/work/
 cp src/help_work.json                build/modules/audio_fx/work/help.json
 
 cp modules/sound_generators/work-in/module.json build/modules/sound_generators/work-in/
 cp src/ui_chain.js                              build/modules/sound_generators/work-in/
+cp src/sample_io.mjs                            build/modules/sound_generators/work-in/
 cp src/help_work.json                           build/modules/sound_generators/work-in/help.json
 
 cp modules/overtake/overwork/module.json build/modules/overtake/overwork/
 cp src/ui_overtake.js                    build/modules/overtake/overwork/ui.js
+cp src/sample_io.mjs                     build/modules/overtake/overwork/
 cp src/help_overwork.json                build/modules/overtake/overwork/help.json
 
 # Browser editor. schwung-manager auto-discovers web_ui.html per module and

@@ -190,6 +190,16 @@ const STUBS = {
         export function announce(){}
         export function announceParameter(){}
         export function announceView(){}
+    `,
+    /* The chain UI reaches the filesystem only through the shared sample
+     * module. Answers a [names, errno] TUPLE, like the real os.readdir, and
+     * defers to a test-installed vfs when one exists so a browsing test can
+     * plant files; with none, every path is an empty directory. */
+    'os': `
+        export function readdir(p){
+            const v = globalThis.__vfs;
+            return (v && v.readdir) ? v.readdir(p) : [[], 0];
+        }
     `
 };
 
@@ -200,10 +210,26 @@ async function loadUI(seed) {
     const src = fs.readFileSync(path.join(root, 'src/ui_chain.js'), 'utf8');
 
     const mod = new vm.SourceTextModule(src, { context, identifier: 'ui_chain.js' });
-    await mod.link(async (spec) => {
+    /* `./sample_io.mjs` is REAL source, not a stub — the codec and WAV parser
+     * are what a load exercises, and a mock of them passes with the real one
+     * broken. It imports 'os', the one nested import allowed. */
+    const stubModule = (spec) => {
         const code = STUBS[spec];
         if (!code) throw new Error(`unexpected import: ${spec}`);
-        const m = new vm.SourceTextModule(code, { context, identifier: spec });
+        return new vm.SourceTextModule(code, { context, identifier: spec });
+    };
+    await mod.link(async (spec) => {
+        if (spec === './sample_io.mjs') {
+            const shared = fs.readFileSync(path.join(root, 'src/sample_io.mjs'), 'utf8');
+            const m = new vm.SourceTextModule(shared, { context, identifier: spec });
+            await m.link(async (inner) => {
+                const im = stubModule(inner);
+                await im.link(() => { throw new Error('nested import'); });
+                return im;
+            });
+            return m;
+        }
+        const m = stubModule(spec);
         await m.link(() => { throw new Error('nested import'); });
         return m;
     });

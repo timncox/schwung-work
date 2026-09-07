@@ -399,10 +399,27 @@ async function loadUI() {
     const src = fs.readFileSync(path.join(root, 'src/ui_overtake.js'), 'utf8');
 
     const mod = new vm.SourceTextModule(src, { context, identifier: 'ui_overtake.js' });
-    await mod.link(async (spec) => {
+    /* `./sample_io.mjs` is REAL source, not a stub: the codec and the WAV
+     * parser are the thing under test when a sample loads, and a mock of them
+     * would pass with the real one broken. It imports 'os', so its own link
+     * resolves against the stubs — the only nested import allowed. */
+    const stubModule = (spec) => {
         const code = STUBS[spec];
         if (!code) throw new Error(`unexpected import: ${spec}`);
-        const m = new vm.SourceTextModule(code, { context, identifier: spec });
+        return new vm.SourceTextModule(code, { context, identifier: spec });
+    };
+    await mod.link(async (spec) => {
+        if (spec === './sample_io.mjs') {
+            const shared = fs.readFileSync(path.join(root, 'src/sample_io.mjs'), 'utf8');
+            const m = new vm.SourceTextModule(shared, { context, identifier: spec });
+            await m.link(async (inner) => {
+                const im = stubModule(inner);
+                await im.link(() => { throw new Error('nested import'); });
+                return im;
+            });
+            return m;
+        }
+        const m = stubModule(spec);
         await m.link(() => { throw new Error('nested import'); });
         return m;
     });
