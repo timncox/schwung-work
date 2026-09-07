@@ -233,6 +233,9 @@ const STAGE_SFX= ["_src", "1", "2"];         /* flat-mirror key suffixes    */
 const STAGE_TAG= ["SRC", "FX 1", "FX 2"];
 const MACH_KEY = ["src", "machine1", "machine2"];
 const PARAMS   = 8;
+/* The value at which a switch parameter reads as ON. MIRRORS the DSP, whose
+   machines test `>= 64`; both JS UIs carry the same constant. */
+const SWITCH_ON = 64;
 const STEPS    = 64;
 const LOCKABLE = 36;
 const MASK_BYTES = Math.ceil(LOCKABLE / 8);  /* lane_pack: 5                */
@@ -380,13 +383,13 @@ function toggle(host, id, label, value, onset, effective) {
   lab.title = label;
 
   const c = document.createElement("input");
-  c.type = "checkbox"; c.id = id; c.checked = value >= 64;
+  c.type = "checkbox"; c.id = id; c.checked = value >= SWITCH_ON;
   c.style.flex = "1 1 auto";
 
   const v = document.createElement("span");
   v.className = "val";
 
-  const name = (n) => (n >= 64 ? "On" : "Off");
+  const name = (n) => (n >= SWITCH_ON ? "On" : "Off");
   const paint = (base) => {
     v.textContent = "";
     if (effective !== undefined && effective !== null && effective !== base) {
