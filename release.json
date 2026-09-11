@@ -2,6 +2,36 @@
   "version": "0.12.0",
   "download_url": "https://github.com/timncox/schwung-work/releases/download/v0.12.0/work-module.tar.gz",
   "name": "Work",
-  "description": "Eight tracks of twenty-six machines \u2014 a source stage and two insert FX \u2014 with four LFOs in two families, a modulation envelope, and a step sequencer with parameter locks",
-  "repo_url": "https://github.com/timncox/schwung-work"
+  "description": "Eight tracks of twenty-six machines — a source stage and two insert FX — with four LFOs in two families, a modulation envelope, and a step sequencer with parameter locks",
+  "repo_url": "https://github.com/timncox/schwung-work",
+  "modules": {
+    "work": {
+      "version": "0.12.0",
+      "download_url": "https://github.com/timncox/schwung-work/releases/download/v0.12.0/work-module.tar.gz",
+      "name": "Work",
+      "description": "Eight tracks of twenty-six machines — a source stage and two insert FX — with four LFOs in two families, a modulation envelope, and a step sequencer with parameter locks",
+      "repo_url": "https://github.com/timncox/schwung-work"
+    },
+    "work-in": {
+      "version": "0.12.0",
+      "download_url": "https://github.com/timncox/schwung-work/releases/download/v0.12.0/work-in-module.tar.gz",
+      "name": "Work In",
+      "description": "The same twenty-six machines on the live input, with feedback protection",
+      "repo_url": "https://github.com/timncox/schwung-work"
+    },
+    "overwork": {
+      "version": "0.12.0",
+      "download_url": "https://github.com/timncox/schwung-work/releases/download/v0.12.0/overwork-module.tar.gz",
+      "name": "Overwork",
+      "description": "Full-surface Work — sample browser, 16-pattern bank, song mode, parameter locks, live recording and presets",
+      "repo_url": "https://github.com/timncox/schwung-work"
+    },
+    "overwork-mix": {
+      "version": "0.12.0",
+      "download_url": "https://github.com/timncox/schwung-work/releases/download/v0.12.0/overwork-mix-module.tar.gz",
+      "name": "Overwork Mix",
+      "description": "Overwork fed by what the Move is playing: granulate, sample and sequence the mix itself",
+      "repo_url": "https://github.com/timncox/schwung-work"
+    }
+  }
 }
