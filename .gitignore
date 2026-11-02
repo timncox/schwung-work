@@ -12,3 +12,17 @@ docs/*.pdf
 
 .venv-e2e/
 test/__pycache__/
+# --- secrets & local files (added 2026-11-02, GitHub migration) ---
+.dev.vars
+.env
+.env.*
+.env*.local
+.vercel
+*.key
+*.p12
+*.p8
+*.pem
+node_modules/
+!.env.example
+!.env.*.example
+!.env.sample
